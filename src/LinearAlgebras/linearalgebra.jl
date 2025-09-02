@@ -12,6 +12,8 @@ export expt!
 
 include("matrixexp.jl")
 include("linearalgebra_1D.jl")
+include("linearalgebra_2D.jl")
+include("linearalgebra_3D.jl")
 include("linearalgebra_4D.jl")
 
 

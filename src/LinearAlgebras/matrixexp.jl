@@ -127,9 +127,9 @@ end
 
 # ---- exp(t*A) via Pade(13) + scaling & squaring (Complex-ready) ----
 @inline function exp3x3_pade(
-    a11::T,a12,a13,a21,a22,a23,a31,a32,a33, t::S=one(S)) where {T<:Number,S<:Number}
-    a = Mat3(a11,a12,a13,a21,a22,a23,a31,a32,a33)
-    c = exp3x3_pade(a,t)
+    a11::T, a12, a13, a21, a22, a23, a31, a32, a33, t::S=one(S)) where {T<:Number,S<:Number}
+    a = Mat3(a11, a12, a13, a21, a22, a23, a31, a32, a33)
+    c = exp3x3_pade(a, t)
     c11 = c.a11
     c12 = c.a12
     c13 = c.a13
@@ -139,7 +139,7 @@ end
     c31 = c.a31
     c32 = c.a32
     c33 = c.a33
-    return c11,c12,c13,c21,c22,c23,c31,c32,c33
+    return c11, c12, c13, c21, c22, c23, c31, c32, c33
 end
 
 # ---- exp(t*A) via Pade(13) + scaling & squaring (Complex-ready) ----
@@ -471,16 +471,16 @@ export expm_pade13
 end
 
 function exp2x2(A::Matrix{T}, t::S=one(S)) where {T<:Number,S<:Number}
-    a11 = A[1,1]
-    a21 = A[2,1]
-    a12 = A[1,2]
-    a22 = A[2,2]
-    c11,c12,c21,c22 = exp2x2_elem(a11,a12,a21,a22, t) 
+    a11 = A[1, 1]
+    a21 = A[2, 1]
+    a12 = A[1, 2]
+    a22 = A[2, 2]
+    c11, c12, c21, c22 = exp2x2_elem(a11, a12, a21, a22, t)
     return T[c11 c12; c21 c22]
 end
 
 # exp(t*A) for 2x2 Array{<:Number,2} (out-of-place)
-function exp2x2_elem(a11::T,a12,a21,a22, t::S=one(S)) where {T<:Number,S<:Number}
+function exp2x2_elem(a11::T, a12, a21, a22, t::S=one(S)) where {T<:Number,S<:Number}
     #@assert size(A, 1) == 2 && size(A, 2) == 2
     #a11, a12 = A[1, 1], A[1, 2]
     #a21, a22 = A[2, 1], A[2, 2]
@@ -510,7 +510,7 @@ function exp2x2_elem(a11::T,a12,a21,a22, t::S=one(S)) where {T<:Number,S<:Number
 
     eθ = exp(θ)
     # E = e^{θ} * ( c*I + s*B )
-    return  eθ*(c+s*b11),eθ*(s*b12),eθ*(s*b21) ,eθ*(c+s*b22)
+    return eθ * (c + s * b11), eθ * (s * b12), eθ * (s * b21), eθ * (c + s * b22)
     #return 
     #    eθ*(c+s*b11) eθ*(s*b12);
     #    eθ*(s*b21) eθ*(c+s*b22)
@@ -554,64 +554,64 @@ end
 
 # ---------- BLAS-like tiny kernels on MMatrix (no heap allocations) ----------
 @inline function scal!(α, A::MMatrix{N,N,T}) where {N,T}
-    @inbounds @simd for j=1:N
-        for i=1:N
-            A[i,j] = α*A[i,j]
+    @inbounds @simd for j = 1:N
+        for i = 1:N
+            A[i, j] = α * A[i, j]
         end
     end
     return A
 end
 
 @inline function axpy!(α, X::MMatrix{N,N,T}, Y::MMatrix{N,N,T}) where {N,T}
-    @inbounds @simd for j=1:N
-        for i=1:N
-            Y[i,j] += α*X[i,j]
+    @inbounds @simd for j = 1:N
+        for i = 1:N
+            Y[i, j] += α * X[i, j]
         end
     end
     return Y
 end
 
 @inline function add!(R::MMatrix{N,N,T}, A::MMatrix{N,N,T}, B::MMatrix{N,N,T}) where {N,T}
-    @inbounds @simd for j=1:N
-        for i=1:N
-            R[i,j] = A[i,j] + B[i,j]
+    @inbounds @simd for j = 1:N
+        for i = 1:N
+            R[i, j] = A[i, j] + B[i, j]
         end
     end
     return R
 end
 
 @inline function sub!(R::MMatrix{N,N,T}, A::MMatrix{N,N,T}, B::MMatrix{N,N,T}) where {N,T}
-    @inbounds @simd for j=1:N
-        for  i=1:N
-            R[i,j] = A[i,j] - B[i,j]
+    @inbounds @simd for j = 1:N
+        for i = 1:N
+            R[i, j] = A[i, j] - B[i, j]
         end
     end
     return R
 end
 
 @inline function copy_mat!(R::MMatrix{N,N,T}, A::MMatrix{N,N,T}) where {N,T}
-    @inbounds @simd for j=1:N
-        for i=1:N
-            R[i,j] = A[i,j]
+    @inbounds @simd for j = 1:N
+        for i = 1:N
+            R[i, j] = A[i, j]
         end
     end
     return R
 end
 
 @inline function eye!(I::MMatrix{N,N,T}) where {N,T}
-    @inbounds for j=1:N, i=1:N
-        I[i,j] = (i==j) ? one(T) : zero(T)
+    @inbounds for j = 1:N, i = 1:N
+        I[i, j] = (i == j) ? one(T) : zero(T)
     end
     return I
 end
 
 @inline function gemm!(R::MMatrix{N,N,T}, A::MMatrix{N,N,T}, B::MMatrix{N,N,T}) where {N,T}
-    @inbounds for j=1:N, i=1:N
+    @inbounds for j = 1:N, i = 1:N
         s = zero(T)
-        @simd for k=1:N
-            s += A[i,k]*B[k,j]
+        @simd for k = 1:N
+            s += A[i, k] * B[k, j]
         end
-        R[i,j] = s
+        R[i, j] = s
     end
     return R
 end
@@ -619,10 +619,10 @@ end
 @inline function norm1(A::MMatrix{N,N,T}) where {N,T}
     rT = real(one(T))
     colmax = zero(rT)
-    @inbounds for j=1:N
+    @inbounds for j = 1:N
         s = zero(rT)
-        for i=1:N
-            s += abs(A[i,j])
+        for i = 1:N
+            s += abs(A[i, j])
         end
         colmax = max(colmax, s)
     end
@@ -631,30 +631,32 @@ end
 
 # ---------- Tiny LU with partial pivoting (no allocations) ----------
 @inline function lu_factor!(A::MMatrix{N,N,T}, piv::MVector{N,Int}) where {N,T}
-    @inbounds for k=1:N
+    @inbounds for k = 1:N
         # pivot search
-        p = k; amax = abs(A[k,k])
-        for i=k+1:N
-            v = abs(A[i,k])
+        p = k
+        amax = abs(A[k, k])
+        for i = k+1:N
+            v = abs(A[i, k])
             if v > amax
-                p = i; amax = v
+                p = i
+                amax = v
             end
         end
         piv[k] = p
         # row swap
         if p != k
-            for j=1:N
-                A[k,j], A[p,j] = A[p,j], A[k,j]
+            for j = 1:N
+                A[k, j], A[p, j] = A[p, j], A[k, j]
             end
         end
         # elimination
-        akk = A[k,k]
+        akk = A[k, k]
         if akk != 0
-            for i=k+1:N
-                A[i,k] /= akk
-                lik = A[i,k]
-                for j=k+1:N
-                    A[i,j] -= lik*A[k,j]
+            for i = k+1:N
+                A[i, k] /= akk
+                lik = A[i, k]
+                for j = k+1:N
+                    A[i, j] -= lik * A[k, j]
                 end
             end
         end
@@ -664,29 +666,29 @@ end
 
 @inline function lu_solve!(LU::MMatrix{N,N,T}, piv::MVector{N,Int}, B::MMatrix{N,N,T}) where {N,T}
     # apply pivot to B and forward solve L*y = P*B
-    @inbounds for k=1:N
+    @inbounds for k = 1:N
         p = piv[k]
         if p != k
-            for j=1:N
-                B[k,j], B[p,j] = B[p,j], B[k,j]
+            for j = 1:N
+                B[k, j], B[p, j] = B[p, j], B[k, j]
             end
         end
-        for i=k+1:N
-            lik = LU[i,k]
-            for j=1:N
-                B[i,j] -= lik*B[k,j]
+        for i = k+1:N
+            lik = LU[i, k]
+            for j = 1:N
+                B[i, j] -= lik * B[k, j]
             end
         end
     end
     # back substitution U*x = y
-    @inbounds for k=N:-1:1
-        akk = LU[k,k]
-        for j=1:N
-            s = B[k,j]
-            for i=k+1:N
-                s -= LU[k,i]*B[i,j]
+    @inbounds for k = N:-1:1
+        akk = LU[k, k]
+        for j = 1:N
+            s = B[k, j]
+            for i = k+1:N
+                s -= LU[k, i] * B[i, j]
             end
-            B[k,j] = s/akk
+            B[k, j] = s / akk
         end
     end
     return B
@@ -700,17 +702,18 @@ const Θ13_F64 = 5.371920351148152
 ) where {N,T}
     # At = t*A (scaled input)
     At = MMatrix{N,N,T}(undef)
-    @inbounds for j=1:N, i=1:N
-        At[i,j] = t*A[i,j]
+    @inbounds for j = 1:N, i = 1:N
+        At[i, j] = t * A[i, j]
     end
 
     # 1-norm for scaling
     n1 = norm1(At)
     if n1 == 0
-        eye!(R); return R
+        eye!(R)
+        return R
     end
     θ13 = oftype(real(one(T)), Θ13_F64)
-    s = (n1 <= θ13) ? 0 : max(0, Int(ceil(log2(n1/θ13))))
+    s = (n1 <= θ13) ? 0 : max(0, Int(ceil(log2(n1 / θ13))))
     α = oftype(one(T), ldexp(1.0, -s))  # 2^{-s} in T (works for Complex T as well)
     scal!(α, At)
 
@@ -723,34 +726,37 @@ const Θ13_F64 = 5.371920351148152
     gemm!(A6, A2, A4)
 
     # Workspaces: U, V, T1, T2, I
-    U   = MMatrix{N,N,T}(undef)
-    V   = MMatrix{N,N,T}(undef)
+    U = MMatrix{N,N,T}(undef)
+    V = MMatrix{N,N,T}(undef)
     T1m = MMatrix{N,N,T}(undef)
     T2m = MMatrix{N,N,T}(undef)
-    Im  = MMatrix{N,N,T}(undef); eye!(Im)
+    Im = MMatrix{N,N,T}(undef)
+    eye!(Im)
 
     b = pade13_coeffs(T)  # (b0..b13), 1-based indexing
 
     # U = At * (A6*(b13*A6 + b11*A4 + b9*A2) + b7*A6 + b5*A4 + b3*A2 + b1*I)
-    copy_mat!(T1m, A6);    scal!(b[14], T1m)     # b13
+    copy_mat!(T1m, A6)
+    scal!(b[14], T1m)     # b13
     axpy!(b[12], A4, T1m)                          # b11
     axpy!(b[10], A2, T1m)                          # b9
     gemm!(T2m, A6, T1m)
-    axpy!(b[8],  A6, T2m)                          # b7
-    axpy!(b[6],  A4, T2m)                          # b5
-    axpy!(b[4],  A2, T2m)                          # b3
-    axpy!(b[2],  Im, T2m)                          # b1
+    axpy!(b[8], A6, T2m)                          # b7
+    axpy!(b[6], A4, T2m)                          # b5
+    axpy!(b[4], A2, T2m)                          # b3
+    axpy!(b[2], Im, T2m)                          # b1
     gemm!(U, At, T2m)
 
     # V = A6*(b12*A6 + b10*A4 + b8*A2) + b6*A6 + b4*A4 + b2*A2 + b0*I
-    copy_mat!(T1m, A6);    scal!(b[13], T1m)      # b12
+    copy_mat!(T1m, A6)
+    scal!(b[13], T1m)      # b12
     axpy!(b[11], A4, T1m)                          # b10
-    axpy!(b[9],  A2, T1m)                          # b8
+    axpy!(b[9], A2, T1m)                          # b8
     gemm!(V, A6, T1m)
-    axpy!(b[7],  A6, V)                            # b6
-    axpy!(b[5],  A4, V)                            # b4
-    axpy!(b[3],  A2, V)                            # b2
-    axpy!(b[1],  Im, V)                            # b0
+    axpy!(b[7], A6, V)                            # b6
+    axpy!(b[5], A4, V)                            # b4
+    axpy!(b[3], A2, V)                            # b2
+    axpy!(b[1], Im, V)                            # b0
 
     # Solve (V - U) * X = (V + U)
     P = R                    # reuse R as P := V + U
@@ -766,7 +772,7 @@ const Θ13_F64 = 5.371920351148152
     # Repeated squaring: R = X; for k=1:s do R = R*R
     # P currently holds X
     copy_mat!(R, P)
-    for _=1:s
+    for _ = 1:s
         gemm!(T1m, R, R)
         copy_mat!(R, T1m)
     end
@@ -783,16 +789,85 @@ end
     Rtile = MMatrix{N,N,T}(undef)
 
     # Load tile (no views)
-    @inbounds for j=1:N, i=1:N
-        Atile[i,j] = A[i,j,ix,iy,iz,it]
+    @inbounds for j = 1:N, i = 1:N
+        Atile[i, j] = A[i, j, ix, iy, iz, it]
     end
 
     # Compute expm(t*A) for the tile
     expm_pade13_tile!(Rtile, Atile, t, Val(N))
 
     # Write back (no slice assignment)
-    @inbounds for j=1:N, i=1:N
-        C[i,j,ix,iy,iz,it] = Rtile[i,j]
+    @inbounds for j = 1:N, i = 1:N
+        C[i, j, ix, iy, iz, it] = Rtile[i, j]
+    end
+    return nothing
+end
+
+@inline function expm_pade13_writeback!(
+    C, A, ix, iy, iz, t, ::Val{N}
+) where {N}
+    # Element type inferred from A
+    T = eltype(A)
+    Atile = MMatrix{N,N,T}(undef)
+    Rtile = MMatrix{N,N,T}(undef)
+
+    # Load tile (no views)
+    @inbounds for j = 1:N, i = 1:N
+        Atile[i, j] = A[i, j, ix, iy, iz]
+    end
+
+    # Compute expm(t*A) for the tile
+    expm_pade13_tile!(Rtile, Atile, t, Val(N))
+
+    # Write back (no slice assignment)
+    @inbounds for j = 1:N, i = 1:N
+        C[i, j, ix, iy, iz] = Rtile[i, j]
+    end
+    return nothing
+end
+
+@inline function expm_pade13_writeback!(
+    C, A, ix, iy, t, ::Val{N}
+) where {N}
+    # Element type inferred from A
+    T = eltype(A)
+    Atile = MMatrix{N,N,T}(undef)
+    Rtile = MMatrix{N,N,T}(undef)
+
+    # Load tile (no views)
+    @inbounds for j = 1:N, i = 1:N
+        Atile[i, j] = A[i, j, ix, iy]
+    end
+
+    # Compute expm(t*A) for the tile
+    expm_pade13_tile!(Rtile, Atile, t, Val(N))
+
+    # Write back (no slice assignment)
+    @inbounds for j = 1:N, i = 1:N
+        C[i, j, ix, iy] = Rtile[i, j]
+    end
+    return nothing
+end
+
+@inline function expm_pade13_writeback!(
+    C, A, ix, t, ::Val{N}
+) where {N}
+    # Element type inferred from A
+    T = eltype(A)
+    Atile = MMatrix{N,N,T}(undef)
+    Rtile = MMatrix{N,N,T}(undef)
+
+    # Load tile (no views)
+    @inbounds for j = 1:N, i = 1:N
+        Atile[i, j] = A[i, j, ix]
+    end
+
+    # Compute expm(t*A) for the tile
+    expm_pade13_tile!(Rtile, Atile, t, Val(N))
+
+    # Write back (no slice assignment)
+    @inbounds for j = 1:N, i = 1:N
+        C[i, j, ix] = Rtile[i, j]
     end
     return nothing
 end

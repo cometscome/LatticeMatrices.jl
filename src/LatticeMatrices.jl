@@ -51,7 +51,7 @@ function Shifted_Lattice(data::LatticeMatrix{D,T,AT,NC1,NC2,nw}, shift) where {D
             break
         end
     end
-    println("Shifted_Lattice: shift = ", shift, " isinside = ", isinside)
+    #println("Shifted_Lattice: shift = ", shift, " isinside = ", isinside)
     if isinside
         sl = Shifted_Lattice{typeof(data),Tuple(shift)}(data)
     else

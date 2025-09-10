@@ -7,7 +7,7 @@
     # Decode linear index i (1-based) into four 1-based coordinates.
     # Use divrem to compute quotient and remainder in one shot, reducing idiv count.
     @inbounds begin
-        Nx, Ny, Nz, Nt = dims
+        Nx, Ny, Nz = dims
         o = i - one(I)                  # zero-based offset
         o, rx = divrem(o, Nx)
         ix = rx + one(I)
@@ -3285,8 +3285,8 @@ function LinearAlgebra.tr(C::LatticeMatrix{3,T1,AT1,NC1,NC2,nw}) where {T1,AT1,N
     return s
 end
 
-@inline _preduce(n, op, kern, A, NC1, PN, vnw, init::T) where {T} =
-    JACC.parallel_reduce(n, op, kern, A, NC1, PN, vnw; init=init)::T
+#@inline _preduce(n, op, kern, A, NC1, PN, vnw, init::T) where {T} =
+#    JACC.parallel_reduce(n, op, kern, A, NC1, PN, vnw; init=init)::T
 
 function LinearAlgebra.tr(C::LatticeMatrix{3,T1,AT1,NC1,NC1,nw}) where {T1,AT1,NC1,nw}
     s = _preduce(prod(C.PN), +, kernel_tr_3D, C.A, Val(NC1), C.PN, Val(nw), zero(T1))::T1
@@ -3304,8 +3304,8 @@ end
     return s
 end
 
-@inline _preduce(n, op, kern, A, B, NC1, PN, vnw, init::T) where {T} =
-    JACC.parallel_reduce(n, op, kern, A, B, NC1, PN, vnw; init=init)::T
+#@inline _preduce(n, op, kern, A, B, NC1, PN, vnw, init::T) where {T} =
+#    JACC.parallel_reduce(n, op, kern, A, B, NC1, PN, vnw; init=init)::T
 
 function LinearAlgebra.tr(C::LatticeMatrix{3,T1,AT1,NC1,NC1,nw}, B::LatticeMatrix{3,T1,AT1,NC1,NC1,nw}) where {T1,AT1,NC1,nw}
     s = _preduce(prod(C.PN), +, kernel_tr_3D, C.A, B.A, Val(NC1), C.PN, Val(nw), zero(T1))::T1
@@ -3330,12 +3330,12 @@ end
 
 
 function LinearAlgebra.dot(A::LatticeMatrix{3,T1,AT1,NC1,1,nw}, B::LatticeMatrix{3,T2,AT2,NC1,1,nw}) where {T1<:Real,T2<:Real,AT1,AT2,NC1,nw}
-    s = JACC.parallel_reduce(prod(A.PN), +, kernel_dot_real_1,
+    s = JACC.parallel_reduce(prod(A.PN), +, kernel_dot_real_3D,
         A.A, B.A, A.PN, Val(NC1), Val(nw); init=zero(eltype(A.A)))
     s = MPI.Allreduce(s, MPI.SUM, A.comm)
 end
 
-@inline function kernel_dot_real_1(i, A, B, PN, ::Val{NC1}, ::Val{nw}) where {NC1,nw}
+@inline function kernel_dot_real_3D(i, A, B, PN, ::Val{NC1}, ::Val{nw}) where {NC1,nw}
     ix, iy, iz = get_3Dindex(i, PN)
     ix += nw
     iy += nw
@@ -3390,19 +3390,19 @@ end
 # ========== host side ==========
 function normalize_matrix!(C::LatticeMatrix{3,T,AT,NC,NC,nw}) where {T,AT,NC,nw}
     if NC == 2
-        JACC.parallel_for(prod(C.PN), kernel_normalize_NC2!, C.A, C.PN, Val(nw))
+        JACC.parallel_for(prod(C.PN), kernel_normalize_NC2_3D!, C.A, C.PN, Val(nw))
     elseif NC == 3
-        JACC.parallel_for(prod(C.PN), kernel_normalize_NC3!, C.A, C.PN, Val(nw))
+        JACC.parallel_for(prod(C.PN), kernel_normalize_NC3_3D!, C.A, C.PN, Val(nw))
     else
         # Generic: modified Gram–Schmidt per site (unitarize columns)
-        JACC.parallel_for(prod(C.PN), kernel_normalize_generic!, C.A, C.PN, NC, Val(nw))
+        JACC.parallel_for(prod(C.PN), kernel_normalize_generic_3D!, C.A, C.PN, NC, Val(nw))
     end
     #set_halo!(C)
 end
 export normalize_matrix!
 
 
-@inline function kernel_normalize_NC2!(i, u, PN, ::Val{nw}) where nw
+@inline function kernel_normalize_NC2_3D!(i, u, PN, ::Val{nw}) where nw
     ix, iy, iz = get_3Dindex(i, PN)
     α = u[1, 1, ix+nw, iy+nw, iz+nw]
     β = u[2, 1, ix+nw, iy+nw, iz+nw]
@@ -3413,7 +3413,7 @@ export normalize_matrix!
     u[2, 2, ix+nw, iy+nw, iz+nw] = conj(α) / detU
 end
 
-@inline function kernel_normalize_NC3!(i, u, PN, ::Val{nw}) where nw
+@inline function kernel_normalize_NC3_3D!(i, u, PN, ::Val{nw}) where nw
     ix, iy, iz = get_3Dindex(i, PN)
     w1 = 0
     w2 = 0
@@ -3478,7 +3478,7 @@ end
 
 # ========== device side (generic N) ==========
 # Normalize columns in-place to form a unitary (QR with Q-only), per lattice site
-@inline function kernel_normalize_generic!(i, u, PN, NC, ::Val{nw}) where nw
+@inline function kernel_normalize_generic_3D!(i, u, PN, NC, ::Val{nw}) where nw
     # Index decode
     ix, iy, iz = get_3Dindex(i, PN)
 

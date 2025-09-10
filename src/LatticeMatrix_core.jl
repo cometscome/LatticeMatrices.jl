@@ -47,7 +47,10 @@ function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, 
     D = dim
     T = elementtype
     dims = PEs #MPI.dims_create(MPI.Comm_size(MPI.COMM_WORLD), D)
-    cart = MPI.Cart_create(comm0, dims; periodic=ntuple(_ -> true, D))
+    periodic = ntuple(_ -> true, D)
+    #println(dims)
+    #println(periodic)
+    cart = MPI.Cart_create(comm0, dims; periodic=periodic)
     coords = MPI.Cart_coords(cart, MPI.Comm_rank(cart))
 
     #comm  = MPI.Cart_create(MPI.COMM_WORLD, dims; periods=ntuple(_->true,D))
@@ -491,3 +494,8 @@ function gather_and_bcast_matrix(ls::LatticeMatrix{D,T,AT,NC1,NC2};
     return G
 end
 export gather_and_bcast_matrix
+
+@inline _mul_phase!(buf, ϕ) =
+    JACC.parallel_for(length(buf)) do i
+        buf[i] *= ϕ
+    end

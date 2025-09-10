@@ -3298,8 +3298,8 @@ function LinearAlgebra.tr(C::LatticeMatrix{1,T1,AT1,NC1,NC2,nw}) where {T1,AT1,N
     return s
 end
 
-@inline _preduce(n, op, kern, A, NC1, PN, vnw, init::T) where {T} =
-    JACC.parallel_reduce(n, op, kern, A, NC1, PN, vnw; init=init)::T
+#@inline _preduce(n, op, kern, A, NC1, PN, vnw, init::T) where {T} =
+#    JACC.parallel_reduce(n, op, kern, A, NC1, PN, vnw; init=init)::T
 
 function LinearAlgebra.tr(C::LatticeMatrix{1,T1,AT1,NC1,NC1,nw}) where {T1,AT1,NC1,nw}
     s = _preduce(prod(C.PN), +, kernel_tr_1D, C.A, Val(NC1), C.PN, Val(nw), zero(T1))::T1
@@ -3317,8 +3317,8 @@ end
     return s
 end
 
-@inline _preduce(n, op, kern, A, B, NC1, PN, vnw, init::T) where {T} =
-    JACC.parallel_reduce(n, op, kern, A, B, NC1, PN, vnw; init=init)::T
+#@inline _preduce(n, op, kern, A, B, NC1, PN, vnw, init::T) where {T} =
+#    JACC.parallel_reduce(n, op, kern, A, B, NC1, PN, vnw; init=init)::T
 
 function LinearAlgebra.tr(C::LatticeMatrix{1,T1,AT1,NC1,NC1,nw}, B::LatticeMatrix{1,T1,AT1,NC1,NC1,nw}) where {T1,AT1,NC1,nw}
     s = _preduce(prod(C.PN), +, kernel_tr_1D, C.A, B.A, Val(NC1), C.PN, Val(nw), zero(T1))::T1
@@ -3343,12 +3343,12 @@ end
 
 
 function LinearAlgebra.dot(A::LatticeMatrix{1,T1,AT1,NC1,1,nw}, B::LatticeMatrix{1,T2,AT2,NC1,1,nw}) where {T1<:Real,T2<:Real,AT1,AT2,NC1,nw}
-    s = JACC.parallel_reduce(prod(A.PN), +, kernel_dot_real_1,
+    s = JACC.parallel_reduce(prod(A.PN), +, kernel_dot_real_1D,
         A.A, B.A, A.PN, Val(NC1), Val(nw); init=zero(eltype(A.A)))
     s = MPI.Allreduce(s, MPI.SUM, A.comm)
 end
 
-@inline function kernel_dot_real_1(i, A, B, PN, ::Val{NC1}, ::Val{nw}) where {NC1,nw}
+@inline function kernel_dot_real_1D(i, A, B, PN, ::Val{NC1}, ::Val{nw}) where {NC1,nw}
     ix = get_1Dindex(i, PN)
     ix += nw
     #    iy += nw
@@ -3403,19 +3403,19 @@ end
 # ========== host side ==========
 function normalize_matrix!(C::LatticeMatrix{1,T,AT,NC,NC,nw}) where {T,AT,NC,nw}
     if NC == 2
-        JACC.parallel_for(prod(C.PN), kernel_normalize_NC2!, C.A, C.PN, Val(nw))
+        JACC.parallel_for(prod(C.PN), kernel_normalize_NC2_1D!, C.A, C.PN, Val(nw))
     elseif NC == 3
-        JACC.parallel_for(prod(C.PN), kernel_normalize_NC3!, C.A, C.PN, Val(nw))
+        JACC.parallel_for(prod(C.PN), kernel_normalize_NC3_1D!, C.A, C.PN, Val(nw))
     else
         # Generic: modified Gram–Schmidt per site (unitarize columns)
-        JACC.parallel_for(prod(C.PN), kernel_normalize_generic!, C.A, C.PN, NC, Val(nw))
+        JACC.parallel_for(prod(C.PN), kernel_normalize_generic_1D!, C.A, C.PN, NC, Val(nw))
     end
     #set_halo!(C)
 end
 export normalize_matrix!
 
 
-@inline function kernel_normalize_NC2!(i, u, PN, ::Val{nw}) where nw
+@inline function kernel_normalize_NC2_1D!(i, u, PN, ::Val{nw}) where nw
     ix = get_1Dindex(i, PN)
     α = u[1, 1, ix+nw]
     β = u[2, 1, ix+nw]
@@ -3426,7 +3426,7 @@ export normalize_matrix!
     u[2, 2, ix+nw] = conj(α) / detU
 end
 
-@inline function kernel_normalize_NC3!(i, u, PN, ::Val{nw}) where nw
+@inline function kernel_normalize_NC3_1D!(i, u, PN, ::Val{nw}) where nw
     ix = get_1Dindex(i, PN)
     w1 = 0
     w2 = 0
@@ -3491,7 +3491,7 @@ end
 
 # ========== device side (generic N) ==========
 # Normalize columns in-place to form a unitary (QR with Q-only), per lattice site
-@inline function kernel_normalize_generic!(i, u, PN, NC, ::Val{nw}) where nw
+@inline function kernel_normalize_generic_1D!(i, u, PN, NC, ::Val{nw}) where nw
     # Index decode
     ix = get_1Dindex(i, PN)
 

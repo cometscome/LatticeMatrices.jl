@@ -1,29 +1,6 @@
 @inline launch3d(PN::NTuple{4,Int}) = (PN[1], PN[2], PN[3] * PN[4])
 
 
-function LinearAlgebra.mul!(C::LatticeVector{4,T,AT}, A::LatticeVector{4,T,AT}, B::LatticeVector{4,T,AT}) where {T,AT}
-
-    JACC.parallel_for(
-        prod(C.PN), kernel_4Dvector_mul!, C.A, A.A, B.A, C.NC, nw, C.PN
-    )
-    #set_halo!(C)
-end
-
-#=
-@inline function get_4Dindex(i, dims)
-    #i = (((it-1)*dims[3]+iz-1)*dims[2]+iy-1)*dims[1]+ix
-    Nx, Ny, Nz, Nt = dims
-    o = i - 1                      # zero-based offset
-    ix = (o % Nx) + 1
-    o ÷= Nx
-    iy = (o % Ny) + 1
-    o ÷= Ny
-    iz = (o % Nz) + 1
-    o ÷= Nz
-    it = o + 1
-    return ix, iy, iz, it
-end
-=#
 
 # 3D( i1,i2,i3 ) → 4D(ix,iy,iz,it) 展開
 @inline function get_4Dindex(i1::I, i2::I, i3::I, dims::NTuple{4,I}) where {I<:Integer}

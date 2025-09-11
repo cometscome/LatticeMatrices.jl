@@ -7,82 +7,12 @@ using InteractiveUtils
 JACC.@init_backend
 using MPI, JACC, StaticArrays
 
-#=
-function normalizetest()
-    Random.seed!(1234)
-    for dim = 1:4
-        for NC = 2:4
-            @testset "NC = $NC" begin
-                normalizetest(NC, dim)
-            end
-        end
-    end
-end
-
-function normalizetest(NC, dim)
-    NX = 8
-    NY = 8
-    NZ = 8
-    NT = 8
-    if dim == 1
-        gsize = (NX,)
-    elseif dim == 2
-        gsize = (NX, NY)
-    elseif dim == 3
-        gsize = (NX, NY, NZ)
-    elseif dim == 4
-        gsize = (NX, NY, NZ, NT)
-    else
-        error("dim should be smaller than 5.")
-    end
-    #gsize = (NX, NY)
-    nw = 1
-
-
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    if length(ARGS) == 0
-        n1 = nprocs ÷ 2
-        if n1 == 0
-            n1 = 1
-        end
-        PEs = (n1, nprocs ÷ n1, 1, 1)
-    else
-        PEs = Tuple(parse.(Int64, ARGS))
-    end
-    M1 = LatticeMatrix(NC, NC, dim, gsize, PEs; nw)
-    comm = M1.cart
-
-    A2 = rand(ComplexF64, NC, NC, gsize...)
-    M2 = LatticeMatrix(A2, dim, PEs; nw)
-
-    ix, iy, iz, it = 1, 8, 1, 1
-    ixp = ix + shift[1]
-    iyp = iy + shift[2]
-    izp = iz + shift[3]
-    itp = it + shift[4]
-    ixp = ifelse(ixp < 1, ixp + NX, ixp)
-    iyp = ifelse(iyp < 1, iyp + NY, iyp)
-    izp = ifelse(izp < 1, izp + NZ, izp)
-    itp = ifelse(itp < 1, itp + NT, itp)
-    ixp = ifelse(ixp > NX, ixp - NX, ixp)
-    iyp = ifelse(iyp > NY, iyp - NY, iyp)
-    izp = ifelse(izp > NZ, izp - NZ, izp)
-    itp = ifelse(itp > NT, itp - NT, itp)
-
-    normalize_matrix!(M2)
-    display(M2.A[:, :, nw+ix, nw+iy, nw+iz, nw+it] * M2.A[:, :, nw+ix, nw+iy, nw+iz, nw+it]')
-
-end
-
-=#
-
-
 
 function multtest(NC, dim)
-    NX = 8
-    NY = 8
-    NZ = 8
-    NT = 8
+    NX = 16
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    #=
     if dim == 1
         gsize = (NX,)
     elseif dim == 2
@@ -94,6 +24,8 @@ function multtest(NC, dim)
     else
         error("dim should be smaller than 5.")
     end
+    =#
+    gsize = ntuple(_ -> NX, dim)
     #gsize = (NX, NY)
     nw = 1
 
@@ -103,7 +35,8 @@ function multtest(NC, dim)
         if n1 == 0
             n1 = 1
         end
-        PEs = (n1, nprocs ÷ n1, 1, 1)
+        PEs = ntuple(i -> ifelse(i == 1, n1, ifelse(i == 2, nprocs ÷ n1, 1)), dim)
+        #PEs = (n1, nprocs ÷ n1, 1, 1)
     else
         PEs = Tuple(parse.(Int64, ARGS))
     end
@@ -116,41 +49,70 @@ function multtest(NC, dim)
     A2 = rand(ComplexF64, NC, NC, gsize...)
     M2 = LatticeMatrix(A2, dim, PEs; nw)
 
+
     A3 = rand(ComplexF64, NC, NC, gsize...)
     M3 = LatticeMatrix(A3, dim, PEs; nw)
 
-    ix, iy, iz, it = 1, 8, 1, 1
-    indices = (ix + nw, iy + nw, iz + nw, it + nw)[1:dim]
-    indices_a = (ix, iy, iz, it)[1:dim]
+    L = 1
+    indexer = DIndexer(gsize)
+    indices = delinearize(indexer, L, nw)
+
+    #indices = (ix + nw, iy + nw, iz + nw, it + nw)[1:dim]
+    indices_a = delinearize(indexer, L, 0)
 
     a1 = A1[:, :, indices_a...]
     a2 = A2[:, :, indices_a...]
     a3 = A3[:, :, indices_a...]
 
+
+
+    expt!(M1, M2, 1)
+    m1 = M1.A[:, :, indices...]
+    a1 = exp(a2)
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
+
+
+
+
+
     mul!(a1, a2, a3)
     mul!(M1, M2, M3)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
 
     mul!(a1, a2', a3)
     mul!(M1, M2', M3)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2, a3')
     mul!(M1, M2, M3')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2', a3')
     mul!(M1, M2', M3')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
-
-    shift = (1, 0, 0, 0)
-
+    #shift = (1, 0, 0, 0)
+    shift = ntuple(i -> ifelse(i == 1, -1, 0), dim)
+    indices_p = shiftindices(indices, shift)
+    indices_a_p = shiftindices(indices_a, shift)
+    indices_a_p = ntuple(i -> ifelse(indices_a_p[i] < 1, indices_a_p[i] + gsize[i], indices_a_p[i]), dim)
+    indices_a_p = ntuple(i -> ifelse(indices_a_p[i] > gsize[i], indices_a_p[i] - gsize[i], indices_a_p[i]), dim)
+    #=
     ixp = ix + shift[1]
     iyp = iy + shift[2]
     izp = iz + shift[3]
@@ -166,6 +128,7 @@ function multtest(NC, dim)
     shift = shift[1:dim]
     indices_p = (ixp + nw, iyp + nw, izp + nw, itp + nw)[1:dim]
     indices_a_p = (ixp, iyp, izp, itp)[1:dim]
+    =#
 
     M3_p = Shifted_Lattice(M3, shift)
     M2_p = Shifted_Lattice(M2, shift)
@@ -175,80 +138,148 @@ function multtest(NC, dim)
     mul!(a1, a2, a3_p)
     mul!(M1, M2, M3_p)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p, a3)
     mul!(M1, M2_p, M3)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p, a3_p)
     mul!(M1, M2_p, M3_p)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2', a3_p)
     mul!(M1, M2', M3_p)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p', a3)
     mul!(M1, M2_p', M3)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p', a3_p)
     mul!(M1, M2_p', M3_p)
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2, a3_p')
     mul!(M1, M2, M3_p')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p, a3')
     mul!(M1, M2_p, M3')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p, a3_p')
     mul!(M1, M2_p, M3_p')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
-
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2', a3_p')
     mul!(M1, M2', M3_p')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p', a3')
     mul!(M1, M2_p', M3')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
     mul!(a1, a2_p', a3_p')
     mul!(M1, M2_p', M3_p')
     m1 = M1.A[:, :, indices...]
-    @test a1 ≈ m1 atol = 1e-6
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
+
 
 
 
 
 end
 
-@testset "LatticeMatrices.jl" begin
-    MPI.Init()
-    # Write your tests here.
-    #latticetest4D()
-    #normalizetest()
+function indextest(dim)
+    NX = 4
+    gsize = ntuple(_ -> NX, dim)
 
-    for dim = 1:4
+    #=
+    if dim == 1
+        gsize = (NX,)
+    elseif dim == 2
+        gsize = (NX, NY)
+    elseif dim == 3
+        gsize = (NX, NY, NZ)
+    elseif dim == 4
+        gsize = (NX, NY, NZ, NT)
+    else
+        error("dim should be smaller than 5.")
+    end
+    =#
+
+    d = DIndexer(gsize)
+    println(d)
+    N = prod(gsize)
+    for i = 1:N
+        indices = delinearize(d, i)
+        println(indices)
+        L = linearize(d, indices)
+        println(L)
+    end
+end
+
+function main()
+    MPI.Init()
+    #=
+    for dim = 1:5
+        indextest(dim)
+    end
+    =#
+
+    for dim = 2:4
         for NC = 2:4
             @testset "NC = $NC, dim = $dim" begin
+                println("NC = $NC, dim = $dim")
                 multtest(NC, dim)
+                @time multtest(NC, dim)
             end
         end
     end
 end
+
+@testset "LatticeMatrices.jl" begin
+
+    # Write your tests here.
+    #latticetest4D()
+    #normalizetest()
+    main()
+
+end
+
+

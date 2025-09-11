@@ -21,9 +21,82 @@ end
     end
 end
 
+#C = a*x
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},
+    a::TA, x::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}) where {T1,AT1,NC1,nw,NG,TA<:Number,D,DI}
 
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mulsx!, C.A, a, x.A, Val(NC1), Val(NG), Val(nw), C.indexer
+    )
+    #set_halo!(C)
+end
 
-#C = A B 
+@inline function kernel_Dmatrix_mulsx!(i, C, a, x, ::Val{NC1}, ::Val{NG}, ::Val{nw}, dindexer) where {NC1,NG,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for ig = 1:NG
+        for ic = 1:NC1
+            C[ic, ig, indices...] = a * x[ic, ig, indices...]
+        end
+    end
+    return
+end
+
+#C = C*A where A is a regular matrix
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},
+    A::TA) where {T1,AT1,NC1,nw,TA<:AbstractMatrix,DI,D,NG}
+    At = JACC.array(A[:,:])
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mulA!, C.A, At, Val(NC1), Val(NG),Val(nw), C.indexer
+    )
+end
+
+# A :: NG×NG matrix (on device); eltype(A) == eltype(C)
+function kernel_Dmatrix_mulA!(i, C, A, ::Val{NC1}, ::Val{NG}, ::Val{nw}, dindexer) where {NC1,NG,nw}
+    indices = delinearize(dindexer, i, nw)
+
+    @inbounds for ic = 1:NC1
+        # 1) load e_j = C[ic, j, indices...] into a stack-allocated tuple (no heap alloc)
+        e = ntuple(j -> C[ic, j, indices...], NG)
+
+        # 2) r_j = Σ_k A[j,k] * e_k  (also as a tuple; unrolled by Val(NG))
+        r = ntuple(k -> begin
+            s = zero(eltype(C))
+            @inbounds for j = 1:NG
+                s +=  e[j]* A[j,k]
+            end
+            s
+        end, NG)
+
+        # 3) write back
+        @inbounds for j = 1:NG
+            C[ic, j, indices...] = r[j]
+        end
+    end
+    return
+end
+
+function kernel_Dmatrix_mulA!(i, C, A, ::Val{NC1}, ::Val{4},::Val{nw}, dindexer) where {NC1,nw}
+    indices = delinearize(dindexer, i, nw)
+
+    @inbounds for ic = 1:NC1
+        e1 = C[ic, 1, indices...]
+        e2 = C[ic, 2, indices...]
+        e3 = C[ic, 3, indices...]
+        e4 = C[ic, 4, indices...]
+
+        C[ic, 1, indices...] =
+            A[1, 1] * e1 + A[2, 1] * e2 + A[3, 1] * e3 + A[4, 1] * e4
+        C[ic, 2, indices...] =
+            A[1, 2] * e1 + A[2, 2] * e2 + A[3, 2] * e3 + A[4, 2] * e4
+        C[ic, 3, indices...] =
+            A[1, 3] * e1 + A[2, 3] * e2 + A[3, 3] * e3 + A[4, 3] * e4
+        C[ic, 4, indices...] =
+            A[1, 4] * e1 + A[2, 4] * e2 + A[3, 4] * e3 + A[4, 4] * e4
+    end
+    return
+end
+
+#C = A B
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI}
 

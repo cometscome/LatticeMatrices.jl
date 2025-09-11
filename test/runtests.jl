@@ -87,6 +87,40 @@ function multtest(NC, dim)
         @test a1 ≈ Array(m1) atol = 1e-6
     end
 
+    #NG = 4
+    for NG=3:4
+        A1g = rand(ComplexF64, NC, NG, gsize...)
+        A2g = rand(ComplexF64, NC, NG, gsize...)
+        M1g = LatticeMatrix(A1g, dim, PEs; nw)
+        M2g = LatticeMatrix(A2g, dim, PEs; nw)
+        a1g = A1g[:, :, indices_a...]
+        a2g = A2g[:, :, indices_a...]
+
+        c = rand(NG,NG)
+        mul!(M1g, c)
+        m1 = M1g.A[:, :, indices...]
+        atemp = similar(a2g)
+        mul!(atemp,a1g,c)
+        a1g .= atemp
+        #mul!(a1, c)
+        if myrank == 0
+            #display(a1g)
+            #display(Array(m1))
+            @test a1g ≈ Array(m1) atol = 1e-6
+        end
+
+        mul!(M2g, transpose(c))
+        m2 = M2g.A[:, :, indices...]
+        atemp = similar(a2g)
+        mul!(atemp,a2g,transpose(c))
+        a2g .= atemp
+        #mul!(a1, c)
+        if myrank == 0
+            #display(a1g)
+            #display(Array(m1))
+            @test a2g ≈ Array(m2) atol = 1e-6
+        end
+    end
 
 
 

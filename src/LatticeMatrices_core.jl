@@ -16,7 +16,8 @@ using MPI, StaticArrays, JACC
 # ---------------------------------------------------------------------------
 # container  (faces / derived datatypes are GONE)
 # ---------------------------------------------------------------------------
-struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
+#struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
+struct LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT}
     nw::Int                          # ghost width
     phases::SVector{D,T}                 # phases
     NC1::Int
@@ -33,6 +34,7 @@ struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
     myrank::Int
     PN::NTuple{D,Int}
     comm::MPI.Comm
+    indexer::DI
     #stride::NTuple{D,Int}
 end
 
@@ -76,10 +78,15 @@ function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, 
 
     PN = ntuple(i -> gsize[i] ÷ dims[i], D)
     #println("LatticeMatrix: $dims, $gsize, $PN, $nw")
+    indexer = DIndexer(gsize)
+    DI = typeof(indexer)
 
-    return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
+    #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
+    #    cart, Tuple(coords), dims, nbr,
+    #    A, buf, MPI.Comm_rank(cart), PN, comm0)
+    return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, MPI.Comm_rank(cart), PN, comm0)
+        A, buf, MPI.Comm_rank(cart), PN, comm0, indexer)
 end
 
 function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)

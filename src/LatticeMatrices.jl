@@ -32,7 +32,8 @@ function Base.adjoint(data::Shifted_Lattice{D,shift}) where {D,shift}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 
-include("LatticeMatrix_core.jl")
+include("Latticeindices.jl")
+include("LatticeMatrices_core.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 

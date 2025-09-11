@@ -1,3 +1,27 @@
+#Overwrite Y with X*a + Y*b, where a and b are scalars. Return Y.
+function LinearAlgebra.axpby!(
+    a::Number,
+    X::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    b::Number,
+    Y::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+) where {T1,AT1,NC1,NC2,nw,D,DI}
+
+    JACC.parallel_for(
+        prod(Y.PN), kernel_D_axpby!, a, X.A, b, Y.A, Val(NC1), Val(NC2), Val(nw), Y.indexer
+    )
+end
+
+@inline function kernel_D_axpby!(i, a, X, b, Y, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            Y[ic, jc, indices...] = a * X[ic, jc, indices...] + b * Y[ic, jc, indices...]
+        end
+    end
+end
+
+
 
 #C = A B 
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},

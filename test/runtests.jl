@@ -73,6 +73,19 @@ function multtest(NC, dim)
         @test a1 ≈ m1 atol = 1e-6
     end
 
+    a = 1.2
+    b = 3.9
+    axpby!(
+        a,
+        M2,
+        b,
+        M1
+    )
+    m1 = M1.A[:, :, indices...]
+    axpby!(a, a2, b, a1)
+    if myrank == 0
+        @test a1 ≈ m1 atol = 1e-6
+    end
 
 
 

@@ -12,6 +12,8 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 > This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.
 
+**Applications**: This package is designed to support large-scale simulations on structured lattices. A key application area is lattice QCD, where gauge fields and fermion fields are represented as matrix-valued objects on a multi-dimensional lattice. In future developments, LatticeMatrices.jl is planned to be integrated into [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl), providing the underlying data structures and linear algebra kernels for gauge and fermion dynamics.
+
 
 
 **Current limitation.** Multi‑GPU execution and hybrid MPI+GPU parallelism are **experimental** and **not yet thoroughly tested**; treat them as provisional.

@@ -7,6 +7,17 @@ using InteractiveUtils
 JACC.@init_backend
 using MPI, JACC, StaticArrays
 
+function dotproduct(i,A,B,::Val{NC1}, ::Val{NC2}, ::Val{nw}, ::Val{NC1}, ::Val{NC2}, ::Val{nw},dindexer) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+    s = zero(eltype(A))
+    for jc = 1:NC2
+        for ic=1:NC1
+            s += A[ic,jc,indices...]' * B[ic,jc,indices...]
+        end
+    end
+    return s
+end
+
 
 function multtest(NC, dim)
     NX = 16
@@ -128,6 +139,7 @@ function multtest(NC, dim)
         a1g = A1g[:, :, indices_a...]
         a2g = A2g[:, :, indices_a...]
 
+
         c = rand(NG,NG)
         JACC.parallel_for(LatticeMatrices.kernel_Dmatrix_mulA!,M1g,JACC.array(c))
         m1 = M1g.A[:, :, indices...]
@@ -140,6 +152,22 @@ function multtest(NC, dim)
             #display(Array(m1))
             @test a1g ≈ Array(m1) atol = 1e-6
         end
+
+
+        A1g = rand(ComplexF64, NC, NG, gsize...)
+        A2g = rand(ComplexF64, NC, NG, gsize...)
+        M1g = LatticeMatrix(A1g, dim, PEs; nw)
+        M2g = LatticeMatrix(A2g, dim, PEs; nw)
+
+        s = JACC.parallel_reduce(dotproduct,M1g,M2g)
+        #mul!(a1, c)
+        if myrank == 0
+            #display(a1g)
+            #display(Array(m1))
+            #println(s)
+        end
+
+
 
     end
 

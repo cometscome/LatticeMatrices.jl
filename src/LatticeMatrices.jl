@@ -126,12 +126,64 @@ function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC
     )
 end
 
+function JACC.parallel_reduce(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},variables...) where {D,T1,AT1,NC1,NG,nw,DI}
+    s = JACC.parallel_reduce(
+        prod(C.PN), +,kernelfunction, C.A, variables..., Val(NC1), Val(NG), Val(nw), C.indexer
+        ; init=zero(eltype(C.A))
+    )
+    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+end
+
+function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}) where {D,T1,AT1,NC1,NG,nw,DI}
+    JACC.parallel_for(
+        prod(C.PN), kernelfunction, C.A,  Val(NC1), Val(NG), Val(nw), C.indexer
+    )
+end
+
+function JACC.parallel_reduce(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}) where {D,T1,AT1,NC1,NG,nw,DI}
+    s = JACC.parallel_reduce(
+        prod(C.PN),+, kernelfunction, C.A,  Val(NC1), Val(NG), Val(nw), C.indexer
+        ; init=zero(eltype(C.A))
+    )
+    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+end
+
 function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},variables...) where {D,T1,AT1,NC1,NG,nw,DI,
     T2,AT2,NC2,NG2,nw2}
     a = get_matrix(A)
     JACC.parallel_for(
-        prod(C.PN), kernelfunction, C.A, a, variables..., Val(NC1), Val(NG), Val(nw), Val(NC12), Val(NG2), Val(nw2),C.indexer
+        prod(C.PN), kernelfunction, C.A, a, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2),C.indexer
     )
+    
+end
+
+function JACC.parallel_reduce(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},variables...) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2}
+    a = get_matrix(A)
+    s = JACC.parallel_reduce(
+        prod(C.PN),+, kernelfunction, C.A, a, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2),C.indexer
+        ; init=zero(eltype(C.A))
+    )
+    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+end
+
+function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2}) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2}
+    a = get_matrix(A)
+    JACC.parallel_for(
+        prod(C.PN), kernelfunction, C.A, a,  Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2),C.indexer
+    )
+    
+end
+
+function JACC.parallel_reduce(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2}) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2}
+    a = get_matrix(A)
+    s = JACC.parallel_reduce(
+        prod(C.PN), +,kernelfunction, C.A, a,  Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2),C.indexer
+        ; init=zero(eltype(C.A))
+    )
+    s = MPI.Allreduce(s, MPI.SUM, C.comm)
 end
 
 function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},
@@ -142,8 +194,48 @@ function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC
     a = get_matrix(A)
     b = get_matrix(B)
     JACC.parallel_for(
-        prod(C.PN), kernelfunction, C.A, a,b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC12), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+        prod(C.PN), kernelfunction, C.A, a,b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
     )
+end
+
+function JACC.parallel_reduce(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},
+    B::Lattice{D,T3,AT3,NC3,NG3,nw3},
+    variables...) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2,
+    T3,AT3,NC3,NG3,nw3}
+    a = get_matrix(A)
+    b = get_matrix(B)
+    s = JACC.parallel_reduce(
+        prod(C.PN),+, kernelfunction, C.A, a,b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+        ; init=zero(eltype(C.A))
+    )
+    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+end
+
+function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},
+    B::Lattice{D,T3,AT3,NC3,NG3,nw3},
+    ) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2,
+    T3,AT3,NC3,NG3,nw3}
+    a = get_matrix(A)
+    b = get_matrix(B)
+    JACC.parallel_for(
+        prod(C.PN), kernelfunction, C.A, a,b,  Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+    )
+end
+
+function JACC.parallel_reduce(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},
+    B::Lattice{D,T3,AT3,NC3,NG3,nw3},
+    ) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2,
+    T3,AT3,NC3,NG3,nw3}
+    a = get_matrix(A)
+    b = get_matrix(B)
+    s = JACC.parallel_reduce(
+        prod(C.PN), +,kernelfunction, C.A, a,b,  Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+        ; init=zero(eltype(C.A))
+    )
+    s = MPI.Allreduce(s, MPI.SUM, C.comm)
 end
 
 

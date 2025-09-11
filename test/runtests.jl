@@ -70,7 +70,7 @@ function multtest(NC, dim)
     m1 = M1.A[:, :, indices...]
     a1 = exp(a2)
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     a = 1.2
@@ -84,7 +84,7 @@ function multtest(NC, dim)
     m1 = M1.A[:, :, indices...]
     axpby!(a, a2, b, a1)
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
 
@@ -94,7 +94,7 @@ function multtest(NC, dim)
     mul!(M1, M2, M3)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
 
@@ -102,21 +102,21 @@ function multtest(NC, dim)
     mul!(M1, M2', M3)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2, a3')
     mul!(M1, M2, M3')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2', a3')
     mul!(M1, M2', M3')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     #shift = (1, 0, 0, 0)
@@ -152,84 +152,84 @@ function multtest(NC, dim)
     mul!(M1, M2, M3_p)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p, a3)
     mul!(M1, M2_p, M3)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p, a3_p)
     mul!(M1, M2_p, M3_p)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2', a3_p)
     mul!(M1, M2', M3_p)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p', a3)
     mul!(M1, M2_p', M3)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p', a3_p)
     mul!(M1, M2_p', M3_p)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2, a3_p')
     mul!(M1, M2, M3_p')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p, a3')
     mul!(M1, M2_p, M3')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p, a3_p')
     mul!(M1, M2_p, M3_p')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2', a3_p')
     mul!(M1, M2', M3_p')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p', a3')
     mul!(M1, M2_p', M3')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     mul!(a1, a2_p', a3_p')
     mul!(M1, M2_p', M3_p')
     m1 = M1.A[:, :, indices...]
     if myrank == 0
-        @test a1 ≈ m1 atol = 1e-6
+        @test a1 ≈ Array(m1) atol = 1e-6
     end
 
 

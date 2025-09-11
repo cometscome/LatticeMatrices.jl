@@ -47,7 +47,7 @@ d = DIndexer(gsize)          # computes row-major "strides" internally
 L  = linearize(d, (1, 1, 1, 1))   # -> 1
 ix = delinearize(d, 4)            # -> (4, 1, 1, 1) on this shape
 
-# Apply periodic shifts componentwise
+# Apply shifts componentwise
 p = shiftindices((4, 1, 1, 1), (1, 0, 0, 0))   # -> (5, 1, 1, 1)
 ```
 

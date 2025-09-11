@@ -1,4 +1,4 @@
-struct TALattice{D,T,AT,N} <: Lattice{D,T,AT}
+struct TALattice{D,T,AT,N} <: Lattice{D,T,AT,N,N,0}
     lt::LatticeMatrix{D,T,AT,N,N}
 
     function TALattice(A::LatticeMatrix{D,T,AT,N,N2}) where {D,T,AT,N,N2}

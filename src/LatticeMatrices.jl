@@ -5,7 +5,7 @@ using JACC
 
 include("utilities/randomgenerator.jl")
 
-abstract type Lattice{D,T,AT} end
+abstract type Lattice{D,T,AT,NC1,NC2,NW} end
 
 
 #include("HaloComm.jl")
@@ -23,6 +23,8 @@ export Shifted_Lattice
 struct Adjoint_Lattice{D}
     data::D
 end
+
+
 
 function Base.adjoint(data::Lattice{D,T,AT}) where {D,T,AT}
     return Adjoint_Lattice{typeof(data)}(data)
@@ -104,6 +106,44 @@ function Shifted_Lattice(data::LatticeMatrix{D,T,AT,NC1,NC2,nw}, shift) where {D
         sl = Shifted_Lattice{typeof(data),zeroshift}(sl0)
     end
     return sl
+end
+
+function get_matrix(a::LatticeMatrix)
+    return a.A
+end
+
+function get_matrix(a::Shifted_Lattice)
+    return a.data.A
+end
+
+function get_matrix(a::Adjoint_Lattice)
+    return a.data.A
+end
+
+function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},variables...) where {D,T1,AT1,NC1,NG,nw,DI}
+    JACC.parallel_for(
+        prod(C.PN), kernelfunction, C.A, variables..., Val(NC1), Val(NG), Val(nw), C.indexer
+    )
+end
+
+function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},variables...) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2}
+    a = get_matrix(A)
+    JACC.parallel_for(
+        prod(C.PN), kernelfunction, C.A, a, variables..., Val(NC1), Val(NG), Val(nw), Val(NC12), Val(NG2), Val(nw2),C.indexer
+    )
+end
+
+function JACC.parallel_for(kernelfunction::Function,C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},A::Lattice{D,T2,AT2,NC2,NG2,nw2},
+    B::Lattice{D,T3,AT3,NC3,NG3,nw3},
+    variables...) where {D,T1,AT1,NC1,NG,nw,DI,
+    T2,AT2,NC2,NG2,nw2,
+    T3,AT3,NC3,NG3,nw3}
+    a = get_matrix(A)
+    b = get_matrix(B)
+    JACC.parallel_for(
+        prod(C.PN), kernelfunction, C.A, a,b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC12), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+    )
 end
 
 

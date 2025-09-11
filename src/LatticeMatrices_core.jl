@@ -17,7 +17,7 @@ using MPI, StaticArrays, JACC
 # container  (faces / derived datatypes are GONE)
 # ---------------------------------------------------------------------------
 #struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
-struct LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT}
+struct LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw}
     nw::Int                          # ghost width
     phases::SVector{D,T}                 # phases
     NC1::Int

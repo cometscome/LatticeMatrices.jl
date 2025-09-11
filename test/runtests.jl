@@ -120,6 +120,27 @@ function multtest(NC, dim)
             #display(Array(m1))
             @test a2g ≈ Array(m2) atol = 1e-6
         end
+
+        A1g = rand(ComplexF64, NC, NG, gsize...)
+        A2g = rand(ComplexF64, NC, NG, gsize...)
+        M1g = LatticeMatrix(A1g, dim, PEs; nw)
+        M2g = LatticeMatrix(A2g, dim, PEs; nw)
+        a1g = A1g[:, :, indices_a...]
+        a2g = A2g[:, :, indices_a...]
+
+        c = rand(NG,NG)
+        JACC.parallel_for(LatticeMatrices.kernel_Dmatrix_mulA!,M1g,JACC.array(c))
+        m1 = M1g.A[:, :, indices...]
+        atemp = similar(a2g)
+        mul!(atemp,a1g,c)
+        a1g .= atemp
+        #mul!(a1, c)
+        if myrank == 0
+            #display(a1g)
+            #display(Array(m1))
+            @test a1g ≈ Array(m1) atol = 1e-6
+        end
+
     end
 
 

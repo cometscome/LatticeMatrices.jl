@@ -340,7 +340,7 @@ end
 
 @inline function kernel_4Dexpt!(i, C, A, dindexer, ::Val{nw}, t, ::Val{N}) where {N,nw}
     indices = delinearize(dindexer, i, nw)
-    expm_pade13_writeback!(C, A, ix + nw, iy + nw, iz + nw, it + nw, t, Val(N))
+    expm_pade13_writeback!(C, A, indices..., t, Val(N))
     #C[:, :, indices...] = expm_pade13(A[:, :, indices...], t)
 end
 
@@ -3409,7 +3409,7 @@ end
 # ComplexF32
 @inline function _rand_fill!(::Val{:c32}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
     @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(ix + nw, iy + nw, iz + nw, it + nw, ic, jc, seed0)
+        state, inc = mix_seed(indices..., ic, jc, seed0)
         state, r1 = pcg32_step(state, inc)
         state, r2 = pcg32_step(state, inc)
         realv = u01_f32(r1) - 0.5f0
@@ -3422,7 +3422,7 @@ end
 # ComplexF64
 @inline function _rand_fill!(::Val{:c64}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
     @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(ix + nw, iy + nw, iz + nw, it + nw, ic, jc, seed0)
+        state, inc = mix_seed(indices..., ic, jc, seed0)
         state, r1 = pcg32_step(state, inc)
         state, r2 = pcg32_step(state, inc)
         realv = u01_f64(r1, r2) - 0.5
@@ -3437,7 +3437,7 @@ end
 # Float32
 @inline function _rand_fill!(::Val{:r32}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
     @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(ix + nw, iy + nw, iz + nw, it + nw, ic, jc, seed0)
+        state, inc = mix_seed(indices..., ic, jc, seed0)
         state, r1 = pcg32_step(state, inc)
         realv = u01_f32(r1) - 0.5f0
         u[ic, jc, indices...] = realv  # already Float32
@@ -3448,7 +3448,7 @@ end
 # Float64
 @inline function _rand_fill!(::Val{:r64}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
     @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(ix + nw, iy + nw, iz + nw, it + nw, ic, jc, seed0)
+        state, inc = mix_seed(indices..., ic, jc, seed0)
         state, r1 = pcg32_step(state, inc)
         state, r2 = pcg32_step(state, inc)
         realv = u01_f64(r1, r2) - 0.5

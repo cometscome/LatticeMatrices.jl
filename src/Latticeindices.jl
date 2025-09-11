@@ -35,11 +35,11 @@ end
 # ======= GPU-kernel friendly versions (no heap allocation) =======
 # idx(1-based) -> L(1-based)
 @inline function linearize(
-    ::DIndexer{D,dims,strides}, idx::NTuple{D,Int32}
-) where {D,dims,strides}
+    ::DIndexer{D,dims,strides}, idx::NTuple{D,T}
+) where {D,dims,strides,T<:Integer}
     acc = Int32(0)
     @inbounds for d in 1:D
-        acc += (idx[d] - 1) * strides[d]
+        acc += (Int32(idx[d]) - 1) * strides[d]
     end
     return acc + 1
 end

@@ -7,7 +7,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 - Per-site matrices (size `NC1×NC2`) stored in **column-major layout**:  
   `(NC1, NC2, X, Y, Z, …)`
 - **MPI** domain decomposition via a Cartesian communicator (halo width `nw`, periodic BCs).
-- **GPU-ready** through **[JACC.jl]** (portable CPU/GPU kernels; CUDA/ROCm/Threads).
+- **GPU-ready** through **[JACC.jl](https://github.com/JuliaORNL/JACC.jl)** (portable CPU/GPU kernels; CUDA/ROCm/Threads).
 - Fast, allocation-free **indexing helpers** for kernels: `DIndexer`, `linearize`, `delinearize`, `shiftindices`.
 
 > This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.

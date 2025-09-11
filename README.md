@@ -16,7 +16,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 
 
-**Current limitation.** Multi‑GPU execution and hybrid MPI+GPU parallelism are **experimental** and **not yet thoroughly tested**; treat them as provisional.
+**Current limitation.** Multi‑GPU execution and hybrid MPI+threads parallelism are **experimental** and **not yet thoroughly tested**; treat them as provisional.
 
 
 ---

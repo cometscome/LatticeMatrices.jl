@@ -3269,13 +3269,13 @@ end
 =#
 
 function partial_trace(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, μ::Int, position::Int=1) where {D,T1,AT1,NC1,NC2,nw,DI}
-    s = JACC.parallel_reduce(prod(C.PN), +, kernel_partial_trace_4D, C.A, NC1, C.indexer, μ, position, Val(nw); init=zero(eltype(C.A)))
+    s = JACC.parallel_reduce(prod(C.PN), +, kernel_partial_trace_D, C.A, NC1, C.indexer, μ, position, Val(nw); init=zero(eltype(C.A)))
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
     return s
 end
 export partial_trace
 
-@inline function kernel_partial_trace_4D(i, A, NC, dindexer, μ, position, ::Val{nw}) where nw
+@inline function kernel_partial_trace_D(i, A, NC, dindexer, μ, position, ::Val{nw}) where nw
     indices = delinearize(dindexer, i, nw)
 
 

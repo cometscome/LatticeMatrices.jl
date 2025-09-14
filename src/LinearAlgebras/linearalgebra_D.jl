@@ -44,9 +44,9 @@ end
 #C = C*A where A is a regular matrix
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI},
     A::TA) where {T1,AT1,NC1,nw,TA<:AbstractMatrix,DI,D,NG}
-    At = JACC.array(A[:,:])
+    At = JACC.array(A[:, :])
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mulA!, C.A, At, Val(NC1), Val(NG),Val(nw), C.indexer
+        prod(C.PN), kernel_Dmatrix_mulA!, C.A, At, Val(NC1), Val(NG), Val(nw), C.indexer
     )
 end
 
@@ -60,12 +60,12 @@ function kernel_Dmatrix_mulA!(i, C, A, ::Val{NC1}, ::Val{NG}, ::Val{nw}, dindexe
 
         # 2) r_j = Σ_k A[j,k] * e_k  (also as a tuple; unrolled by Val(NG))
         r = ntuple(k -> begin
-            s = zero(eltype(C))
-            @inbounds for j = 1:NG
-                s +=  e[j]* A[j,k]
-            end
-            s
-        end, NG)
+                s = zero(eltype(C))
+                @inbounds for j = 1:NG
+                    s += e[j] * A[j, k]
+                end
+                s
+            end, NG)
 
         # 3) write back
         @inbounds for j = 1:NG
@@ -75,7 +75,7 @@ function kernel_Dmatrix_mulA!(i, C, A, ::Val{NC1}, ::Val{NG}, ::Val{nw}, dindexe
     return
 end
 
-function kernel_Dmatrix_mulA!(i, C, A, ::Val{NC1}, ::Val{4},::Val{nw}, dindexer) where {NC1,nw}
+function kernel_Dmatrix_mulA!(i, C, A, ::Val{NC1}, ::Val{4}, ::Val{nw}, dindexer) where {NC1,nw}
     indices = delinearize(dindexer, i, nw)
 
     @inbounds for ic = 1:NC1
@@ -3276,7 +3276,7 @@ end
 export partial_trace
 
 @inline function kernel_partial_trace_4D(i, A, NC, dindexer, μ, position, ::Val{nw}) where nw
-    indices = get_4Dindex(dindexer, i, nw)
+    indices = delinearize(dindexer, i, nw)
 
 
     s = zero(eltype(A))

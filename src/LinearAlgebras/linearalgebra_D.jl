@@ -3280,7 +3280,7 @@ export partial_trace
 
 
     s = zero(eltype(A))
-    if NN[μ] == position
+    if indices[μ] == position
         for ic = 1:NC
             s += A[ic, ic, indices...]
         end

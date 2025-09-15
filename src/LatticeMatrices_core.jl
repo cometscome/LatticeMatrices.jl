@@ -13,11 +13,13 @@
 
 using MPI, StaticArrays, JACC
 
+abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} end
+
 # ---------------------------------------------------------------------------
 # container  (faces / derived datatypes are GONE)
 # ---------------------------------------------------------------------------
 #struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
-struct LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw}
+struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
     nw::Int                          # ghost width
     phases::SVector{D,T}                 # phases
     NC1::Int
@@ -38,12 +40,21 @@ struct LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw}
     #stride::NTuple{D,Int}
 end
 
-
-
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
+    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0)
+end
+
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
+    return LatticeMatrix_standard(A, dim, PEs; nw, phases, comm0)
+end
+
+# ---------------------------------------------------------------------------
+# constructor + heavy init (still cheap to call)
+# ---------------------------------------------------------------------------
+function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
 
     # Cartesian grid
     D = dim
@@ -84,12 +95,12 @@ function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, 
     #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
     #    cart, Tuple(coords), dims, nbr,
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
-    return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
+    return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
         A, buf, MPI.Comm_rank(cart), PN, comm0, indexer)
 end
 
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
+function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
 
     NC1, NC2, NN... = size(A)
     #println(NN)
@@ -189,7 +200,7 @@ end
 
 export allsum
 
-function get_globalrange(ls::LatticeMatrix{D,T,TA}, dim) where {D,T,TA}
+function get_globalrange(ls::LatticeMatrix, dim)
     coords_r = MPI.Cart_coords(ls.cart, ls.myrank)
     istart = get_globalindex(ls, 1, dim, coords_r[dim])
     #if dim == 1
@@ -199,14 +210,14 @@ function get_globalrange(ls::LatticeMatrix{D,T,TA}, dim) where {D,T,TA}
     return istart:iend
 end
 
-function get_globalindex(ls::LatticeMatrix{D,T,TA}, i, dim, myrank_dim) where {D,T,TA}
+function get_globalindex(ls::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, i, dim, myrank_dim) where {D,T,AT,NC1,NC2,nw,DI}
     ix = i + ls.PN[dim] * myrank_dim
     return ix
 end
 
 
 
-function set_halo!(ls::LatticeMatrix{D,T,TA}) where {D,T,TA}
+function set_halo!(ls::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
     for id = 1:D
         exchange_dim!(ls, id)
     end

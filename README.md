@@ -24,7 +24,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 ## Installation
 
 ```julia
-pkg> add https://github.com/cometscome/LatticeMatrices.jl
+pkg> add LatticeMatrices
 ```
 
 Requirements:

@@ -199,6 +199,78 @@ function kernel_Dmatrix_mul_UOperatorSecondB!(i, C, U, A, B, ::Val{NC1}, ::Val{N
     end
 end
 
+function kernel_Dmatrix_mul_UOperatorSecondB!(i, C, U, A, B, ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+
+    #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices)
+    v31,v32,v33,v34 = mul_op(A, B, 3, indices)
+    U11 = U[1, 1, indices...]
+    U12 = U[1, 2, indices...]
+    U13 = U[1, 3, indices...]
+    U21 = U[2, 1, indices...]
+    U22 = U[2, 2, indices...]
+    U23 = U[2, 3, indices...]
+    U31 = U[3, 1, indices...]
+    U32 = U[3, 2, indices...]
+    U33 = U[3, 3, indices...]
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 + U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 + U23*v31
+    C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 + U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 + U23*v32
+    C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 + U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 + U23*v33
+    C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 + U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 + U23*v34
+    C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
+end
+
+function kernel_Dmatrix_mul_UOperatorSecondB!(i, C, U, A, B, ::Val{2}, ::Val{4}, ::Val{2}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+
+    #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices)
+    U11 = U[1, 1, indices...]
+    U12 = U[1, 2, indices...]
+    U21 = U[2, 1, indices...]
+    U22 = U[2, 2, indices...]
+
+
+    C[1, 1, indices...] = U11*v11 + U12*v21
+    C[2, 1, indices...] = U21*v11 + U22*v21 
+ 
+    C[1, 2, indices...] = U11*v12 + U12*v22
+    C[2, 2, indices...] = U21*v12 + U22*v22 
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 
+    C[2, 3, indices...] = U21*v13 + U22*v23 
+ 
+    C[1, 4, indices...] = U11*v14 + U12*v24 
+    C[2, 4, indices...] = U21*v14 + U22*v24 
+
+end
+
+
+
+
 #C = U*shiftedB*A^T
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     U::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI},
@@ -233,4 +305,43 @@ function kernel_Dmatrix_mul_UOperatorSecondshiftedB!(i, C, U, A, B,
             end
         end
     end
+end
+
+function kernel_Dmatrix_mul_UOperatorSecondshiftedB!(i, C, U, A, B,
+    ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer, shift) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices_p)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices_p)
+    v31,v32,v33,v34 = mul_op(A, B, 3, indices_p)
+    U11 = U[1, 1, indices...]
+    U12 = U[1, 2, indices...]
+    U13 = U[1, 3, indices...]
+    U21 = U[2, 1, indices...]
+    U22 = U[2, 2, indices...]
+    U23 = U[2, 3, indices...]
+    U31 = U[3, 1, indices...]
+    U32 = U[3, 2, indices...]
+    U33 = U[3, 3, indices...]
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 + U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 + U23*v31
+    C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 + U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 + U23*v32
+    C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 + U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 + U23*v33
+    C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 + U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 + U23*v34
+    C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
 end

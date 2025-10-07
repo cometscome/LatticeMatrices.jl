@@ -18,6 +18,131 @@ function dotproduct(i, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, ::Val{NC1}, ::Va
     return s
 end
 
+function diracoperatortest(NC, dim)
+    NX = 32
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    gsize = ntuple(_ -> NX, dim)
+    #gsize = (NX, NY)
+    nw = 1
+    NG = 4
+
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    if length(ARGS) == 0
+        n1 = nprocs ÷ 2
+        if n1 == 0
+            n1 = 1
+        end
+        PEs = ntuple(i -> ifelse(i == 1, n1, ifelse(i == 2, nprocs ÷ n1, 1)), dim)
+        #PEs = (n1, nprocs ÷ n1, 1, 1)
+    else
+        PEs = Tuple(parse.(Int64, ARGS))
+    end
+    PEs = PEs[1:dim]
+    M1 = LatticeMatrix(NC, NG, dim, gsize, PEs; nw)
+    comm = M1.cart
+
+    A1 = rand(ComplexF64, NC, NG, gsize...)
+
+    A2 = rand(ComplexF64, NC, NG, gsize...)
+    M2 = LatticeMatrix(A2, dim, PEs; nw)
+
+
+    A3 = rand(ComplexF64, NC, NG, gsize...)
+    M3 = LatticeMatrix(A3, dim, PEs; nw)
+
+    U = rand(ComplexF64, NC, NC, gsize...)
+    MU = LatticeMatrix(U, dim, PEs; nw)
+
+    U2 = rand(ComplexF64, NC, NC, gsize...)
+    MU2 = LatticeMatrix(U2, dim, PEs; nw)
+
+    L = 1
+    indexer = DIndexer(gsize)
+    indices = delinearize(indexer, L, nw)
+
+    #indices = (ix + nw, iy + nw, iz + nw, it + nw)[1:dim]
+    indices_a = delinearize(indexer, L, 0)
+
+    shift = ntuple(i -> ifelse(i == 1, -1, 0), dim)
+    indices_p = shiftindices(indices, shift)
+    indices_a_p = shiftindices(indices_a, shift)
+    indices_a_p = ntuple(i -> ifelse(indices_a_p[i] < 1, indices_a_p[i] + gsize[i], indices_a_p[i]), dim)
+    indices_a_p = ntuple(i -> ifelse(indices_a_p[i] > gsize[i], indices_a_p[i] - gsize[i], indices_a_p[i]), dim)
+
+    M3_p = Shifted_Lattice(M3, shift)
+    M2_p = Shifted_Lattice(M2, shift)
+    MU_p = Shifted_Lattice(MU, shift)
+    MU2_p = Shifted_Lattice(MU2, shift)
+    a2_p = A2[:, :, indices_a_p...]
+    a3_p = A3[:, :, indices_a_p...]
+    u = U[:, :, indices_a...]
+    u_p = U[:, :, indices_a_p...]
+    u2_p = U2[:, :, indices_a_p...]
+    u2 = U2[:, :, indices_a...]
+    a1 = A1[:, :, indices_a...]
+    a2 = A2[:, :, indices_a...]
+    a3 = A3[:, :, indices_a...]
+
+    mul_and_sum!(M1, MU,oneplusγ1, M2,MU2,oneplusγ2, M3)
+    m1 = M1.A[:, :, indices...]
+
+    gamma1 = zeros(ComplexF64, 4, 4)
+    gamma1 .= γ1
+    for i = 1:4
+        gamma1[i, i] += 1
+    end
+    gamma2 = zeros(ComplexF64, 4, 4)
+    gamma2 .= γ2
+    for i = 1:4
+        gamma2[i, i] += 1
+    end
+    a1 = u*a2 * transpose(gamma1)+ u2*a3 * transpose(gamma2)
+
+    if myrank == 0
+        @test a1 ≈ Array(m1) atol = 1e-6
+    end
+
+    gamma1 = zeros(ComplexF64, 4, 4)
+    gamma1 .= γ1
+    for i = 1:4
+        gamma1[i, i] += 1
+    end
+    gamma2 = zeros(ComplexF64, 4, 4)
+    gamma2 .= -γ1
+    for i = 1:4
+        gamma2[i, i] += 1
+    end
+
+    mul_and_sum!(M1, MU,oneplusγ1, M2,MU2_p',oneminusγ1, M3_p)
+    m1 = M1.A[:, :, indices...]
+    a1 = u*a2 * transpose(gamma1)+ u2_p'*a3_p * transpose(gamma2)
+
+    if myrank == 0
+        @test a1 ≈ Array(m1) atol = 1e-6
+    end
+
+    mul_and_sum!(M1, MU,oneplusγ1, M2_p,MU2_p',oneminusγ1, M3_p)
+    m1 = M1.A[:, :, indices...]
+    a1 = u*a2_p * transpose(gamma1)+ u2_p'*a3_p * transpose(gamma2)
+
+    if myrank == 0
+        @test a1 ≈ Array(m1) atol = 1e-6
+    end
+
+
+
+    for i=1:10
+        println("i = $i")
+        @time mul_and_sum!(M1, MU,oneplusγ1, M2,MU2,oneplusγ2, M3)
+        @time  mul_and_sum!(M1, MU,oneplusγ1, M2,MU2_p',oneminusγ1, M3_p)
+        @time  mul_and_sum!(M1, MU,oneplusγ1, M2_p,MU2_p',oneminusγ1, M3_p)
+    end
+
+
+
+end
+
 function operatortest(NC, dim)
     NX = 16
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
@@ -681,13 +806,24 @@ function main()
         for NC = 2:4
             @testset "NC = $NC, dim = $dim" begin
                 println("NC = $NC, dim = $dim")
+                #operatortest(NC, dim)
+                @time diracoperatortest(NC, dim)
+            end
+        end
+    end
+    return
+
+    for dim = 2:4
+        for NC = 2:4
+            @testset "NC = $NC, dim = $dim" begin
+                println("NC = $NC, dim = $dim")
                 operatortest(NC, dim)
                 @time operatortest2(NC, dim)
             end
         end
     end
 
-    return
+    #return
 
 
     for dim = 2:4

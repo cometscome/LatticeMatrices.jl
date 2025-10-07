@@ -686,3 +686,345 @@ function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!(i, C, U, A, B,
     #C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
 
 end
+
+#C = U1*x1*A1^T + U2*x2*A2^T 
+function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
+    U2::LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI}, A2::OperatorSecond{NC2,NC6}, B2::LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI}) where {
+    D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_UOperatorSecondB_sum!, C.A,
+        U1.A, A1, B1.A,
+        U2.A, A2, B2.A,
+        Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(NC5), Val(NC6), Val(nw), Val(nw1), Val(nw2), C.indexer
+    )
+    #set_halo!(C)
+end
+
+function kernel_Dmatrix_mul_UOperatorSecondB_sum!(i, C,
+    U1, A1, B1,
+    U2, A2, B2,
+    ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{NC5}, ::Val{NC6}, ::Val{nw}, ::Val{nw1}, ::Val{nw2}, dindexer) where {
+    NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2}
+    indices = delinearize(dindexer, i, nw)
+
+        #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+
+    @inbounds for ic = 1:NC1
+        for ia = 1:NC2
+            C[ic, ia, indices...] = zero(eltype(C))
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC3
+            v = mul_op(A1, B1, jc, indices)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += U1[ic, jc, indices...] * v[ia]
+            end
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC5
+            v = mul_op(A2, B2, jc, indices)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += U2[ic, jc, indices...] * v[ia]
+            end
+        end
+    end
+
+end
+
+function kernel_Dmatrix_mul_UOperatorSecondB_sum!(i, C,
+    U1, A1, B1,
+    U2, A2, B2,
+    ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, ::Val{nw2}, dindexer) where {
+    nw,nw1,nw2}
+    indices = delinearize(dindexer, i, nw)
+
+
+    
+    v11_1,v12_1,v13_1,v14_1 = mul_op(A1, B1, 1, indices)
+    v21_1,v22_1,v23_1,v24_1 = mul_op(A1, B1, 2, indices)
+    v31_1,v32_1,v33_1,v34_1 = mul_op(A1, B1, 3, indices)
+
+    v11_2,v12_2,v13_2,v14_2 = mul_op(A2, B2, 1, indices)
+    v21_2,v22_2,v23_2,v24_2 = mul_op(A2, B2, 2, indices)
+    v31_2,v32_2,v33_2,v34_2 = mul_op(A2, B2, 3, indices)
+
+
+    U11_1 = U1[1, 1, indices...]
+    U12_1 = U1[1, 2, indices...]
+    U13_1 = U1[1, 3, indices...]
+    U21_1 = U1[2, 1, indices...]
+    U22_1 = U1[2, 2, indices...]
+    U23_1 = U1[2, 3, indices...]
+    U31_1 = U1[3, 1, indices...]
+    U32_1 = U1[3, 2, indices...]
+    U33_1 = U1[3, 3, indices...]
+
+    U11_2 = U2[1, 1, indices...]
+    U12_2 = U2[1, 2, indices...]
+    U13_2 = U2[1, 3, indices...]
+    U21_2 = U2[2, 1, indices...]
+    U22_2 = U2[2, 2, indices...]
+    U23_2 = U2[2, 3, indices...]
+    U31_2 = U2[3, 1, indices...]
+    U32_2 = U2[3, 2, indices...]
+    U33_2 = U2[3, 3, indices...]
+
+    C[1, 1, indices...] = U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
+    C[2, 1, indices...] = U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
+    C[3, 1, indices...] = U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
+
+    C[1, 2, indices...] = U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
+    C[2, 2, indices...] = U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
+    C[3, 2, indices...] = U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
+
+    C[1, 3, indices...] = U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
+    C[2, 3, indices...] = U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
+    C[3, 3, indices...] = U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
+
+    C[1, 4, indices...] = U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
+    C[2, 4, indices...] = U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
+    C[3, 4, indices...] = U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
+end
+
+export mul_and_sum!
+
+#C = U1*x1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
+function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
+    U2::Adjoint_Lattice{Shifted_Lattice{L2,shift1}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2,shift2}) where {
+    D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
+    BL2<:LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI},shift1,shift2}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB_sum!, C.A,
+        U1.A, A1, B1.A,
+        U2.data.data.A, A2, B2.data.A,
+        Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(NC5), Val(NC6), Val(nw), Val(nw1), Val(nw2), C.indexer,
+        shift1,shift2
+    )
+    #set_halo!(C)
+end
+
+function mul_and_sum!(C,U1,A1,B1,U2,A2,B2)
+    error("No method for mul_and_sum! with types: $(typeof(C)), $(typeof(U1)), $(typeof(A1)), $(typeof(B1)), $(typeof(U2)), $(typeof(A2)), $(typeof(B2))")
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB_sum!(i, C,
+    U1, A1, B1,
+    U2, A2, B2,
+    ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{NC5}, ::Val{NC6}, ::Val{nw}, ::Val{nw1}, ::Val{nw2}, dindexer,
+    shift1,shift2) where {
+    NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2}
+    indices = delinearize(dindexer, i, nw)
+    indices_p1 = shiftindices(indices, shift1)
+    indices_p2 = shiftindices(indices, shift2)
+
+        #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+
+    @inbounds for ic = 1:NC1
+        for ia = 1:NC2
+            C[ic, ia, indices...] = zero(eltype(C))
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC3
+            v = mul_op(A1, B1, jc, indices)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += U1[ic, jc, indices...] * v[ia]
+            end
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC5
+            v = mul_op(A2, B2, jc, indices_p2)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += U2[jc, ic, indices_p1...]' * v[ia]
+            end
+        end
+    end
+
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB_sum!(i, C,
+    U1, A1, B1,
+    U2, A2, B2,
+    ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, ::Val{nw2}, dindexer,
+    shift1,shift2) where {
+    nw,nw1,nw2}
+    indices = delinearize(dindexer, i, nw)
+    indices_p1 = shiftindices(indices, shift1)
+    indices_p2 = shiftindices(indices, shift2)
+
+    v11_1,v12_1,v13_1,v14_1 = mul_op(A1, B1, 1, indices)
+    v21_1,v22_1,v23_1,v24_1 = mul_op(A1, B1, 2, indices)
+    v31_1,v32_1,v33_1,v34_1 = mul_op(A1, B1, 3, indices)
+
+    v11_2,v12_2,v13_2,v14_2 = mul_op(A2, B2, 1, indices_p2)
+    v21_2,v22_2,v23_2,v24_2 = mul_op(A2, B2, 2, indices_p2)
+    v31_2,v32_2,v33_2,v34_2 = mul_op(A2, B2, 3, indices_p2)
+
+
+    U11_1 = U1[1, 1, indices...]
+    U12_1 = U1[1, 2, indices...]
+    U13_1 = U1[1, 3, indices...]
+    U21_1 = U1[2, 1, indices...]
+    U22_1 = U1[2, 2, indices...]
+    U23_1 = U1[2, 3, indices...]
+    U31_1 = U1[3, 1, indices...]
+    U32_1 = U1[3, 2, indices...]
+    U33_1 = U1[3, 3, indices...]
+
+    U11_2 = U2[1, 1, indices_p1...]'
+    U12_2 = U2[2, 1, indices_p1...]'
+    U13_2 = U2[3, 1, indices_p1...]'
+    U21_2 = U2[1, 2, indices_p1...]'
+    U22_2 = U2[2, 2, indices_p1...]'
+    U23_2 = U2[3, 2, indices_p1...]'
+    U31_2 = U2[1, 3, indices_p1...]'
+    U32_2 = U2[2, 3, indices_p1...]'
+    U33_2 = U2[3, 3, indices_p1...]'
+
+    C[1, 1, indices...] = U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
+    C[2, 1, indices...] = U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
+    C[3, 1, indices...] = U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
+
+    C[1, 2, indices...] = U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
+    C[2, 2, indices...] = U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
+    C[3, 2, indices...] = U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
+
+    C[1, 3, indices...] = U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
+    C[2, 3, indices...] = U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
+    C[3, 3, indices...] = U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
+
+    C[1, 4, indices...] = U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
+    C[2, 4, indices...] = U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
+    C[3, 4, indices...] = U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
+
+end
+
+#C = U1*shiftedx1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
+function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::Shifted_Lattice{BL1,shift1},
+    U2::Adjoint_Lattice{Shifted_Lattice{L2,shiftU}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2,shift2}) where {
+    D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
+    BL1<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
+    BL2<:LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI},shift1,shiftU,shift2}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!, C.A,
+        U1.A, A1, B1.data.A,
+        U2.data.data.A, A2, B2.data.A,
+        Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(NC5), Val(NC6), Val(nw), Val(nw1), Val(nw2), C.indexer,
+        shift1,shiftU,shift2
+    )
+    #set_halo!(C)
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!(i, C,
+    U1, A1, B1,
+    U2, A2, B2,
+    ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{NC5}, ::Val{NC6}, ::Val{nw}, ::Val{nw1}, ::Val{nw2}, dindexer,
+    shift1,shiftU,shift2) where {
+    NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2}
+    indices = delinearize(dindexer, i, nw)
+    indices_p1 = shiftindices(indices, shift1)
+    indices_pU = shiftindices(indices, shiftU)
+    indices_p2 = shiftindices(indices, shift2)
+
+        #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+
+    @inbounds for ic = 1:NC1
+        for ia = 1:NC2
+            C[ic, ia, indices...] = zero(eltype(C))
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC3
+            v = mul_op(A1, B1, jc, indices_p1)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += U1[ic, jc, indices...] * v[ia]
+            end
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC5
+            v = mul_op(A2, B2, jc, indices_p2)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += U2[jc, ic, indices_pU...]' * v[ia]
+            end
+        end
+    end
+
+end
+
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!(i, C,
+    U1, A1, B1,
+    U2, A2, B2,
+    ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, ::Val{nw2}, dindexer,
+    shift1,shiftU,shift2) where {
+    nw,nw1,nw2}
+    indices = delinearize(dindexer, i, nw)
+    indices_p1 = shiftindices(indices, shift1)
+    indices_pU = shiftindices(indices, shiftU)
+    indices_p2 = shiftindices(indices, shift2)
+
+    v11_1,v12_1,v13_1,v14_1 = mul_op(A1, B1, 1, indices_p1)
+    v21_1,v22_1,v23_1,v24_1 = mul_op(A1, B1, 2, indices_p1)
+    v31_1,v32_1,v33_1,v34_1 = mul_op(A1, B1, 3, indices_p1)
+
+    v11_2,v12_2,v13_2,v14_2 = mul_op(A2, B2, 1, indices_p2)
+    v21_2,v22_2,v23_2,v24_2 = mul_op(A2, B2, 2, indices_p2)
+    v31_2,v32_2,v33_2,v34_2 = mul_op(A2, B2, 3, indices_p2)
+
+
+    U11_1 = U1[1, 1, indices...]
+    U12_1 = U1[1, 2, indices...]
+    U13_1 = U1[1, 3, indices...]
+    U21_1 = U1[2, 1, indices...]
+    U22_1 = U1[2, 2, indices...]
+    U23_1 = U1[2, 3, indices...]
+    U31_1 = U1[3, 1, indices...]
+    U32_1 = U1[3, 2, indices...]
+    U33_1 = U1[3, 3, indices...]
+
+    U11_2 = U2[1, 1, indices_pU...]'
+    U12_2 = U2[2, 1, indices_pU...]'
+    U13_2 = U2[3, 1, indices_pU...]'
+    U21_2 = U2[1, 2, indices_pU...]'
+    U22_2 = U2[2, 2, indices_pU...]'
+    U23_2 = U2[3, 2, indices_pU...]'
+    U31_2 = U2[1, 3, indices_pU...]'
+    U32_2 = U2[2, 3, indices_pU...]'
+    U33_2 = U2[3, 3, indices_pU...]'
+
+    C[1, 1, indices...] = U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
+    C[2, 1, indices...] = U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
+    C[3, 1, indices...] = U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
+
+    C[1, 2, indices...] = U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
+    C[2, 2, indices...] = U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
+    C[3, 2, indices...] = U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
+
+    C[1, 3, indices...] = U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
+    C[2, 3, indices...] = U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
+    C[3, 3, indices...] = U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
+
+    C[1, 4, indices...] = U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
+    C[2, 4, indices...] = U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
+    C[3, 4, indices...] = U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
+
+end

@@ -56,41 +56,74 @@ export γ4
 
 
 
-function mul_op(op::Oneγ{pm,1}, x, ic, indices...) where {pm}
-    v1 = x[ic, 1, indices...] - pm * im * x[ic, 4, indices...]
-    v2 = x[ic, 2, indices...] - pm * im * x[ic, 3, indices...]
-    v3 = x[ic, 3, indices...] + pm * im * x[ic, 2, indices...]
-    v4 = x[ic, 4, indices...] + pm * im * x[ic, 1, indices...]
+
+@inline function mul_op(op::Oneγ{1,1}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] -   im * x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] -   im * x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] +  im * x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] +  im * x[ic, 1, indices...]
     return v1, v2, v3, v4
 end
 
-function mul_op(op::Oneγ{pm,2}, x, ic, indices...) where {pm}
-    v1 = x[ic, 1, indices...] - pm * x[ic, 4, indices...]
-    v2 = x[ic, 2, indices...] + pm * x[ic, 3, indices...]
-    v3 = x[ic, 3, indices...] + pm * x[ic, 2, indices...]
-    v4 = x[ic, 4, indices...] - pm * x[ic, 1, indices...]
+@inline function mul_op(op::Oneγ{1,2}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] -  x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] +  x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] +  x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] -  x[ic, 1, indices...]
     return v1, v2, v3, v4
 end
 
-function mul_op(op::Oneγ{pm,3}, x, ic, indices...) where {pm}
-    v1 = x[ic, 1, indices...] - pm * im * x[ic, 3, indices...]
-    v2 = x[ic, 2, indices...] + pm * im * x[ic, 4, indices...]
-    v3 = x[ic, 3, indices...] + pm * im * x[ic, 1, indices...]
-    v4 = x[ic, 4, indices...] - pm * im * x[ic, 2, indices...]
+@inline function mul_op(op::Oneγ{1,3}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] -  im * x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] +  im * x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] +  im * x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] -  im * x[ic, 2, indices...]
     return v1, v2, v3, v4
 end
 
-function mul_op(op::Oneγ{pm,4}, x, ic, indices...) where {pm}
-    v1 = x[ic, 1, indices...] - pm * x[ic, 3, indices...]
-    v2 = x[ic, 2, indices...] - pm * x[ic, 4, indices...]
-    v3 = x[ic, 3, indices...] - pm * x[ic, 1, indices...]
-    v4 = x[ic, 4, indices...] - pm * x[ic, 2, indices...]
+@inline function mul_op(op::Oneγ{1,4}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] -  x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] -  x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] -  x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] -  x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op(op::Oneγ{-1,1}, x, ic,indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] + im * x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] + im * x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] - im * x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] - im * x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline @inline function mul_op(op::Oneγ{-1,2}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] + x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] - x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] - x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] + x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op(op::Oneγ{-1,3}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] + im * x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] - im * x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] - im * x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] + im * x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op(op::Oneγ{-1,4}, x, ic,indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] + x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] + x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] + x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] + x[ic, 2, indices...]
     return v1, v2, v3, v4
 end
 
 #C = B*A^T
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::OperatorSecond{NC2,NC3}, B::LatticeMatrix{D,T3,AT3,NC1,NC3,nw,DI}) where {D,T1,T3,AT1,AT3,NC1,NC2,NC3,nw,DI}
+    A::TA, B::LatticeMatrix{D,T3,AT3,NC1,NC3,nw,DI}) where {D,T1,T3,AT1,AT3,NC1,NC2,NC3,nw,DI,TA<:OperatorSecond{NC2,NC3}}
 
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_OperatorSecond!, C.A, A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer
@@ -98,10 +131,12 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     #set_halo!(C)
 end
 
-@inline function kernel_Dmatrix_mul_OperatorSecond!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+@inline function kernel_Dmatrix_mul_OperatorSecond!(i, C, A::TA, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {
+    NC1,NC2,NC3,nw,TA<:OperatorSecond{NC2,NC3}}
     indices = delinearize(dindexer, i, nw)
     @inbounds for ic = 1:NC1
-        v = mul_op(A, B, ic, indices...)
+        v = mul_op(A, B, ic, indices)
+        #v = mul_op(B, ic, indices...)
         for jc = 1:NC2
             C[ic, jc, indices...] = v[jc]
         end
@@ -110,7 +145,7 @@ end
 
 #C = shiftedB*A^T
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::OperatorSecond{NC2,NC3}, B::Shifted_Lattice{LatticeMatrix{D,T3,AT3,NC1,NC3,nw,DI},shift}) where {D,T1,T3,AT1,AT3,NC1,NC2,NC3,nw,DI,shift}
+    A::OperatorSecond{NC2,NC3}, B::Shifted_Lattice{L,shift}) where {D,T1,T3,AT1,AT3,NC1,NC2,NC3,nw,DI,L<:LatticeMatrix{D,T3,AT3,NC1,NC3,nw,DI},shift}
 
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mulshifted_OperatorSecond!, C.A, A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
@@ -123,7 +158,7 @@ end
     indices_p = shiftindices(indices, shift)
 
     @inbounds for ic = 1:NC1
-        v = mul_op(A, B, ic, indices_p...)
+        v = mul_op(A, B, ic, indices_p)
         for jc = 1:NC2
             C[ic, jc, indices...] = v[jc]
         end
@@ -156,7 +191,7 @@ function kernel_Dmatrix_mul_UOperatorSecondB!(i, C, U, A, B, ::Val{NC1}, ::Val{N
     end
     @inbounds for ic = 1:NC1
         for jc = 1:NC3
-            v = mul_op(A, B, jc, indices...)
+            v = mul_op(A, B, jc, indices)
             for ia = 1:NC2
                 C[ic, ia, indices...] += U[ic, jc, indices...] * v[ia]
             end
@@ -167,8 +202,8 @@ end
 #C = U*shiftedB*A^T
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     U::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI},
-    A::OperatorSecond{NC2,NC4}, B::Shifted_Lattice{LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},shift}) where {
-    D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,shift}
+    A::OperatorSecond{NC2,NC4}, B::Shifted_Lattice{L,shift}) where {
+    D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,L<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},shift}
 
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_UOperatorSecondshiftedB!, C.A, U.A, A, B.data.A,
@@ -192,7 +227,7 @@ function kernel_Dmatrix_mul_UOperatorSecondshiftedB!(i, C, U, A, B,
     end
     @inbounds for ic = 1:NC1
         for jc = 1:NC3
-            v = mul_op(A, B, jc, indices_p...)
+            v = mul_op(A, B, jc, indices_p)
             for ia = 1:NC2
                 C[ic, ia, indices...] += U[ic, jc, indices...] * v[ia]
             end

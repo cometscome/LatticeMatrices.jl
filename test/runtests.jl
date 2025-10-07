@@ -289,6 +289,11 @@ function operatortest2(NC, dim)
     if myrank == 0
         @test a1 ≈ Array(m1) atol = 1e-6
     end
+
+    for i=1:10
+        println("i = $i")
+        @time mul!(M1, MU, oneplusγ1, M2)
+    end
 end
 
 function multtest(NC, dim)

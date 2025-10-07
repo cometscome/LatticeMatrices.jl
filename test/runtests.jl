@@ -260,6 +260,7 @@ function operatortest2(NC, dim)
 
     M3_p = Shifted_Lattice(M3, shift)
     M2_p = Shifted_Lattice(M2, shift)
+    MU_p = Shifted_Lattice(MU, shift)
     a2_p = A2[:, :, indices_a_p...]
     a3_p = A3[:, :, indices_a_p...]
 
@@ -268,6 +269,7 @@ function operatortest2(NC, dim)
     a2 = A2[:, :, indices_a...]
     a3 = A3[:, :, indices_a...]
     u = U[:, :, indices_a...]
+    u_p = U[:, :, indices_a_p...]
 
     mul!(M1, MU, oneplusγ1, M2)
     m1 = M1.A[:, :, indices...]
@@ -283,8 +285,44 @@ function operatortest2(NC, dim)
         @test a1 ≈ Array(m1) atol = 1e-6
     end
 
+    mul!(M1, MU', oneplusγ1, M2)
+    m1 = M1.A[:, :, indices...]
+
+    gamma = zeros(ComplexF64, 4, 4)
+    gamma .= γ1
+    for i = 1:4
+        gamma[i, i] += 1
+    end
+    a1 = u' * a2 * transpose(gamma)
+
+    if myrank == 0
+        @test a1 ≈ Array(m1) atol = 1e-6
+    end
+
+    mul!(M1, MU_p', oneplusγ1, M2)
+    m1 = M1.A[:, :, indices...]
+
+    gamma = zeros(ComplexF64, 4, 4)
+    gamma .= γ1
+    for i = 1:4
+        gamma[i, i] += 1
+    end
+    a1 = u_p' * a2 * transpose(gamma)
+
+    if myrank == 0
+        @test a1 ≈ Array(m1) atol = 1e-6
+    end
+
+
     a1 = u * a2_p * transpose(gamma)
     mul!(M1, MU, oneplusγ1, M2_p)
+    m1 = M1.A[:, :, indices...]
+    if myrank == 0
+        @test a1 ≈ Array(m1) atol = 1e-6
+    end
+
+    a1 = u_p' * a2_p * transpose(gamma)
+    mul!(M1, MU_p', oneplusγ1, M2_p)
     m1 = M1.A[:, :, indices...]
     if myrank == 0
         @test a1 ≈ Array(m1) atol = 1e-6
@@ -293,6 +331,9 @@ function operatortest2(NC, dim)
     for i=1:10
         println("i = $i")
         @time mul!(M1, MU, oneplusγ1, M2)
+        @time mul!(M1, MU', oneplusγ1, M2)
+        @time mul!(M1, MU_p', oneplusγ1, M2)
+        @time mul!(M1, MU_p', oneplusγ1, M2_p)
     end
 end
 

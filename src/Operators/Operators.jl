@@ -345,3 +345,344 @@ function kernel_Dmatrix_mul_UOperatorSecondshiftedB!(i, C, U, A, B,
     C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
 
 end
+
+
+#C = Udag*B*A^T
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U::Adjoint_Lattice{L1},
+    A::OperatorSecond{NC2,NC4}, B::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}) where {
+    D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_UdagOperatorSecondB!, C.A, U.data.A, A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer
+    )
+    #set_halo!(C)
+end
+
+function kernel_Dmatrix_mul_UdagOperatorSecondB!(i, C, U, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{nw}, ::Val{nw1}, dindexer) where {
+    NC1,NC2,NC3,NC4,nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+
+    #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+    @inbounds for ic = 1:NC1
+        for ia = 1:NC2
+            C[ic, ia, indices...] = zero(eltype(C))
+        end
+    end
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC3
+            v = mul_op(A, B, jc, indices)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += conj(U[jc, ic, indices...]) * v[ia]
+            end
+        end
+    end
+end
+
+function kernel_Dmatrix_mul_UdagOperatorSecondB!(i, C, U, A, B, ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices)
+    v31,v32,v33,v34 = mul_op(A, B, 3, indices)
+    U11 = U[1, 1, indices...]'
+    U12 = U[2, 1, indices...]'
+    U13 = U[3, 1, indices...]'
+    U21 = U[1, 2, indices...]'
+    U22 = U[2, 2, indices...]'
+    U23 = U[3, 2, indices...]'
+    U31 = U[1, 3, indices...]'
+    U32 = U[2, 3, indices...]'
+    U33 = U[3, 3, indices...]'
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 + U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 + U23*v31
+    C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 + U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 + U23*v32
+    C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 + U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 + U23*v33
+    C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 + U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 + U23*v34
+    C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
+end
+
+
+function kernel_Dmatrix_mul_UdagOperatorSecondB!(i, C, U, A, B, ::Val{2}, ::Val{4}, ::Val{2}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices)
+    U11 = U[1, 1, indices...]'
+    U12 = U[2, 1, indices...]'
+    U21 = U[1, 2, indices...]'
+    U22 = U[2, 2, indices...]'
+
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 #+ U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 #+ U23*v31
+    #C[3, 1, indices...] = U31*v11 + U32*v21 #+ U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 #+ U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 #+ U23*v32
+    #C[3, 2, indices...] = U31*v12 + U32*v22 #+ U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 #+ U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 #+ U23*v33
+    #C[3, 3, indices...] = U31*v13 + U32*v23 #+ U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 #+ U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 #+ U23*v34
+    #C[3, 4, indices...] = U31*v14 + U32*v24 #+ U33*v34
+
+end
+
+
+#C = shiftedUdag*B*A^T
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U::Adjoint_Lattice{Shifted_Lattice{L1,shift}},
+    A::OperatorSecond{NC2,NC4}, B::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}) where {
+    D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,shift,L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondB!, C.A, U.data.data.A, A, B.A, 
+        Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer,shift
+    )
+    #set_halo!(C)
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondB!(i, C, U, A, B,
+         ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{nw}, ::Val{nw1}, dindexer,shift) where {
+    NC1,NC2,NC3,NC4,nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+
+    #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+    @inbounds for ic = 1:NC1
+        for ia = 1:NC2
+            C[ic, ia, indices...] = zero(eltype(C))
+        end
+    end
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC3
+            v = mul_op(A, B, jc, indices)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += conj(U[jc, ic,  indices_p...]) * v[ia]
+            end
+        end
+    end
+end
+
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondB!(i, C, U, A, B,
+         ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer,shift) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices)
+    v31,v32,v33,v34 = mul_op(A, B, 3, indices)
+    U11 = U[1, 1, indices_p...]'
+    U12 = U[2, 1, indices_p...]'
+    U13 = U[3, 1, indices_p...]'
+    U21 = U[1, 2, indices_p...]'
+    U22 = U[2, 2, indices_p...]'
+    U23 = U[3, 2, indices_p...]'
+    U31 = U[1, 3, indices_p...]'
+    U32 = U[2, 3, indices_p...]'
+    U33 = U[3, 3, indices_p...]'
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 + U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 + U23*v31
+    C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 + U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 + U23*v32
+    C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 + U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 + U23*v33
+    C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 + U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 + U23*v34
+    C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondB!(i, C, U, A, B,
+         ::Val{2}, ::Val{4}, ::Val{2}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer,shift) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices)
+    #v31,v32,v33,v34 = mul_op(A, B, 3, indices)
+    U11 = U[1, 1, indices_p...]'
+    U12 = U[2, 1, indices_p...]'
+    #U13 = U[3, 1, indices_p...]'
+    U21 = U[1, 2, indices_p...]'
+    U22 = U[2, 2, indices_p...]'
+    #U23 = U[3, 2, indices_p...]'
+    #U31 = U[1, 3, indices_p...]'
+    #U32 = U[2, 3, indices_p...]'
+    #U33 = U[3, 3, indices_p...]'
+
+    C[1, 1, indices...] = U11*v11 + U12*v21# + U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21# + U23*v31
+    #C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22# + U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22# + U23*v32
+    #C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 #+ U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 #+ U23*v33
+    #C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 #+ U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 #+ U23*v34
+    #C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
+end
+
+
+#C = shiftedUdag*shiftedB*A^T
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U::Adjoint_Lattice{Shifted_Lattice{L1,shift}},
+    A::OperatorSecond{NC2,NC4}, B::Shifted_Lattice{L2,shift2}) where {
+    D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,shift,L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI},
+    shift2,L2<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!, C.A, U.data.data.A, A, B.data.A, 
+        Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer,shift,shift2
+    )
+    #set_halo!(C)
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!(i, C, U, A, B,
+         ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{nw}, ::Val{nw1}, dindexer,shift,shift2) where {
+    NC1,NC2,NC3,NC4,nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    indices_p2 = shiftindices(indices, shift2)
+
+    #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
+    #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
+    @inbounds for ic = 1:NC1
+        for ia = 1:NC2
+            C[ic, ia, indices...] = zero(eltype(C))
+        end
+    end
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC3
+            v = mul_op(A, B, jc, indices_p2)
+            for ia = 1:NC2
+                C[ic, ia, indices...] += conj(U[jc, ic,  indices_p...]) * v[ia]
+            end
+        end
+    end
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!(i, C, U, A, B,
+          ::Val{3}, ::Val{4}, ::Val{3}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer,shift,shift2) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    indices_p2 = shiftindices(indices, shift2)
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices_p2)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices_p2)
+    v31,v32,v33,v34 = mul_op(A, B, 3, indices_p2)
+    U11 = U[1, 1, indices_p...]'
+    U12 = U[2, 1, indices_p...]'
+    U13 = U[3, 1, indices_p...]'
+    U21 = U[1, 2, indices_p...]'
+    U22 = U[2, 2, indices_p...]'
+    U23 = U[3, 2, indices_p...]'
+    U31 = U[1, 3, indices_p...]'
+    U32 = U[2, 3, indices_p...]'
+    U33 = U[3, 3, indices_p...]'
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 + U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 + U23*v31
+    C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 + U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 + U23*v32
+    C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 + U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 + U23*v33
+    C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 + U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 + U23*v34
+    C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
+end
+
+function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!(i, C, U, A, B,
+          ::Val{2}, ::Val{4}, ::Val{2}, ::Val{4}, ::Val{nw}, ::Val{nw1}, dindexer,shift,shift2) where {
+    nw,nw1}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    indices_p2 = shiftindices(indices, shift2)
+
+    v11,v12,v13,v14 = mul_op(A, B, 1, indices_p2)
+    v21,v22,v23,v24 = mul_op(A, B, 2, indices_p2)
+    #v31,v32,v33,v34 = mul_op(A, B, 3, indices_p2)
+    U11 = U[1, 1, indices_p...]'
+    U12 = U[2, 1, indices_p...]'
+    #U13 = U[3, 1, indices_p...]'
+    U21 = U[1, 2, indices_p...]'
+    U22 = U[2, 2, indices_p...]'
+    #U23 = U[3, 2, indices_p...]'
+    #U31 = U[1, 3, indices_p...]'
+    #U32 = U[2, 3, indices_p...]'
+    #U33 = U[3, 3, indices_p...]'
+
+    C[1, 1, indices...] = U11*v11 + U12*v21 #+ U13*v31
+    C[2, 1, indices...] = U21*v11 + U22*v21 #+ U23*v31
+    #C[3, 1, indices...] = U31*v11 + U32*v21 + U33*v31
+
+
+    C[1, 2, indices...] = U11*v12 + U12*v22 #+ U13*v32
+    C[2, 2, indices...] = U21*v12 + U22*v22 #+ U23*v32
+    #C[3, 2, indices...] = U31*v12 + U32*v22 + U33*v32
+
+
+    C[1, 3, indices...] = U11*v13 + U12*v23 #+ U13*v33
+    C[2, 3, indices...] = U21*v13 + U22*v23 #+ U23*v33
+    #C[3, 3, indices...] = U31*v13 + U32*v23 + U33*v33
+
+    C[1, 4, indices...] = U11*v14 + U12*v24 #+ U13*v34
+    C[2, 4, indices...] = U21*v14 + U22*v24 #+ U23*v34
+    #C[3, 4, indices...] = U31*v14 + U32*v24 + U33*v34
+
+end

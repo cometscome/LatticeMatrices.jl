@@ -712,11 +712,11 @@ function kernel_Dmatrix_mul_UOperatorSecondB_sum!(i, C,
         #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
     #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
 
-    @inbounds for ic = 1:NC1
-        for ia = 1:NC2
-            C[ic, ia, indices...] = zero(eltype(C))
-        end
-    end
+    #@inbounds for ic = 1:NC1
+    #    for ia = 1:NC2
+    #        C[ic, ia, indices...] = zero(eltype(C))
+    #    end
+    #end
 
     @inbounds for ic = 1:NC1
         for jc = 1:NC3
@@ -776,21 +776,21 @@ function kernel_Dmatrix_mul_UOperatorSecondB_sum!(i, C,
     U32_2 = U2[3, 2, indices...]
     U33_2 = U2[3, 3, indices...]
 
-    C[1, 1, indices...] = U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
-    C[2, 1, indices...] = U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
-    C[3, 1, indices...] = U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
+    C[1, 1, indices...] += U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
+    C[2, 1, indices...] += U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
+    C[3, 1, indices...] += U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
 
-    C[1, 2, indices...] = U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
-    C[2, 2, indices...] = U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
-    C[3, 2, indices...] = U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
+    C[1, 2, indices...] += U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
+    C[2, 2, indices...] += U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
+    C[3, 2, indices...] += U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
 
-    C[1, 3, indices...] = U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
-    C[2, 3, indices...] = U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
-    C[3, 3, indices...] = U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
+    C[1, 3, indices...] += U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
+    C[2, 3, indices...] += U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
+    C[3, 3, indices...] += U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
 
-    C[1, 4, indices...] = U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
-    C[2, 4, indices...] = U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
-    C[3, 4, indices...] = U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
+    C[1, 4, indices...] += U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
+    C[2, 4, indices...] += U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
+    C[3, 4, indices...] += U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
 end
 
 export mul_and_sum!
@@ -829,11 +829,11 @@ function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB_sum!(i, C,
         #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
     #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
 
-    @inbounds for ic = 1:NC1
-        for ia = 1:NC2
-            C[ic, ia, indices...] = zero(eltype(C))
-        end
-    end
+    #@inbounds for ic = 1:NC1
+    #    for ia = 1:NC2
+    #        C[ic, ia, indices...] = zero(eltype(C))
+    #    end
+    #end
 
     @inbounds for ic = 1:NC1
         for jc = 1:NC3
@@ -894,21 +894,21 @@ function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB_sum!(i, C,
     U32_2 = U2[2, 3, indices_p1...]'
     U33_2 = U2[3, 3, indices_p1...]'
 
-    C[1, 1, indices...] = U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
-    C[2, 1, indices...] = U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
-    C[3, 1, indices...] = U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
+    C[1, 1, indices...] += U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
+    C[2, 1, indices...] += U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
+    C[3, 1, indices...] += U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
 
-    C[1, 2, indices...] = U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
-    C[2, 2, indices...] = U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
-    C[3, 2, indices...] = U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
+    C[1, 2, indices...] += U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
+    C[2, 2, indices...] += U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
+    C[3, 2, indices...] += U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
 
-    C[1, 3, indices...] = U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
-    C[2, 3, indices...] = U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
-    C[3, 3, indices...] = U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
+    C[1, 3, indices...] += U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
+    C[2, 3, indices...] += U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
+    C[3, 3, indices...] += U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
 
-    C[1, 4, indices...] = U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
-    C[2, 4, indices...] = U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
-    C[3, 4, indices...] = U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
+    C[1, 4, indices...] += U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
+    C[2, 4, indices...] += U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
+    C[3, 4, indices...] += U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
 
 end
 
@@ -919,6 +919,8 @@ function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
     BL1<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
     BL2<:LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI},shift1,shiftU,shift2}
+
+    
 
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!, C.A,
@@ -944,11 +946,11 @@ function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!(i, C,
         #x[ic,a] = sum_{jc,b} U[ic,jc]*A[a,b]*psi[jc,b]
     #x[ic,a] = sum_{jc} U[ic,jc]*(sum_b A[a,b]*psi[jc,b])
 
-    @inbounds for ic = 1:NC1
-        for ia = 1:NC2
-            C[ic, ia, indices...] = zero(eltype(C))
-        end
-    end
+    #@inbounds for ic = 1:NC1
+    #    for ia = 1:NC2
+    #        C[ic, ia, indices...] = zero(eltype(C))
+    #    end
+    #end
 
     @inbounds for ic = 1:NC1
         for jc = 1:NC3
@@ -1011,20 +1013,20 @@ function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!(i, C,
     U32_2 = U2[2, 3, indices_pU...]'
     U33_2 = U2[3, 3, indices_pU...]'
 
-    C[1, 1, indices...] = U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
-    C[2, 1, indices...] = U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
-    C[3, 1, indices...] = U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
+    C[1, 1, indices...] += U11_1*v11_1 + U12_1*v21_1 + U13_1*v31_1 + U11_2*v11_2 + U12_2*v21_2 + U13_2*v31_2
+    C[2, 1, indices...] += U21_1*v11_1 + U22_1*v21_1 + U23_1*v31_1 + U21_2*v11_2 + U22_2*v21_2 + U23_2*v31_2
+    C[3, 1, indices...] += U31_1*v11_1 + U32_1*v21_1 + U33_1*v31_1 + U31_2*v11_2 + U32_2*v21_2 + U33_2*v31_2
 
-    C[1, 2, indices...] = U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
-    C[2, 2, indices...] = U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
-    C[3, 2, indices...] = U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
+    C[1, 2, indices...] += U11_1*v12_1 + U12_1*v22_1 + U13_1*v32_1 + U11_2*v12_2 + U12_2*v22_2 + U13_2*v32_2
+    C[2, 2, indices...] += U21_1*v12_1 + U22_1*v22_1 + U23_1*v32_1 + U21_2*v12_2 + U22_2*v22_2 + U23_2*v32_2
+    C[3, 2, indices...] += U31_1*v12_1 + U32_1*v22_1 + U33_1*v32_1 + U31_2*v12_2 + U32_2*v22_2 + U33_2*v32_2
 
-    C[1, 3, indices...] = U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
-    C[2, 3, indices...] = U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
-    C[3, 3, indices...] = U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
+    C[1, 3, indices...] += U11_1*v13_1 + U12_1*v23_1 + U13_1*v33_1 + U11_2*v13_2 + U12_2*v23_2 + U13_2*v33_2
+    C[2, 3, indices...] += U21_1*v13_1 + U22_1*v23_1 + U23_1*v33_1 + U21_2*v13_2 + U22_2*v23_2 + U23_2*v33_2
+    C[3, 3, indices...] += U31_1*v13_1 + U32_1*v23_1 + U33_1*v33_1 + U31_2*v13_2 + U32_2*v23_2 + U33_2*v33_2
 
-    C[1, 4, indices...] = U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
-    C[2, 4, indices...] = U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
-    C[3, 4, indices...] = U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
+    C[1, 4, indices...] += U11_1*v14_1 + U12_1*v24_1 + U13_1*v34_1 + U11_2*v14_2 + U12_2*v24_2 + U13_2*v34_2
+    C[2, 4, indices...] += U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
+    C[3, 4, indices...] += U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
 
 end

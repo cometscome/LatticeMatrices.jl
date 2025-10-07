@@ -84,6 +84,7 @@ function diracoperatortest(NC, dim)
     a2 = A2[:, :, indices_a...]
     a3 = A3[:, :, indices_a...]
 
+    clear_matrix!(M1)
     mul_and_sum!(M1, MU,oneplusγ1, M2,MU2,oneplusγ2, M3)
     m1 = M1.A[:, :, indices...]
 
@@ -114,6 +115,7 @@ function diracoperatortest(NC, dim)
         gamma2[i, i] += 1
     end
 
+    clear_matrix!(M1)
     mul_and_sum!(M1, MU,oneplusγ1, M2,MU2_p',oneminusγ1, M3_p)
     m1 = M1.A[:, :, indices...]
     a1 = u*a2 * transpose(gamma1)+ u2_p'*a3_p * transpose(gamma2)
@@ -122,6 +124,7 @@ function diracoperatortest(NC, dim)
         @test a1 ≈ Array(m1) atol = 1e-6
     end
 
+    clear_matrix!(M1)
     mul_and_sum!(M1, MU,oneplusγ1, M2_p,MU2_p',oneminusγ1, M3_p)
     m1 = M1.A[:, :, indices...]
     a1 = u*a2_p * transpose(gamma1)+ u2_p'*a3_p * transpose(gamma2)
@@ -134,8 +137,11 @@ function diracoperatortest(NC, dim)
 
     for i=1:10
         println("i = $i")
+        clear_matrix!(M1)
         @time mul_and_sum!(M1, MU,oneplusγ1, M2,MU2,oneplusγ2, M3)
+        clear_matrix!(M1)
         @time  mul_and_sum!(M1, MU,oneplusγ1, M2,MU2_p',oneminusγ1, M3_p)
+        clear_matrix!(M1)
         @time  mul_and_sum!(M1, MU,oneplusγ1, M2_p,MU2_p',oneminusγ1, M3_p)
     end
 

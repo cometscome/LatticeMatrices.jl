@@ -2,7 +2,14 @@ abstract type OperatorOnKernel end
 
 abstract type OperatorSecond{NG1,NG2} <: OperatorOnKernel end
 
-abstract type OperatorFirst{NG1,NG2} <: OperatorOnKernel end
+abstract type OperatorFirst{NC1,NC2} <: OperatorOnKernel end
+
+struct ThreeOperators{T1<:AbstractLattice,T2<:OperatorSecond,T3<: AbstractLattice} <: OperatorOnKernel 
+    op1::T1
+    op2::T2
+    op3::T3
+end
+export ThreeOperators
 
 
 struct Oneγ{pm,μ} <: OperatorSecond{4,4}
@@ -583,6 +590,11 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     #set_halo!(C)
 end
 
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},T::ThreeOperators{Top1,Top2,Top3}) where {
+    D,T1,Top1,Top2,Top3,AT1,NC1,NC2,nw,DI}
+    mul!(C,T.op1,T.op2,T.op3)
+end
+
 function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!(i, C, U, A, B,
          ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{NC4}, ::Val{nw}, ::Val{nw1}, dindexer,shift,shift2) where {
     NC1,NC2,NC3,NC4,nw,nw1}
@@ -700,6 +712,13 @@ function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
         Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(NC5), Val(NC6), Val(nw), Val(nw1), Val(nw2), C.indexer
     )
     #set_halo!(C)
+end
+
+function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    T_1::ThreeOperators{Top1_1,Top2_1,Top3_1},
+    T_2::ThreeOperators{Top1_2,Top2_2,Top3_2}) where {
+    D,T1,Top1_1,Top2_1,Top3_1,Top1_2,Top2_2,Top3_2,AT1,NC1,NC2,nw,DI}
+    mul_and_sum!(C,T_1.op1,T_1.op2,T_1.op3,T_2.op1,T_2.op2,T_2.op3)
 end
 
 function kernel_Dmatrix_mul_UOperatorSecondB_sum!(i, C,
@@ -1029,4 +1048,32 @@ function kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!(i, C,
     C[2, 4, indices...] += U21_1*v14_1 + U22_1*v24_1 + U23_1*v34_1 + U21_2*v14_2 + U22_2*v24_2 + U23_2*v34_2
     C[3, 4, indices...] += U31_1*v14_1 + U32_1*v24_1 + U33_1*v34_1 + U31_2*v14_2 + U32_2*v24_2 + U33_2*v34_2
 
+end
+
+
+#C = U1*shiftedx1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
+function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    U2::Adjoint_Lattice{Shifted_Lattice{L2,shiftU}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2,shift2}
+    U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::Shifted_Lattice{BL1,shift1}
+    ) where {
+    D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
+    BL1<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
+    BL2<:LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI},shift1,shiftU,shift2}
+
+    
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!, C.A,
+        U1.A, A1, B1.data.A,
+        U2.data.data.A, A2, B2.data.A,
+        Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(NC5), Val(NC6), Val(nw), Val(nw1), Val(nw2), C.indexer,
+        shift1,shiftU,shift2
+    )
+    #set_halo!(C)
+end
+
+function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    Ts::NTuple{N,ThreeOperators}) where {N,
+    D,T1,AT1,NC1,NC2,nw,DI}
+    mul_and_sum!(C,Ts...)
 end

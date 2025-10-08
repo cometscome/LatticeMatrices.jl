@@ -5,14 +5,16 @@ using JACC
 
 include("utilities/randomgenerator.jl")
 
-abstract type Lattice{D,T,AT,NC1,NC2,NW} end
+abstract type AbstractLattice end
+
+abstract type Lattice{D,T,AT,NC1,NC2,NW} <: AbstractLattice end
 
 
 #include("HaloComm.jl")
 #include("1D/1Dlatticevector.jl")
 #include("1D/1Dlatticematrix.jl")
 
-struct Shifted_Lattice{D,shift}
+struct Shifted_Lattice{D,shift} <: AbstractLattice
     data::D
 end
 
@@ -20,7 +22,7 @@ end
 
 export Shifted_Lattice
 
-struct Adjoint_Lattice{D}
+struct Adjoint_Lattice{D} <: AbstractLattice
     data::D
 end
 
@@ -108,16 +110,21 @@ function Shifted_Lattice(data::LatticeMatrix{D,T,AT,NC1,NC2,nw}, shift) where {D
     return sl
 end
 
-function get_matrix(a::LatticeMatrix)
+function get_matrix(a::T) where {T<:LatticeMatrix}
     return a.A
 end
 
-function get_matrix(a::Shifted_Lattice)
+function get_matrix(a::T) where {T <: Shifted_Lattice}
     return a.data.A
 end
 
-function get_matrix(a::Adjoint_Lattice)
+
+function get_matrix(a::T) where {T <: Adjoint_Lattice}
     return a.data.A
+end
+
+function get_matrix(a::Adjoint_Lattice{T}) where {T <: Shifted_Lattice}
+    return a.data.data.A
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, variables...) where {D,T1,AT1,NC1,NG,nw,DI}
@@ -249,6 +256,7 @@ function get_shift(::Shifted_Lattice{<:LatticeMatrix{D,T,AT,NC1,NC2,nw},shift}) 
 end
 
 include("Operators/Operators.jl")
+include("Operators/DiracOperators.jl")
 
 
 end

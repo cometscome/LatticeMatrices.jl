@@ -938,7 +938,6 @@ function main()
         end
     end
 
-    return
 
     for dim = 2:4
         for NC = 2:4
@@ -949,8 +948,7 @@ function main()
             end
         end
     end
-    return
-
+   
     for dim = 2:4
         for NC = 2:4
             @testset "NC = $NC, dim = $dim" begin
@@ -961,7 +959,7 @@ function main()
         end
     end
 
-    #return
+    return
 
 
     for dim = 2:4

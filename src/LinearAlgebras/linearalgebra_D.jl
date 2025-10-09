@@ -2710,6 +2710,7 @@ end
 
 
 #C = shiftA'*shiftedB
+#C[i,j] = A[k,i]'*B[k,j]
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Adjoint_Lattice{Shifted_Lattice{L1,shiftA}}, B::Shifted_Lattice{L2,shiftB}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,shiftA,shiftB,nw,DI,
@@ -2737,6 +2738,70 @@ end
         end
     end
 end
+
+#C = shiftA'*shiftedB
+#C[i,j] = A[k,j]'*B[k,i]
+function mulT!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,shiftA}}, B::Shifted_Lattice{L2,shiftB}) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,shiftA,shiftB,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC2,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC1,nw,DI}}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mulT_shiftAdagshiftB!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
+    )
+    #set_halo!(C)
+end
+export mulT!
+
+
+@inline function kernel_Dmatrix_mulT_shiftAdagshiftB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shiftA, shiftB) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_A = shiftindices(indices, shiftA)
+
+    indices_B = shiftindices(indices, shiftB)
+
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = 0
+            for kc = 1:NC3
+                C[ic, jc, indices...] += A[kc, jc, indices_A...]' * B[kc, ic, indices_B...]
+            end
+        end
+    end
+end
+
+
+#C = shiftA'*B'
+#C[i,j] = A[k,j]'*B[i,k]
+function mulT!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,shiftA}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,shiftA,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC2,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC1,nw,DI}}
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mulT_shiftAdagBdag!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA
+    )
+    #set_halo!(C)
+end
+export mulT!
+
+
+@inline function kernel_Dmatrix_mulT_shiftAdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shiftA) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_A = shiftindices(indices, shiftA)
+
+    #indices_B = shiftindices(indices, shiftB)
+
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = 0
+            for kc = 1:NC3
+                C[ic, jc, indices...] += A[kc, jc, indices_A...]' * B[ic, kc, indices...]'
+            end
+        end
+    end
+end
+
 
 #C = α*shiftA'*shiftedB+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},

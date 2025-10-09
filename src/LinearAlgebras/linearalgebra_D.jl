@@ -3759,23 +3759,24 @@ const fac12 = 1 / 2
 
 function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::Val{NG}, ::Val{2}, ::Val{nw}, ::Val{nw2}) where {NG,nw,nw2}
     indices = delinearize(dindexer, i, nw)
-    ix2 = ix + nw2
-    iy2 = iy + nw2
-    iz2 = iz + nw2
-    it2 = it + nw2
+    indices2 = delinearize(dindexer, i, nw2)
+    #ix2 = ix + nw2
+    #iy2 = iy + nw2
+    #iz2 = iz + nw2
+    #it2 = it + nw2
     #    ix += nw
     #    iy += nw
     #    iz += nw
     #    it += nw
 
-    v11 = vin[1, 1, ix2, iy2, iz2, it2]
-    v22 = vin[2, 2, ix2, iy2, iz2, it2]
+    v11 = vin[1, 1, indices2...]
+    v22 = vin[2, 2, indices2...]
 
     tri = fac12 * (imag(v11) + imag(v22))
 
-    v12 = vin[1, 2, ix2, iy2, iz2, it2]
+    v12 = vin[1, 2, indices2...]
     #v13 = vin[1,3,ix,iy,iz,it]
-    v21 = vin[2, 1, ix2, iy2, iz2, it2]
+    v21 = vin[2, 1, indices2...]
 
     x12 = v12 - conj(v21)
 
@@ -3798,10 +3799,11 @@ end
 
 function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::Val{NG}, ::Val{3}, ::Val{nw}, ::Val{nw2}) where {NG,nw,nw2}
     indices = delinearize(dindexer, i, nw)
-    ix2 = ix + nw2
-    iy2 = iy + nw2
-    iz2 = iz + nw2
-    it2 = it + nw2
+    indices2 = delinearize(dindexer, i, nw2)
+    #ix2 = ix + nw2
+    #iy2 = iy + nw2
+    #iz2 = iz + nw2
+    #it2 = it + nw2
     #    ix += nw
     #    iy += nw
     #    iz += nw
@@ -3810,9 +3812,9 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     fac13 = 1 / 3
 
 
-    v11 = vin[1, 1, ix2, iy2, iz2, it2]
-    v22 = vin[2, 2, ix2, iy2, iz2, it2]
-    v33 = vin[3, 3, ix2, iy2, iz2, it2]
+    v11 = vin[1, 1, indices2...]
+    v22 = vin[2, 2, indices2...]
+    v33 = vin[3, 3, indices2...]
 
     tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
 
@@ -3825,12 +3827,12 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     y22 = (imag(v22) - tri) * im
     y33 = (imag(v33) - tri) * im
 
-    v12 = vin[1, 2, ix2, iy2, iz2, it2]
-    v13 = vin[1, 3, ix2, iy2, iz2, it2]
-    v21 = vin[2, 1, ix2, iy2, iz2, it2]
-    v23 = vin[2, 3, ix2, iy2, iz2, it2]
-    v31 = vin[3, 1, ix2, iy2, iz2, it2]
-    v32 = vin[3, 2, ix2, iy2, iz2, it2]
+    v12 = vin[1, 2, indices2...]
+    v13 = vin[1, 3, indices2...]
+    v21 = vin[2, 1, indices2...]
+    v23 = vin[2, 3, indices2...]
+    v31 = vin[3, 1, indices2...]
+    v32 = vin[3, 2, indices2...]
 
     x12 = v12 - conj(v21)
     x13 = v13 - conj(v31)

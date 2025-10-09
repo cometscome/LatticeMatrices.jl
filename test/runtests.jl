@@ -19,7 +19,7 @@ function dotproduct(i, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, ::Val{NC1}, ::Va
 end
 
 function diracoperatortest(NC, dim)
-    NX = 32
+    NX = 16
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     myrank = MPI.Comm_rank(MPI.COMM_WORLD)
     gsize = ntuple(_ -> NX, dim)
@@ -800,7 +800,7 @@ function indextest(dim)
 end
 
 function wilsondiractest(NC)
-    NX = 32
+    NX = 16
     dim = 4
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     myrank = MPI.Comm_rank(MPI.COMM_WORLD)

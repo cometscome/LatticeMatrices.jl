@@ -29,6 +29,8 @@ const oneplusγ3 = Oneγ(3, true)
 export oneplusγ3
 const oneplusγ4 = Oneγ(4, true)
 export oneplusγ4
+const oneplusγs = (oneplusγ1, oneplusγ2, oneplusγ3, oneplusγ4)
+
 const oneminusγ1 = Oneγ(1, false)
 export oneminusγ1
 const oneminusγ2 = Oneγ(2, false)
@@ -37,6 +39,7 @@ const oneminusγ3 = Oneγ(3, false)
 export oneminusγ3
 const oneminusγ4 = Oneγ(4, false)
 export oneminusγ4
+const oneminusγs = (oneminusγ1, oneminusγ2, oneminusγ3, oneminusγ4)
 
 const γ1 = [0 0 0 -im;
     0 0 -im 0;
@@ -60,7 +63,8 @@ const γ4 = [0 0 -1 0;
     -1 0 0 0;
     0 -1 0 0]
 export γ4
-
+const γs = (γ1, γ2, γ3, γ4)
+export γs
 
 
 
@@ -1053,7 +1057,7 @@ end
 
 #C = U1*shiftedx1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
 function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    U2::Adjoint_Lattice{Shifted_Lattice{L2,shiftU}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2,shift2}
+    U2::Adjoint_Lattice{Shifted_Lattice{L2,shiftU}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2,shift2},
     U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::Shifted_Lattice{BL1,shift1}
     ) where {
     D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},

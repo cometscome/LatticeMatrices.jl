@@ -799,6 +799,130 @@ function indextest(dim)
     end
 end
 
+function wilsondiractest(NC)
+    NX = 16
+    dim = 4
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    gsize = ntuple(_ -> NX, dim)
+    #gsize = (NX, NY)
+    nw = 1
+    NG = 4
+
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    if length(ARGS) == 0
+        n1 = nprocs ÷ 2
+        if n1 == 0
+            n1 = 1
+        end
+        PEs = ntuple(i -> ifelse(i == 1, n1, ifelse(i == 2, nprocs ÷ n1, 1)), dim)
+        #PEs = (n1, nprocs ÷ n1, 1, 1)
+    else
+        PEs = Tuple(parse.(Int64, ARGS))
+    end
+    PEs = PEs[1:dim]
+    M1 = LatticeMatrix(NC, NG, dim, gsize, PEs; nw)
+    comm = M1.cart
+
+    A1 = rand(ComplexF64, NC, NG, gsize...)
+
+    A2 = rand(ComplexF64, NC, NG, gsize...)
+    M2 = LatticeMatrix(A2, dim, PEs; nw)
+
+
+    A3 = rand(ComplexF64, NC, NG, gsize...)
+    M3 = LatticeMatrix(A3, dim, PEs; nw)
+
+    U1 = rand(ComplexF64, NC, NC, gsize...)
+    MU1 = LatticeMatrix(U1, dim, PEs; nw)
+    U2 = rand(ComplexF64, NC, NC, gsize...)
+    MU2 = LatticeMatrix(U2, dim, PEs; nw)
+    U3 = rand(ComplexF64, NC, NC, gsize...)
+    MU3 = LatticeMatrix(U3, dim, PEs; nw)
+    U4 = rand(ComplexF64, NC, NC, gsize...)
+    MU4 = LatticeMatrix(U4, dim, PEs; nw)
+    U = (U1,U2,U3,U4)
+
+    #ψ_n - κ sum_ν U_n[ν](1 - γν)*ψ_{n+ν} + U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
+    κ = 1.0
+    D = WilsonDiracOperator4D([MU1,MU2,MU3,MU4],κ)
+    ψ = rand(ComplexF64, NC, NG, gsize...)
+    Mψ = LatticeMatrix(ψ, dim, PEs; nw, phases=(1,1,1,-1))
+    Mψ = LatticeMatrix(ψ, dim, PEs; nw, phases=(1,1,1,1))
+    mul!(M1,D,Mψ)
+
+
+    onepgamma = zeros(ComplexF64, 4, 4)
+    onemgamma = zeros(ComplexF64, 4, 4)
+
+    L = (4-1)*NX*NX*NX+(4-1)*NX*NX+(4-1)*NX + 4
+    indexer = DIndexer(gsize)
+    indices = delinearize(indexer, L, nw)
+    indices_a = delinearize(indexer, L, 0)
+    println("indices = $indices")
+    println("indices_a = $indices_a")
+
+    aψ = ψ[:, :, indices_a...]
+    aψ1 = similar(aψ)
+
+    #ψ_n - κ sum_ν U_n[ν](1 - γν)*ψ_{n+ν} + U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
+    aψ1 .= aψ
+
+    shifts_p = ((1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1))
+    shifts_m = ((-1,0,0,0), (0,-1,0,0), (0,0,-1,0), (0,0,0,-1))
+
+    for ν=1:4
+        shift_p = shifts_p[ν]
+        indices_p = shiftindices(indices, shift_p)
+        indices_a_p = shiftindices(indices_a, shift_p)
+        indices_a_p = ntuple(i -> ifelse(indices_a_p[i] < 1, indices_a_p[i] + gsize[i], indices_a_p[i]), dim)
+        indices_a_p = ntuple(i -> ifelse(indices_a_p[i] > gsize[i], indices_a_p[i] - gsize[i], indices_a_p[i]), dim)
+
+        aψ_p = ψ[:, :, indices_a_p...]
+
+        onemgamma .= -γs[ν]
+        for i = 1:4
+            onemgamma[i, i] += 1
+        end
+
+        uν = U[ν][:, :, indices_a...]
+
+        #- κ sum_ν U_n[ν](1 - γν)*ψ_{n+ν}
+        aψ1 += -κ* uν * aψ_p * transpose(onemgamma) 
+
+        shift_m = shifts_m[ν]
+        indices_m = shiftindices(indices, shift_m)
+        indices_a_m = shiftindices(indices_a, shift_m)
+        indices_a_m = ntuple(i -> ifelse(indices_a_m[i] < 1, indices_a_m[i] + gsize[i], indices_a_m[i]), dim)
+        indices_a_m = ntuple(i -> ifelse(indices_a_m[i] > gsize[i], indices_a_m[i] - gsize[i], indices_a_m[i]), dim)
+
+        aψ_m = ψ[:, :, indices_a_m...]
+
+        onepgamma .= γs[ν]
+        for i = 1:4
+            onepgamma[i, i] += 1
+        end
+
+        #U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
+        uν_m = U[ν][:, :, indices_a_m...]
+        #if ν == 4
+        aψ1 += -κ* uν_m' * aψ_m * transpose(onepgamma)
+        #end
+    end
+
+    m1 = M1.A[:, :, indices...]
+    if myrank == 0
+        @test aψ1 ≈ Array(m1) atol = 1e-6
+    end
+
+
+    for i=1:10
+        println("i = $i")
+        @time mul!(M1,D,Mψ)
+    end
+
+end
+
 function main()
     MPI.Init()
     #=
@@ -807,6 +931,14 @@ function main()
     end
 
     =#
+    for NC = 2:4
+        @testset "NC = $NC" begin
+            println("NC = $NC")
+            @time wilsondiractest(NC)
+        end
+    end
+
+    return
 
     for dim = 2:4
         for NC = 2:4

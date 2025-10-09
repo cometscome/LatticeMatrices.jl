@@ -116,6 +116,14 @@ function kernel_WilsonDiracOperator4D!(i,C,U1,U2,U3,U4,κ,ψdata,::Val{NC1},::Va
 
 end
 
+@inline function muladdmulti(a1,b1,a2,b2,a3,b3)
+    acc = zero(typeof(a1))
+    acc = muladd(a1, b1, acc)
+    acc = muladd(a2, b2, acc)
+    acc = muladd(a3, b3, acc)
+    return acc
+end
+
 @inline function kernel_Umgammax_p!(C,κ,U,ψdata,indices,indices_p,oneminusγ)
     v11,v12,v13,v14 = mul_op(oneminusγ, ψdata, 1,indices_p)
     v21,v22,v23,v24 = mul_op(oneminusγ, ψdata, 2,indices_p)
@@ -131,22 +139,23 @@ end
     U32 = U[3, 2, indices...]
     U33 = U[3, 3, indices...]
 
-    C[1, 1, indices...] += -κ*(U11*v11 + U12*v21 + U13*v31)
-    C[2, 1, indices...] += -κ*(U21*v11 + U22*v21 + U23*v31)
-    C[3, 1, indices...] += -κ*(U31*v11 + U32*v21 + U33*v31)
+    #C[1, 1, indices...] += -κ*(U11*v11 + U12*v21 + U13*v31)
+    C[1, 1, indices...] += -κ*muladdmulti(U11,v11,U12,v21,U13,v31)
+    C[2, 1, indices...] += -κ*muladdmulti(U21,v11,U22,v21,U23,v31)
+    C[3, 1, indices...] += -κ*muladdmulti(U31,v11,U32,v21,U33,v31)
 
-    C[1, 2, indices...] += -κ*(U11*v12 + U12*v22 + U13*v32)
-    C[2, 2, indices...] += -κ*(U21*v12 + U22*v22 + U23*v32)
-    C[3, 2, indices...] += -κ*(U31*v12 + U32*v22 + U33*v32)
+    C[1, 2, indices...] += -κ*muladdmulti(U11,v12,U12,v22,U13,v32)
+    C[2, 2, indices...] += -κ*muladdmulti(U21,v12,U22,v22,U23,v32)
+    C[3, 2, indices...] += -κ*muladdmulti(U31,v12,U32,v22,U33,v32)
 
 
-    C[1, 3, indices...] += -κ*(U11*v13 + U12*v23 + U13*v33)
-    C[2, 3, indices...] += -κ*(U21*v13 + U22*v23 + U23*v33)
-    C[3, 3, indices...] += -κ*(U31*v13 + U32*v23 + U33*v33)
+    C[1, 3, indices...] += -κ*muladdmulti(U11,v13,U12,v23,U13,v33)
+    C[2, 3, indices...] += -κ*muladdmulti(U21,v13,U22,v23,U23,v33)
+    C[3, 3, indices...] += -κ*muladdmulti(U31,v13,U32,v23,U33,v33)
 
-    C[1, 4, indices...] += -κ*(U11*v14 + U12*v24 + U13*v34)
-    C[2, 4, indices...] += -κ*(U21*v14 + U22*v24 + U23*v34)
-    C[3, 4, indices...] += -κ*(U31*v14 + U32*v24 + U33*v34)
+    C[1, 4, indices...] += -κ*muladdmulti(U11,v14,U12,v24,U13,v34)
+    C[2, 4, indices...] += -κ*muladdmulti(U21,v14,U22,v24,U23,v34)
+    C[3, 4, indices...] += -κ*muladdmulti(U31,v14,U32,v24,U33,v34)
 end
 
 
@@ -165,22 +174,22 @@ end
     U32 = U[2, 3, indices_m...]'
     U33 = U[3, 3, indices_m...]'
 
-    C[1, 1, indices...] += -κ*(U11*v11 + U12*v21 + U13*v31)
-    C[2, 1, indices...] += -κ*(U21*v11 + U22*v21 + U23*v31)
-    C[3, 1, indices...] += -κ*(U31*v11 + U32*v21 + U33*v31)
+    C[1, 1, indices...] += -κ*muladdmulti(U11,v11,U12,v21,U13,v31)
+    C[2, 1, indices...] += -κ*muladdmulti(U21,v11,U22,v21,U23,v31)
+    C[3, 1, indices...] += -κ*muladdmulti(U31,v11,U32,v21,U33,v31)
 
-    C[1, 2, indices...] += -κ*(U11*v12 + U12*v22 + U13*v32)
-    C[2, 2, indices...] += -κ*(U21*v12 + U22*v22 + U23*v32)
-    C[3, 2, indices...] += -κ*(U31*v12 + U32*v22 + U33*v32)
+    C[1, 2, indices...] += -κ*muladdmulti(U11,v12,U12,v22,U13,v32)
+    C[2, 2, indices...] += -κ*muladdmulti(U21,v12,U22,v22,U23,v32)
+    C[3, 2, indices...] += -κ*muladdmulti(U31,v12,U32,v22,U33,v32)
 
 
-    C[1, 3, indices...] += -κ*(U11*v13 + U12*v23 + U13*v33)
-    C[2, 3, indices...] += -κ*(U21*v13 + U22*v23 + U23*v33)
-    C[3, 3, indices...] += -κ*(U31*v13 + U32*v23 + U33*v33)
+    C[1, 3, indices...] += -κ*muladdmulti(U11,v13,U12,v23,U13,v33)
+    C[2, 3, indices...] += -κ*muladdmulti(U21,v13,U22,v23,U23,v33)
+    C[3, 3, indices...] += -κ*muladdmulti(U31,v13,U32,v23,U33,v33)
 
-    C[1, 4, indices...] += -κ*(U11*v14 + U12*v24 + U13*v34)
-    C[2, 4, indices...] += -κ*(U21*v14 + U22*v24 + U23*v34)
-    C[3, 4, indices...] += -κ*(U31*v14 + U32*v24 + U33*v34)
+    C[1, 4, indices...] += -κ*muladdmulti(U11,v14,U12,v24,U13,v34)
+    C[2, 4, indices...] += -κ*muladdmulti(U21,v14,U22,v24,U23,v34)
+    C[3, 4, indices...] += -κ*muladdmulti(U31,v14,U32,v24,U33,v34)
 end
 
 
@@ -206,7 +215,7 @@ function kernel_WilsonDiracOperator4D!(i,C,U1,U2,U3,U4,κ,ψdata,::Val{3},::Val{
     C[3, 4, indices...] = ψdata[3,4, indices...]
 
     #@inbounds for ν=1:4
-    #@inbounds begin
+    @inbounds begin
         indices_p = shiftindices(indices, shift_1p)
         kernel_Umgammax_p!(C,κ,U1,ψdata,indices,indices_p,oneminusγ1)
 
@@ -232,7 +241,7 @@ function kernel_WilsonDiracOperator4D!(i,C,U1,U2,U3,U4,κ,ψdata,::Val{3},::Val{
 
         indices_m = shiftindices(indices, shift_4m)
         kernel_Updaggammax_m!(C,κ,U4,ψdata,indices,indices_m,oneplusγ4)
-    #end
+    end
 
     #end
 

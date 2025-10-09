@@ -800,7 +800,7 @@ function indextest(dim)
 end
 
 function wilsondiractest(NC)
-    NX = 16
+    NX = 32
     dim = 4
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     myrank = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -938,6 +938,8 @@ function main()
         end
     end
 
+
+    return
 
     for dim = 2:4
         for NC = 2:4

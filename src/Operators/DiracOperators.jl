@@ -206,7 +206,7 @@ function kernel_WilsonDiracOperator4D!(i,C,U1,U2,U3,U4,κ,ψdata,::Val{3},::Val{
     C[3, 4, indices...] = ψdata[3,4, indices...]
 
     #@inbounds for ν=1:4
-    @inbounds begin
+    #@inbounds begin
         indices_p = shiftindices(indices, shift_1p)
         kernel_Umgammax_p!(C,κ,U1,ψdata,indices,indices_p,oneminusγ1)
 
@@ -232,7 +232,7 @@ function kernel_WilsonDiracOperator4D!(i,C,U1,U2,U3,U4,κ,ψdata,::Val{3},::Val{
 
         indices_m = shiftindices(indices, shift_4m)
         kernel_Updaggammax_m!(C,κ,U4,ψdata,indices,indices_m,oneplusγ4)
-    end
+    #end
 
     #end
 

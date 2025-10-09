@@ -1,6 +1,6 @@
 [JACC]
-#backend = "threads"
-backend = "cuda"
+backend = "threads"
+#backend = "cuda"
 
 [MPIPreferences]
 __clear__ = ["libmpi", "abi", "mpiexec", "cclibs", "preloads_env_switch"]

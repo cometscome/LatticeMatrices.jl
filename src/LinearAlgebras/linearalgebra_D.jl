@@ -3266,7 +3266,7 @@ end
 
 function LinearAlgebra.dot(A::LatticeMatrix{D,T1,AT1,NC1,1,nw,DI}, B::LatticeMatrix{D,T2,AT2,NC1,1,nw,DI}) where {D,T1<:Real,T2<:Real,AT1,AT2,NC1,nw,DI}
     s = JACC.parallel_reduce(prod(A.PN), +, kernel_dot_real_1,
-        A.A, B.A, A.PN, Val(NC1), Val(nw); init=zero(eltype(A.A)))
+        A.A, B.A, A.indexer, Val(NC1), Val(nw); init=zero(eltype(A.A)))
     s = MPI.Allreduce(s, MPI.SUM, A.comm)
 end
 

@@ -14,9 +14,14 @@ abstract type Lattice{D,T,AT,NC1,NC2,NW} <: AbstractLattice end
 #include("1D/1Dlatticevector.jl")
 #include("1D/1Dlatticematrix.jl")
 
-struct Shifted_Lattice{D,TS<:NTuple} <: AbstractLattice
+struct Shifted_Lattice{D,Dim} <: AbstractLattice
     data::D
-    shift::TS
+    shift::NTuple{Dim,Int64}
+
+    function Shifted_Lattice(data, shift, Dim)
+        return new{typeof(data),Dim}(data, shift)
+    end
+
 end
 
 
@@ -45,22 +50,111 @@ include("LatticeMatrices_core.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 
-function get_shift(x::Shifted_Lattice{Tx}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     return x.shift
 end
 
-function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx,D}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     return x.data.shift
 end
 
 
 
 
-function Shifted_Lattice(data::TD, shift) where {D,T,AT,TD<:Lattice{D,T,AT}}
-    return Shifted_Lattice{typeof(data),typeof(shift)}(data, shift)
+#function Shifted_Lattice(data::TD, shift::TS) where {D,T,AT,TD<:Lattice{D,T,AT},TS}
+#    return Shifted_Lattice{typeof(data),D}(data, shift)
+#end
+
+
+
+@inline function _as_shift_tuple(shift_in, ::Val{D}) where {D}
+    if shift_in isa NTuple{D,Int}
+        return shift_in
+    elseif shift_in isa AbstractVector{<:Integer}
+        @assert length(shift_in) == D "shift length must be $D"
+        return ntuple(i -> Int(shift_in[i]), D)
+    elseif shift_in isa Tuple
+        @assert length(shift_in) == D "shift length must be $D"
+        return ntuple(i -> Int(shift_in[i]), D)
+    else
+        error("Unsupported shift type: $(typeof(shift_in)). Provide NTuple{$D,Int} or Vector{Int}.")
+    end
 end
 
+function Shifted_Lattice(data::TL, shift_in::TS) where {
+    D,T,AT,NC1,NC2,nw,DI,
+    TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TS
+}
+    shift = _as_shift_tuple(shift_in, Val(D))
 
+    @inbounds begin
+        isinside = true
+        for i in 1:D
+            s = shift[i]
+            if (s < -nw) | (s > nw)
+                isinside = false
+                break
+            end
+        end
+        if isinside
+            return Shifted_Lattice(data, shift, D)
+        end
+    end
+
+    sl0 = similar(data)
+    sl1 = similar(data)
+    substitute!(sl0, data)
+
+    zeroT = ntuple(_ -> 0, D)
+
+    @inbounds for i in 1:D
+        s = shift[i]
+        if s == 0
+            continue
+        end
+
+        if s > nw
+            smallshift = s ÷ nw
+            step = ntuple(j -> (j == i ? nw : 0), D)
+            for _ in 1:smallshift
+                sls = Shifted_Lattice(sl0, step, D)
+                substitute!(sl1, sls)
+                substitute!(sl0, sl1)
+            end
+            rems = s % nw
+            step2 = ntuple(j -> (j == i ? rems : 0), D)
+            sls = Shifted_Lattice(sl0, step2, D)
+            substitute!(sl1, sls)
+            substitute!(sl0, sl1)
+
+        elseif s < -nw
+            as = -s
+            smallshift = as ÷ nw
+            step = ntuple(j -> (j == i ? -nw : 0), D)
+            for _ in 1:smallshift
+                sls = Shifted_Lattice(sl0, step, D)
+                substitute!(sl1, sls)
+                substitute!(sl0, sl1)
+            end
+            rems = -(as % nw)
+            step2 = ntuple(j -> (j == i ? rems : 0), D)
+            sls = Shifted_Lattice(sl0, step2, D)
+            substitute!(sl1, sls)
+            substitute!(sl0, sl1)
+
+        else
+            step = ntuple(j -> (j == i ? s : 0), D)
+            sls = Shifted_Lattice(sl0, step, D)
+            substitute!(sl1, sls)
+            substitute!(sl0, sl1)
+        end
+    end
+
+    zeroshift = ntuple(_ -> 0, D)
+    return Shifted_Lattice(sl0, zeroshift, D)
+end
+
+#=
 function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     #set_halo!(data)
     #error("dd")
@@ -126,6 +220,7 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
     end
     return sl
 end
+=#
 
 function get_matrix(a::T) where {T<:LatticeMatrix}
     return a.A

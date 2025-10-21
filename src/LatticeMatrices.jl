@@ -41,12 +41,12 @@ include("LatticeMatrices_core.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 
-function Shifted_Lattice(data::Lattice{D,T,AT}, shift) where {D,T,AT}
+function Shifted_Lattice(data::TD, shift) where {D,T,AT,TD<:Lattice{D,T,AT}}
     return Shifted_Lattice{typeof(data),Tuple(shift)}(data)
 end
 
 
-function Shifted_Lattice(data::LatticeMatrix{D,T,AT,NC1,NC2,nw}, shift) where {D,T,AT,NC1,NC2,nw}
+function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     #set_halo!(data)
     #nw = data.nw
     isinside = true
@@ -114,16 +114,16 @@ function get_matrix(a::T) where {T<:LatticeMatrix}
     return a.A
 end
 
-function get_matrix(a::T) where {T <: Shifted_Lattice}
+function get_matrix(a::T) where {T<:Shifted_Lattice}
     return a.data.A
 end
 
 
-function get_matrix(a::T) where {T <: Adjoint_Lattice}
+function get_matrix(a::T) where {T<:Adjoint_Lattice}
     return a.data.A
 end
 
-function get_matrix(a::Adjoint_Lattice{T}) where {T <: Shifted_Lattice}
+function get_matrix(a::Adjoint_Lattice{T}) where {T<:Shifted_Lattice}
     return a.data.data.A
 end
 

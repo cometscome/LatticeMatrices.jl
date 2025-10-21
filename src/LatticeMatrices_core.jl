@@ -155,11 +155,13 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
 
 end
 
-function Base.similar(ls::LatticeMatrix{D,T,AT,NC1,NC2}) where {D,T,AT,NC1,NC2}
+function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims; nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm)
 end
 
-function Base.display(ls::LatticeMatrix{4,T,AT,NC1,NC2}) where {T,AT,NC1,NC2}
+
+
+function Base.display(ls::TL) where {T,AT,NC1,NC2,TL<:LatticeMatrix{4,T,AT,NC1,NC2}}
 
     NN = size(ls.A)
     for rank = 0:MPI.Comm_size(ls.cart)-1
@@ -187,7 +189,7 @@ end
 
 
 
-function allsum(ls::LatticeMatrix{D,T,AT,NC1,NC2}) where {D,T,AT,NC1,NC2}
+function allsum(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     NN = ls.PN
     indices = ntuple(i -> (i == 1 || i == 2) ? Colon() : (ls.nw+1):(ls.nw+NN[i-2]), D + 2)
     # sum all elements in the local array
@@ -200,7 +202,7 @@ end
 
 export allsum
 
-function get_globalrange(ls::LatticeMatrix, dim)
+function get_globalrange(ls::TL, dim) where {TL<:LatticeMatrix}
     coords_r = MPI.Cart_coords(ls.cart, ls.myrank)
     istart = get_globalindex(ls, 1, dim, coords_r[dim])
     #if dim == 1
@@ -210,14 +212,14 @@ function get_globalrange(ls::LatticeMatrix, dim)
     return istart:iend
 end
 
-function get_globalindex(ls::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, i, dim, myrank_dim) where {D,T,AT,NC1,NC2,nw,DI}
+function get_globalindex(ls::TL, i, dim, myrank_dim) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     ix = i + ls.PN[dim] * myrank_dim
     return ix
 end
 
 
 
-function set_halo!(ls::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
+function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     for id = 1:D
         exchange_dim!(ls, id)
     end
@@ -383,8 +385,8 @@ export LatticeMatrix
 # Reconstruct a global array of shape (NC1, NC2, gsize...)
 # Communication is done on host memory for portability (CPU/GPU back-ends).
 # ---------------------------------------------------------------------------
-function gather_matrix(ls::LatticeMatrix{D,T,AT,NC1,NC2};
-    root::Int=0) where {D,T,AT,NC1,NC2}
+function gather_matrix(ls::TL;
+    root::Int=0) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     comm = ls.cart
     me = ls.myrank
     nprocs = MPI.Comm_size(comm)
@@ -455,8 +457,8 @@ export gather_matrix
 #   Collect local halo-free blocks to root, reconstruct global matrix on root,
 #   then broadcast the global matrix so that ALL ranks return the same Array.
 # ---------------------------------------------------------------------------
-function gather_and_bcast_matrix(ls::LatticeMatrix{D,T,AT,NC1,NC2};
-    root::Int=0) where {D,T,AT,NC1,NC2}
+function gather_and_bcast_matrix(ls::TL;
+    root::Int=0) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     comm = ls.cart
     me = ls.myrank
     nprocs = MPI.Comm_size(comm)

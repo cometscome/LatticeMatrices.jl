@@ -40,6 +40,25 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
     #stride::NTuple{D,Int}
 end
 
+
+function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
+    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
+        ls.phases,
+        ls.NC1,
+        ls.NC2,
+        ls.gsize,
+        ls.cart,
+        ls.coords,
+        ls.dims,
+        ls.nbr,
+        zero(ls.A),
+        ls.buf,
+        ls.myrank,
+        ls.PN,
+        ls.comm,
+        ls.indexer)
+end
+
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------

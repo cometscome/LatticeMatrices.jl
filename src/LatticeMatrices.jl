@@ -14,8 +14,9 @@ abstract type Lattice{D,T,AT,NC1,NC2,NW} <: AbstractLattice end
 #include("1D/1Dlatticevector.jl")
 #include("1D/1Dlatticematrix.jl")
 
-struct Shifted_Lattice{D,shift} <: AbstractLattice
+struct Shifted_Lattice{D} <: AbstractLattice
     data::D
+    shift::NTuple{D,Int}
 end
 
 
@@ -32,17 +33,31 @@ function Base.adjoint(data::Lattice{D,T,AT}) where {D,T,AT}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 
-function Base.adjoint(data::Shifted_Lattice{D,shift}) where {D,shift}
+function Base.adjoint(data::Shifted_Lattice{D}) where {D}
     return Adjoint_Lattice{typeof(data)}(data)
 end
+
+
+
 
 include("Latticeindices.jl")
 include("LatticeMatrices_core.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 
+function get_shift(x::Shifted_Lattice{Tx}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+    return x.shift
+end
+
+function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+    return x.data.shift
+end
+
+
+
+
 function Shifted_Lattice(data::TD, shift) where {D,T,AT,TD<:Lattice{D,T,AT}}
-    return Shifted_Lattice{typeof(data),Tuple(shift)}(data)
+    return Shifted_Lattice{typeof(data)}(data, shift)
 end
 
 
@@ -58,7 +73,7 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
     end
     #println("Shifted_Lattice: shift = ", shift, " isinside = ", isinside)
     if isinside
-        sl = Shifted_Lattice{typeof(data),Tuple(shift)}(data)
+        sl = Shifted_Lattice{typeof(data)}(data, Tuple(shift))
     else
         sl0 = similar(data)
         sl1 = similar(data)
@@ -70,13 +85,13 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
                 shift0 .= 0
                 shift0[i] = nw
                 for k = 1:smallshift
-                    sls = Shifted_Lattice{typeof(data),Tuple(shift0)}(sl0)
+                    sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
                     substitute!(sl1, sls)
                     substitute!(sl0, sl1)
                 end
                 shift0 .= 0
                 shift0[i] = shift[i] % nw
-                sls = Shifted_Lattice{typeof(data),Tuple(shift0)}(sl0)
+                sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             elseif shift[i] < -nw
@@ -86,26 +101,26 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
                 #println(shift0)
                 for k = 1:smallshift
                     println(shift0)
-                    sls = Shifted_Lattice{typeof(data),Tuple(shift0)}(sl0)
+                    sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
                     substitute!(sl1, sls)
                     substitute!(sl0, sl1)
                 end
                 shift0 .= 0
                 shift0[i] = -(abs(shift[i]) % nw)
                 #println(shift0)
-                sls = Shifted_Lattice{typeof(data),Tuple(shift0)}(sl0)
+                sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             else
                 shift0 .= 0
                 shift0[i] = shift[i]
-                sls = Shifted_Lattice{typeof(data),Tuple(shift0)}(sl0)
+                sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             end
         end
         zeroshift = ntuple(_ -> 0, D)
-        sl = Shifted_Lattice{typeof(data),zeroshift}(sl0)
+        sl = Shifted_Lattice{typeof(data)}(sl0, zeroshift)
     end
     return sl
 end
@@ -251,9 +266,7 @@ function get_PEs(ls::LatticeMatrix{D,T,AT,NC1,NC2}) where {D,T,AT,NC1,NC2}
 end
 export get_PEs
 
-function get_shift(::Shifted_Lattice{<:LatticeMatrix{D,T,AT,NC1,NC2,nw},shift}) where {D,T,AT,NC1,NC2,nw,shift}
-    return shift
-end
+
 
 include("Operators/Operators.jl")
 include("Operators/DiracOperators.jl")

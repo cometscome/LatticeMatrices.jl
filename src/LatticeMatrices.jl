@@ -14,9 +14,9 @@ abstract type Lattice{D,T,AT,NC1,NC2,NW} <: AbstractLattice end
 #include("1D/1Dlatticevector.jl")
 #include("1D/1Dlatticematrix.jl")
 
-struct Shifted_Lattice{D} <: AbstractLattice
+struct Shifted_Lattice{D,TS<:NTuple} <: AbstractLattice
     data::D
-    shift::NTuple{D,Int}
+    shift::TS
 end
 
 
@@ -57,13 +57,14 @@ end
 
 
 function Shifted_Lattice(data::TD, shift) where {D,T,AT,TD<:Lattice{D,T,AT}}
-    return Shifted_Lattice{typeof(data)}(data, shift)
+    return Shifted_Lattice{typeof(data),typeof(shift)}(data, shift)
 end
 
 
 function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     #set_halo!(data)
     #nw = data.nw
+    #println("shift")
     isinside = true
     for i in 1:D
         if shift[i] < -nw || shift[i] > nw
@@ -73,7 +74,7 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
     end
     #println("Shifted_Lattice: shift = ", shift, " isinside = ", isinside)
     if isinside
-        sl = Shifted_Lattice{typeof(data)}(data, Tuple(shift))
+        sl = Shifted_Lattice{typeof(data),typeof(shift)}(data, Tuple(shift))
     else
         sl0 = similar(data)
         sl1 = similar(data)
@@ -85,13 +86,13 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
                 shift0 .= 0
                 shift0[i] = nw
                 for k = 1:smallshift
-                    sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
+                    sls = Shifted_Lattice{typeof(data),typeof(shift0)}(sl0, Tuple(shift0))
                     substitute!(sl1, sls)
                     substitute!(sl0, sl1)
                 end
                 shift0 .= 0
                 shift0[i] = shift[i] % nw
-                sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
+                sls = Shifted_Lattice{typeof(data),typeof(shift0)}(sl0, Tuple(shift0))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             elseif shift[i] < -nw
@@ -101,26 +102,26 @@ function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
                 #println(shift0)
                 for k = 1:smallshift
                     println(shift0)
-                    sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
+                    sls = Shifted_Lattice{typeof(data),typeof(shift0)}(sl0, Tuple(shift0))
                     substitute!(sl1, sls)
                     substitute!(sl0, sl1)
                 end
                 shift0 .= 0
                 shift0[i] = -(abs(shift[i]) % nw)
                 #println(shift0)
-                sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
+                sls = Shifted_Lattice{typeof(data),typeof(shift0)}(sl0, Tuple(shift0))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             else
                 shift0 .= 0
                 shift0[i] = shift[i]
-                sls = Shifted_Lattice{typeof(data)}(sl0, Tuple(shift0))
+                sls = Shifted_Lattice{typeof(data),typeof(shift0)}(sl0, Tuple(shift0))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             end
         end
         zeroshift = ntuple(_ -> 0, D)
-        sl = Shifted_Lattice{typeof(data)}(sl0, zeroshift)
+        sl = Shifted_Lattice{typeof(data),typeof(zeroshift)}(sl0, zeroshift)
     end
     return sl
 end

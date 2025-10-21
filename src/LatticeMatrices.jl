@@ -63,6 +63,7 @@ end
 
 function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     #set_halo!(data)
+    #error("dd")
     #nw = data.nw
     #println("shift")
     isinside = true

@@ -18,7 +18,7 @@ struct Shifted_Lattice{D,Dim} <: AbstractLattice
     data::D
     shift::NTuple{Dim,Int64}
 
-    function Shifted_Lattice(data, shift, Dim)
+    function Shifted_Lattice(data, shift, ::Val{Dim}) where {Dim}
         return new{typeof(data),Dim}(data, shift)
     end
 
@@ -81,6 +81,9 @@ end
     end
 end
 
+@inline make_step(i, r, ::Val{D}) where {D} =
+    ntuple(j -> ifelse(j == i, r, 0), D)
+
 function Shifted_Lattice(data::TL, shift_in::TS) where {
     D,T,AT,NC1,NC2,nw,DI,
     TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TS
@@ -97,7 +100,7 @@ function Shifted_Lattice(data::TL, shift_in::TS) where {
             end
         end
         if isinside
-            return Shifted_Lattice(data, shift, D)
+            return Shifted_Lattice(data, shift, Val(D))
         end
     end
 
@@ -117,13 +120,14 @@ function Shifted_Lattice(data::TL, shift_in::TS) where {
             smallshift = s ÷ nw
             step = ntuple(j -> (j == i ? nw : 0), D)
             for _ in 1:smallshift
-                sls = Shifted_Lattice(sl0, step, D)
+                sls = Shifted_Lattice(sl0, step, Val(D))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             end
             rems = s % nw
-            step2 = ntuple(j -> (j == i ? rems : 0), D)
-            sls = Shifted_Lattice(sl0, step2, D)
+            step2 = make_step(i, rems, Val(D))
+            #step2 = ntuple(j -> (j == i ? rems : 0), D)
+            sls = Shifted_Lattice(sl0, step2, Val(D))
             substitute!(sl1, sls)
             substitute!(sl0, sl1)
 
@@ -132,26 +136,27 @@ function Shifted_Lattice(data::TL, shift_in::TS) where {
             smallshift = as ÷ nw
             step = ntuple(j -> (j == i ? -nw : 0), D)
             for _ in 1:smallshift
-                sls = Shifted_Lattice(sl0, step, D)
+                sls = Shifted_Lattice(sl0, step, Val(D))
                 substitute!(sl1, sls)
                 substitute!(sl0, sl1)
             end
             rems = -(as % nw)
-            step2 = ntuple(j -> (j == i ? rems : 0), D)
-            sls = Shifted_Lattice(sl0, step2, D)
+            step2 = make_step(i, rems, Val(D))
+            #step2 = ntuple(j -> (j == i ? rems : 0), D)
+            sls = Shifted_Lattice(sl0, step2, Val(D))
             substitute!(sl1, sls)
             substitute!(sl0, sl1)
 
         else
             step = ntuple(j -> (j == i ? s : 0), D)
-            sls = Shifted_Lattice(sl0, step, D)
+            sls = Shifted_Lattice(sl0, step, Val(D))
             substitute!(sl1, sls)
             substitute!(sl0, sl1)
         end
     end
 
     zeroshift = ntuple(_ -> 0, D)
-    return Shifted_Lattice(sl0, zeroshift, D)
+    return Shifted_Lattice(sl0, zeroshift, Val(D))
 end
 
 #=

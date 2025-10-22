@@ -402,3 +402,322 @@ function kernel_adjoint_WilsonDiracOperator4D!(i, C, U1, U2, U3, U4, κ, ψdata,
 
 
 end
+
+struct WilsonDiracOperator4D_Donly{T} <: OperatorOnKernel
+    U::Vector{T}
+
+    function WilsonDiracOperator4D_Donly(U::Vector{T}) where {T<:LatticeMatrix}
+        @assert length(U) == 4 "U must be a vector of length 4."
+        return new{T}(U)
+    end
+end
+export WilsonDiracOperator4D_Donly
+
+"""
+0.5 sum_ν U_n[ν](1 - γν)*ψ_{n+ν} + U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
+"""
+function LinearAlgebra.mul!(C::TC,
+    Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:WilsonDiracOperator4D_Donly}
+
+
+    U1 = get_matrix(Dirac.U[1])
+    U2 = get_matrix(Dirac.U[2])
+    U3 = get_matrix(Dirac.U[3])
+    U4 = get_matrix(Dirac.U[4])
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_WilsonDiracOperator4D_Donly!, Cdata, U1, U2, U3, U4, ψdata,
+        Val(NC1), Val(nw), C.indexer)
+
+end
+
+
+function kernel_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdata, ::Val{NC1}, ::Val{nw}, dindexer) where {NC1,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_1p = shiftindices(indices, shift_1p)
+    indices_1m = shiftindices(indices, shift_1m)
+    indices_2p = shiftindices(indices, shift_2p)
+    indices_2m = shiftindices(indices, shift_2m)
+    indices_3p = shiftindices(indices, shift_3p)
+    indices_3m = shiftindices(indices, shift_3m)
+    indices_4p = shiftindices(indices, shift_4p)
+    indices_4m = shiftindices(indices, shift_4m)
+
+
+    @inbounds for ic = 1:NC1
+        for ia = 1:4
+            C[ic, ia, indices...] = zero(ψdata[ic, ia, indices...])
+        end
+    end
+
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC1
+            #U_n[ν](1 - γν)*ψ_{n+ν} 
+
+            v = mul_op(oneminusγ1, ψdata, jc, indices_1p)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U1[ic, jc, indices...] * v[ia]
+            end
+            v = mul_op(oneminusγ2, ψdata, jc, indices_2p)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U2[ic, jc, indices...] * v[ia]
+            end
+            v = mul_op(oneminusγ3, ψdata, jc, indices_3p)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U3[ic, jc, indices...] * v[ia]
+            end
+            v = mul_op(oneminusγ4, ψdata, jc, indices_4p)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U4[ic, jc, indices...] * v[ia]
+            end
+
+
+            # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
+            v = mul_op(oneplusγ1, ψdata, jc, indices_1m)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U1[jc, ic, indices_1m...]' * v[ia]
+            end
+
+            v = mul_op(oneplusγ2, ψdata, jc, indices_2m)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U2[jc, ic, indices_2m...]' * v[ia]
+            end
+
+            v = mul_op(oneplusγ3, ψdata, jc, indices_3m)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U3[jc, ic, indices_3m...]' * v[ia]
+            end
+
+
+            v = mul_op(oneplusγ4, ψdata, jc, indices_4m)
+            for ia = 1:4
+                C[ic, ia, indices...] += 0.5 * U4[jc, ic, indices_4m...]' * v[ia]
+            end
+
+
+        end
+    end
+
+
+end
+
+
+function kernel_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdata, ::Val{3}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    #U = (U1,U2,U3,U4)
+    v0 = zero(ψdata[1, 1, indices...])
+
+    C[1, 1, indices...] = v0
+    C[2, 1, indices...] = v0
+    C[3, 1, indices...] = v0
+
+    C[1, 2, indices...] = v0
+    C[2, 2, indices...] = v0
+    C[3, 2, indices...] = v0
+
+
+    C[1, 3, indices...] = v0
+    C[2, 3, indices...] = v0
+    C[3, 3, indices...] = v0
+
+    C[1, 4, indices...] = v0
+    C[2, 4, indices...] = v0
+    C[3, 4, indices...] = v0
+
+    #@inbounds for ν=1:4
+    κ = -0.5
+    @inbounds begin
+        indices_p = shiftindices(indices, shift_1p)
+        kernel_Umgammax_p!(C, κ, U1, ψdata, indices, indices_p, oneminusγ1)
+
+        indices_m = shiftindices(indices, shift_1m)
+        kernel_Updaggammax_m!(C, κ, U1, ψdata, indices, indices_m, oneplusγ1)
+
+        indices_p = shiftindices(indices, shift_2p)
+        kernel_Umgammax_p!(C, κ, U2, ψdata, indices, indices_p, oneminusγ2)
+
+        indices_m = shiftindices(indices, shift_2m)
+        kernel_Updaggammax_m!(C, κ, U2, ψdata, indices, indices_m, oneplusγ2)
+
+
+        indices_p = shiftindices(indices, shift_3p)
+        kernel_Umgammax_p!(C, κ, U3, ψdata, indices, indices_p, oneminusγ3)
+
+        indices_m = shiftindices(indices, shift_3m)
+        kernel_Updaggammax_m!(C, κ, U3, ψdata, indices, indices_m, oneplusγ3)
+
+
+        indices_p = shiftindices(indices, shift_4p)
+        kernel_Umgammax_p!(C, κ, U4, ψdata, indices, indices_p, oneminusγ4)
+
+        indices_m = shiftindices(indices, shift_4m)
+        kernel_Updaggammax_m!(C, κ, U4, ψdata, indices, indices_m, oneplusγ4)
+    end
+
+    #end
+
+
+end
+
+struct Adjoint_WilsonDiracOperator4D_Donly{T} <: OperatorOnKernel
+    parent::T
+end
+
+function Base.adjoint(A::T) where {T<:WilsonDiracOperator4D_Donly}
+    Adjoint_WilsonDiracOperator4D_Donly{typeof(A)}(A)
+end
+
+
+"""
+0.5 sum_ν U_n[ν](1 + γν)*ψ_{n+ν} + U_{n-ν}[-ν]^+ (1 - γν)*ψ_{n-ν}
+"""
+function LinearAlgebra.mul!(C::TC,
+    Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:Adjoint_WilsonDiracOperator4D_Donly}
+
+
+    U1 = get_matrix(Dirac.parent.U[1])
+    U2 = get_matrix(Dirac.parent.U[2])
+    U3 = get_matrix(Dirac.parent.U[3])
+    U4 = get_matrix(Dirac.parent.U[4])
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_adjoint_WilsonDiracOperator4D_Donly!, Cdata, U1, U2, U3, U4, ψdata,
+        Val(NC1), Val(nw), C.indexer)
+
+end
+
+
+function kernel_adjoint_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdata, ::Val{NC1}, ::Val{nw}, dindexer) where {NC1,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_1p = shiftindices(indices, shift_1p)
+    indices_1m = shiftindices(indices, shift_1m)
+    indices_2p = shiftindices(indices, shift_2p)
+    indices_2m = shiftindices(indices, shift_2m)
+    indices_3p = shiftindices(indices, shift_3p)
+    indices_3m = shiftindices(indices, shift_3m)
+    indices_4p = shiftindices(indices, shift_4p)
+    indices_4m = shiftindices(indices, shift_4m)
+
+
+    @inbounds for ic = 1:NC1
+        for ia = 1:4
+            C[ic, ia, indices...] = zero(ψdata[ic, ia, indices...])
+        end
+    end
+
+    κ = -0.5
+    @inbounds for ic = 1:NC1
+        for jc = 1:NC1
+            #U_n[ν](1 - γν)*ψ_{n+ν} 
+
+            v = mul_op(oneplusγ1, ψdata, jc, indices_1p)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices...] * v[ia]
+            end
+            v = mul_op(oneplusγ2, ψdata, jc, indices_2p)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices...] * v[ia]
+            end
+            v = mul_op(oneplusγ3, ψdata, jc, indices_3p)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices...] * v[ia]
+            end
+            v = mul_op(oneplusγ4, ψdata, jc, indices_4p)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices...] * v[ia]
+            end
+
+
+            # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
+            v = mul_op(oneminusγ1, ψdata, jc, indices_1m)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m...]' * v[ia]
+            end
+
+            v = mul_op(oneminusγ2, ψdata, jc, indices_2m)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m...]' * v[ia]
+            end
+
+            v = mul_op(oneminusγ3, ψdata, jc, indices_3m)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m...]' * v[ia]
+            end
+
+
+            v = mul_op(oneminusγ4, ψdata, jc, indices_4m)
+            for ia = 1:4
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m...]' * v[ia]
+            end
+
+
+        end
+    end
+
+
+end
+
+
+function kernel_adjoint_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdata, ::Val{3}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    #U = (U1,U2,U3,U4)
+
+    κ = -0.5
+    v0 = zero(ψdata[1, 1, indices...])
+
+    C[1, 1, indices...] = v0
+    C[2, 1, indices...] = v0
+    C[3, 1, indices...] = v0
+
+    C[1, 2, indices...] = v0
+    C[2, 2, indices...] = v0
+    C[3, 2, indices...] = v0
+
+
+    C[1, 3, indices...] = v0
+    C[2, 3, indices...] = v0
+    C[3, 3, indices...] = v0
+
+    C[1, 4, indices...] = v0
+    C[2, 4, indices...] = v0
+    C[3, 4, indices...] = v0
+
+    #@inbounds for ν=1:4
+    @inbounds begin
+        indices_p = shiftindices(indices, shift_1p)
+        kernel_Umgammax_p!(C, κ, U1, ψdata, indices, indices_p, oneplusγ1)
+
+        indices_m = shiftindices(indices, shift_1m)
+        kernel_Updaggammax_m!(C, κ, U1, ψdata, indices, indices_m, oneminusγ1)
+
+        indices_p = shiftindices(indices, shift_2p)
+        kernel_Umgammax_p!(C, κ, U2, ψdata, indices, indices_p, oneplusγ2)
+
+        indices_m = shiftindices(indices, shift_2m)
+        kernel_Updaggammax_m!(C, κ, U2, ψdata, indices, indices_m, oneminusγ2)
+
+
+        indices_p = shiftindices(indices, shift_3p)
+        kernel_Umgammax_p!(C, κ, U3, ψdata, indices, indices_p, oneplusγ3)
+
+        indices_m = shiftindices(indices, shift_3m)
+        kernel_Updaggammax_m!(C, κ, U3, ψdata, indices, indices_m, oneminusγ3)
+
+
+        indices_p = shiftindices(indices, shift_4p)
+        kernel_Umgammax_p!(C, κ, U4, ψdata, indices, indices_p, oneplusγ4)
+
+        indices_m = shiftindices(indices, shift_4m)
+        kernel_Updaggammax_m!(C, κ, U4, ψdata, indices, indices_m, oneminusγ4)
+    end
+
+    #end
+
+
+end

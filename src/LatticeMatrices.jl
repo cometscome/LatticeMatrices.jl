@@ -34,11 +34,11 @@ end
 
 
 
-function Base.adjoint(data::Lattice{D,T,AT}) where {D,T,AT}
+function Base.adjoint(data::TD) where {D,T,AT,TD<:Lattice{D,T,AT}}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 
-function Base.adjoint(data::Shifted_Lattice{D}) where {D}
+function Base.adjoint(data::T) where {D,Dim,T<:Shifted_Lattice{D,Dim}}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 

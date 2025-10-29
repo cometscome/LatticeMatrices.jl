@@ -2,6 +2,8 @@ struct Wilson_parameters
     κ_wilson::Float64
     M_wilson::Float64
 end
+using InteractiveUtils
+#using CUDA #debug
 
 struct D5DW_MobiusDomainwallOperator5D{T,L5} <: OperatorOnKernel
     U::Vector{T}
@@ -70,6 +72,7 @@ function LinearAlgebra.mul!(C::TC,
     coeff_plus = (b + c) / 2
     coeff_minus = -(b - c) / 2
     #println("mass = ", mass)
+
 
 
     JACC.parallel_for(
@@ -188,6 +191,12 @@ function kernel_apply_1mD_F!(C, ψdata, U1, U2, U3, U4, κ, factor,
     indices_4p = shiftindices(indices_5p, shift_4p5D)
     indices_4m = shiftindices(indices_5p, shift_4m5D)
 
+    indices_4 = (indices[1],indices[2],indices[3],indices[4])
+    indices_1m_4 = (indices_1m[1],indices_1m[2],indices_1m[3],indices_1m[4])
+    indices_2m_4 = (indices_2m[1],indices_2m[2],indices_2m[3],indices_2m[4])
+    indices_3m_4 = (indices_3m[1],indices_3m[2],indices_3m[3],indices_3m[4])
+    indices_4m_4 = (indices_4m[1],indices_4m[2],indices_4m[3],indices_4m[4])
+
     @inbounds for ic = 1:NC1
         for jc = 1:NC1
             #U_n[ν](1 - γν)*ψ_{n+ν} 
@@ -195,42 +204,42 @@ function kernel_apply_1mD_F!(C, ψdata, U1, U2, U3, U4, κ, factor,
 
             v = mul_op_1pg5(oneminusγ1, ψdata, jc, indices_1p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op_1pg5(oneminusγ2, ψdata, jc, indices_2p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op_1pg5(oneminusγ3, ψdata, jc, indices_3p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op_1pg5(oneminusγ4, ψdata, jc, indices_4p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices_4...] * v[ia]
             end
 
 
             # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
             v = mul_op_1pg5(oneplusγ1, ψdata, jc, indices_1m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m_4...]' * v[ia]
             end
 
             v = mul_op_1pg5(oneplusγ2, ψdata, jc, indices_2m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m_4...]' * v[ia]
             end
 
             v = mul_op_1pg5(oneplusγ3, ψdata, jc, indices_3m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m_4...]' * v[ia]
             end
 
 
             v = mul_op_1pg5(oneplusγ4, ψdata, jc, indices_4m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m_4...]' * v[ia]
             end
 
 
@@ -248,48 +257,55 @@ function kernel_apply_1mD_F!(C, ψdata, U1, U2, U3, U4, κ, factor,
     indices_4p = shiftindices(indices_5m, shift_4p5D)
     indices_4m = shiftindices(indices_5m, shift_4m5D)
 
+    indices_4 = (indices[1],indices[2],indices[3],indices[4])
+    indices_1m_4 = (indices_1m[1],indices_1m[2],indices_1m[3],indices_1m[4])
+    indices_2m_4 = (indices_2m[1],indices_2m[2],indices_2m[3],indices_2m[4])
+    indices_3m_4 = (indices_3m[1],indices_3m[2],indices_3m[3],indices_3m[4])
+    indices_4m_4 = (indices_4m[1],indices_4m[2],indices_4m[3],indices_4m[4])
+
+
     κ = -0.5 * coeff * coeff_1mg5
 
     @inbounds for ic = 1:NC1
         for jc = 1:NC1
             v = mul_op_1mg5(oneminusγ1, ψdata, jc, indices_1p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op_1mg5(oneminusγ2, ψdata, jc, indices_2p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op_1mg5(oneminusγ3, ψdata, jc, indices_3p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op_1mg5(oneminusγ4, ψdata, jc, indices_4p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices_4...] * v[ia]
             end
 
 
             # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
             v = mul_op_1mg5(oneplusγ1, ψdata, jc, indices_1m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m_4...]' * v[ia]
             end
 
             v = mul_op_1mg5(oneplusγ2, ψdata, jc, indices_2m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m_4...]' * v[ia]
             end
 
             v = mul_op_1mg5(oneplusγ3, ψdata, jc, indices_3m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m_4...]' * v[ia]
             end
 
 
             v = mul_op_1mg5(oneplusγ4, ψdata, jc, indices_4m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m_4...]' * v[ia]
             end
 
 
@@ -305,6 +321,12 @@ function kernel_D4x_5D!(C, ψdata, U1, U2, U3, U4, indices, coeff, ::Val{NC1},
     indices_3p, indices_3m, indices_4p, indices_4m) where {NC1}
 
     κ = -0.5 * coeff
+    indices_4 = (indices[1],indices[2],indices[3],indices[4])
+    indices_1m_4 = (indices_1m[1],indices_1m[2],indices_1m[3],indices_1m[4])
+    indices_2m_4 = (indices_2m[1],indices_2m[2],indices_2m[3],indices_2m[4])
+    indices_3m_4 = (indices_3m[1],indices_3m[2],indices_3m[3],indices_3m[4])
+    indices_4m_4 = (indices_4m[1],indices_4m[2],indices_4m[3],indices_4m[4])
+
 
     @inbounds for ic = 1:NC1
         for jc = 1:NC1
@@ -312,42 +334,42 @@ function kernel_D4x_5D!(C, ψdata, U1, U2, U3, U4, indices, coeff, ::Val{NC1},
 
             v = mul_op(oneminusγ1, ψdata, jc, indices_1p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneminusγ2, ψdata, jc, indices_2p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneminusγ3, ψdata, jc, indices_3p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneminusγ4, ψdata, jc, indices_4p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices_4...] * v[ia]
             end
 
 
             # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
             v = mul_op(oneplusγ1, ψdata, jc, indices_1m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m_4...]' * v[ia]
             end
 
             v = mul_op(oneplusγ2, ψdata, jc, indices_2m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m_4...]' * v[ia]
             end
 
             v = mul_op(oneplusγ3, ψdata, jc, indices_3m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m_4...]' * v[ia]
             end
 
 
             v = mul_op(oneplusγ4, ψdata, jc, indices_4m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m_4...]' * v[ia]
             end
 
 
@@ -400,6 +422,7 @@ function kernel_adjoint_D5DW_MobiusDomainwallOperator5D!(i, C, U1, U2, U3, U4,
     indices_5p = shiftindices(indices, shift_5p5D)
     indices_5m = shiftindices(indices, shift_5m5D)
 
+    
 
     kernel_apply_1pDdag!(C, ψdata, U1, U2, U3, U4, wilson_params.κ_wilson, coeff_plus, indices, Val(NC1),
         indices_1p, indices_1m, indices_2p, indices_2m,
@@ -451,6 +474,7 @@ function kernel_apply_1mDdag_Fdag!(C, ψdata, U1, U2, U3, U4, κ, factor,
     #@info indices[5]
     #coeff_1mg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
 
+
     @inbounds for ic = 1:NC1
         #(1+gamma_5) 3,4 only #LTK definition
         #if coeff_1mg5 != 0
@@ -479,47 +503,54 @@ function kernel_apply_1mDdag_Fdag!(C, ψdata, U1, U2, U3, U4, κ, factor,
     indices_4p = shiftindices(indices_5p, shift_4p5D)
     indices_4m = shiftindices(indices_5p, shift_4m5D)
 
+    indices_4 = (indices[1],indices[2],indices[3],indices[4])
+    indices_1m_4 = (indices_1m[1],indices_1m[2],indices_1m[3],indices_1m[4])
+    indices_2m_4 = (indices_2m[1],indices_2m[2],indices_2m[3],indices_2m[4])
+    indices_3m_4 = (indices_3m[1],indices_3m[2],indices_3m[3],indices_3m[4])
+    indices_4m_4 = (indices_4m[1],indices_4m[2],indices_4m[3],indices_4m[4])
+
+
     @inbounds for ic = 1:NC1
         for jc = 1:NC1
             #U_n[ν](1 - γν)*ψ_{n+ν} 
             v = mul_op(oneplusγ1, ψdata, jc, indices_1p)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U1[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ2, ψdata, jc, indices_2p)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U2[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ3, ψdata, jc, indices_3p)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U3[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ4, ψdata, jc, indices_4p)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U4[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices_4...] * v[ia]
             end
 
 
             # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
             v = mul_op(oneminusγ1, ψdata, jc, indices_1m)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m_4...]' * v[ia]
             end
 
             v = mul_op(oneminusγ2, ψdata, jc, indices_2m)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m_4...]' * v[ia]
             end
 
             v = mul_op(oneminusγ3, ψdata, jc, indices_3m)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m_4...]' * v[ia]
             end
 
 
             v = mul_op(oneminusγ4, ψdata, jc, indices_4m)
             for ia = 1:2
-                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m_4...]' * v[ia]
             end
 
 
@@ -538,48 +569,54 @@ function kernel_apply_1mDdag_Fdag!(C, ψdata, U1, U2, U3, U4, κ, factor,
     indices_4p = shiftindices(indices_5m, shift_4p5D)
     indices_4m = shiftindices(indices_5m, shift_4m5D)
 
+    indices_4 = (indices[1],indices[2],indices[3],indices[4])
+    indices_1m_4 = (indices_1m[1],indices_1m[2],indices_1m[3],indices_1m[4])
+    indices_2m_4 = (indices_2m[1],indices_2m[2],indices_2m[3],indices_2m[4])
+    indices_3m_4 = (indices_3m[1],indices_3m[2],indices_3m[3],indices_3m[4])
+    indices_4m_4 = (indices_4m[1],indices_4m[2],indices_4m[3],indices_4m[4])
+
     @inbounds for ic = 1:NC1
         for jc = 1:NC1
             #U_n[ν](1 - γν)*ψ_{n+ν} 
 
             v = mul_op(oneplusγ1, ψdata, jc, indices_1p)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U1[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ2, ψdata, jc, indices_2p)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U2[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ3, ψdata, jc, indices_3p)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U3[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ4, ψdata, jc, indices_4p)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U4[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices_4...] * v[ia]
             end
 
 
             # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
             v = mul_op(oneminusγ1, ψdata, jc, indices_1m)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m_4...]' * v[ia]
             end
 
             v = mul_op(oneminusγ2, ψdata, jc, indices_2m)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m_4...]' * v[ia]
             end
 
             v = mul_op(oneminusγ3, ψdata, jc, indices_3m)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m_4...]' * v[ia]
             end
 
 
             v = mul_op(oneminusγ4, ψdata, jc, indices_4m)
             for ia = 3:4
-                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m_4...]' * v[ia]
             end
 
 
@@ -594,6 +631,12 @@ function kernel_D4x_5Ddag!(C, ψdata, U1, U2, U3, U4, indices, coeff, ::Val{NC1}
     indices_3p, indices_3m, indices_4p, indices_4m) where {NC1}
 
     κ = -0.5 * coeff
+    indices_4 = (indices[1],indices[2],indices[3],indices[4])
+    indices_1m_4 = (indices_1m[1],indices_1m[2],indices_1m[3],indices_1m[4])
+    indices_2m_4 = (indices_2m[1],indices_2m[2],indices_2m[3],indices_2m[4])
+    indices_3m_4 = (indices_3m[1],indices_3m[2],indices_3m[3],indices_3m[4])
+    indices_4m_4 = (indices_4m[1],indices_4m[2],indices_4m[3],indices_4m[4])
+
 
     @inbounds for ic = 1:NC1
         for jc = 1:NC1
@@ -601,42 +644,42 @@ function kernel_D4x_5Ddag!(C, ψdata, U1, U2, U3, U4, indices, coeff, ::Val{NC1}
 
             v = mul_op(oneplusγ1, ψdata, jc, indices_1p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U1[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ2, ψdata, jc, indices_2p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U2[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ3, ψdata, jc, indices_3p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U3[ic, jc, indices_4...] * v[ia]
             end
             v = mul_op(oneplusγ4, ψdata, jc, indices_4p)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[ic, jc, indices[1:4]...] * v[ia]
+                C[ic, ia, indices...] += -κ * U4[ic, jc, indices_4...] * v[ia]
             end
 
 
             # U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
             v = mul_op(oneminusγ1, ψdata, jc, indices_1m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U1[jc, ic, indices_1m_4...]' * v[ia]
             end
 
             v = mul_op(oneminusγ2, ψdata, jc, indices_2m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U2[jc, ic, indices_2m_4...]' * v[ia]
             end
 
             v = mul_op(oneminusγ3, ψdata, jc, indices_3m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U3[jc, ic, indices_3m_4...]' * v[ia]
             end
 
 
             v = mul_op(oneminusγ4, ψdata, jc, indices_4m)
             for ia = 1:4
-                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m[1:4]...]' * v[ia]
+                C[ic, ia, indices...] += -κ * U4[jc, ic, indices_4m_4...]' * v[ia]
             end
 
 

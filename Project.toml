@@ -1,7 +1,7 @@
 name = "LatticeMatrices"
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
+version = "0.1.14"
 authors = ["Yuki Nagai <cometscome@gmail.com>"]
-version = "0.1.13"
 
 [deps]
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"

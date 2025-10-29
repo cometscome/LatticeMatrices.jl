@@ -1095,3 +1095,133 @@ function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     D,T1,AT1,NC1,NC2,nw,DI}
     mul_and_sum!(C, Ts...)
 end
+
+#(1+gamma_5) 3,4 only #LTK definition
+@inline function mul_op_1pg5(op::Oneγ{1,1}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = -im * x[ic, 4, indices...]
+    v2 = -im * x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] #+ im * x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] #+ im * x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{1,2}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = -x[ic, 4, indices...]
+    v2 = +x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] #+ x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] #- x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{1,3}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = -im * x[ic, 3, indices...]
+    v2 = +im * x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] #+ im * x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] #- im * x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{1,4}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = -x[ic, 3, indices...]
+    v2 = -x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] #- x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] #- x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{-1,1}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = +im * x[ic, 4, indices...]
+    v2 = +im * x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] #- im * x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] #- im * x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{-1,2}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = +x[ic, 4, indices...]
+    v2 = -x[ic, 3, indices...]
+    v3 = x[ic, 3, indices...] #- x[ic, 2, indices...]
+    v4 = x[ic, 4, indices...] #+ x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{-1,3}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = +im * x[ic, 3, indices...]
+    v2 = -im * x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] #- im * x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] #+ im * x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1pg5(op::Oneγ{-1,4}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = +x[ic, 3, indices...]
+    v2 = +x[ic, 4, indices...]
+    v3 = x[ic, 3, indices...] #+ x[ic, 1, indices...]
+    v4 = x[ic, 4, indices...] #+ x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+#(1-gamma_5) 1,2 only #LTK definition
+@inline function mul_op_1mg5(op::Oneγ{1,1}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #- im * x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] #- im * x[ic, 3, indices...]
+    v3 = +im * x[ic, 2, indices...]
+    v4 = +im * x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1mg5(op::Oneγ{1,2}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #- x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] #+ x[ic, 3, indices...]
+    v3 = +x[ic, 2, indices...]
+    v4 = -x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1mg5(op::Oneγ{1,3}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #- im * x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] #+ im * x[ic, 4, indices...]
+    v3 = +im * x[ic, 1, indices...]
+    v4 = -im * x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1mg5(op::Oneγ{1,4}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #- x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] #- x[ic, 4, indices...]
+    v3 = -x[ic, 1, indices...]
+    v4 = -x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1mg5(op::Oneγ{-1,1}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #+ im * x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] #+ im * x[ic, 3, indices...]
+    v3 = -im * x[ic, 2, indices...]
+    v4 = -im * x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline @inline function mul_op_1mg5(op::Oneγ{-1,2}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #+ x[ic, 4, indices...]
+    v2 = x[ic, 2, indices...] #- x[ic, 3, indices...]
+    v3 = -x[ic, 2, indices...]
+    v4 = +x[ic, 1, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1mg5(op::Oneγ{-1,3}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #+ im * x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] #- im * x[ic, 4, indices...]
+    v3 = -im * x[ic, 1, indices...]
+    v4 = +im * x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end
+
+@inline function mul_op_1mg5(op::Oneγ{-1,4}, x, ic, indices::NTuple{N,T}) where {N,T<:Integer}
+    v1 = x[ic, 1, indices...] #+ x[ic, 3, indices...]
+    v2 = x[ic, 2, indices...] #+ x[ic, 4, indices...]
+    v3 = +x[ic, 1, indices...]
+    v4 = +x[ic, 2, indices...]
+    return v1, v2, v3, v4
+end

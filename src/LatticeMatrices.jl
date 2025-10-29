@@ -372,6 +372,7 @@ export get_PEs
 
 include("Operators/Operators.jl")
 include("Operators/DiracOperators.jl")
+include("Operators/DiracOperators_5D.jl")
 
 
 end

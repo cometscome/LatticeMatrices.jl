@@ -1,10 +1,11 @@
 #Overwrite Y with X*a + Y*b, where a and b are scalars. Return Y.
 function LinearAlgebra.axpby!(
     a::Number,
-    X::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    X::TX,
     b::Number,
-    Y::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-) where {T1,AT1,NC1,NC2,nw,D,DI}
+    Y::TY,
+) where {T1,AT1,NC1,NC2,nw,D,DI,
+        TX<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TY<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
 
     JACC.parallel_for(
         prod(Y.PN), kernel_D_axpby!, a, X.A, b, Y.A, Val(NC1), Val(NC2), Val(nw), Y.indexer
@@ -19,6 +20,25 @@ end
             Y[ic, jc, indices...] = a * X[ic, jc, indices...] + b * Y[ic, jc, indices...]
         end
     end
+end
+
+@inline function kernel_D_axpby!(i, a, X, b, Y, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+
+    Y[1, 1, indices...] = a * X[1, 1, indices...] + b * Y[1, 1, indices...]
+    Y[2, 1, indices...] = a * X[2, 1, indices...] + b * Y[2, 1, indices...]
+    Y[3, 1, indices...] = a * X[3, 1, indices...] + b * Y[3, 1, indices...]
+
+
+    Y[1, 2, indices...] = a * X[1, 2, indices...] + b * Y[1, 2, indices...]
+    Y[2, 2, indices...] = a * X[2, 2, indices...] + b * Y[2, 2, indices...]
+    Y[3, 2, indices...] = a * X[3, 2, indices...] + b * Y[3, 2, indices...]
+
+    Y[1, 3, indices...] = a * X[1, 3, indices...] + b * Y[1, 3, indices...]
+    Y[2, 3, indices...] = a * X[2, 3, indices...] + b * Y[2, 3, indices...]
+    Y[3, 3, indices...] = a * X[3, 3, indices...] + b * Y[3, 3, indices...]
+
+
 end
 
 #C = a*x

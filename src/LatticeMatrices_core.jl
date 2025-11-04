@@ -108,7 +108,8 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
 
     PN = ntuple(i -> gsize[i] ÷ dims[i], D)
     #println("LatticeMatrix: $dims, $gsize, $PN, $nw")
-    indexer = DIndexer(gsize)
+    #indexer = DIndexer(gsize)
+    indexer = DIndexer(PN)
     DI = typeof(indexer)
 
     #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,

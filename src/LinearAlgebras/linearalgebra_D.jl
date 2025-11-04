@@ -893,6 +893,10 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{L}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
+    #println("Using Dmatrix mul ABdag")
+    #display(A.A[:,:,2,2,2,2])
+    #display(B.data.A[:,:,2,2,2,2])
+
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_ABdag!, C.A, A.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer
     )

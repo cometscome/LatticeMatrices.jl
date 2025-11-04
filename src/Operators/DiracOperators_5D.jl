@@ -404,6 +404,107 @@ function kernel_apply_1mD_F!(C, ψdata, U1, U2, U3, U4, κ, factor,
 
 end
 
+function apply_F_5D!(C::TC,mass,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
+    Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+
+
+    
+    JACC.parallel_for(
+        prod(C.PN), kernel_apply_F!,
+        Cdata, ψdata,
+        Val(NC1), mass,Val(L5), Val(nw), C.indexer)
+        
+
+end
+
+
+function kernel_apply_F!(i,C, ψdata, ::Val{NC1},mass,::Val{L5},::Val{nw}, dindexer) where {NC1,L5,nw}
+    indices = delinearize(dindexer, i, nw) #5D indices
+    indices_5p = shiftindices(indices, shift_5p5D)
+    indices_5m = shiftindices(indices, shift_5m5D)
+
+    massfactor = 1
+    coeff_1mg5 = ifelse(indices[5] == 1 + nw, -mass, 1)
+    coeff_1pg5 = ifelse(indices[5] == L5 + nw, -mass, 1)
+    #coeff_1pg5 = ifelse(indices[5] == 1 + nw, -mass, 0)
+    #@info indices[5]
+    #coeff_1mg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
+
+    @inbounds for ic = 1:NC1
+        #(1+gamma_5) 3,4 only #LTK definition
+        #if coeff_1mg5 != 0
+        #@info ψdata[ic, 3, indices_5m...]
+        #end
+        C[ic, 3, indices...] += coeff_1pg5 * massfactor * ψdata[ic, 3, indices_5p...]
+        C[ic, 4, indices...] += coeff_1pg5 * massfactor * ψdata[ic, 4, indices_5p...]
+
+        #(1-gamma_5) 1,2 only #LTK definition
+        C[ic, 1, indices...] += coeff_1mg5 * massfactor * ψdata[ic, 1, indices_5m...]
+        C[ic, 2, indices...] += coeff_1mg5 * massfactor * ψdata[ic, 2, indices_5m...]
+
+
+    end
+
+    return
+
+
+end
+
+function apply_δF_5D!(C::TC,mass,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
+    Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+
+
+    
+    JACC.parallel_for(
+        prod(C.PN), kernel_apply_δF!,
+        Cdata, ψdata,
+        Val(NC1), mass,Val(L5), Val(nw), C.indexer)
+        
+
+end
+
+function kernel_apply_δF!(i,C, ψdata, ::Val{NC1},mass,::Val{L5},::Val{nw}, dindexer) where {NC1,L5,nw}
+    indices = delinearize(dindexer, i, nw) #5D indices
+    indices_5p = shiftindices(indices, shift_5p5D)
+    indices_5m = shiftindices(indices, shift_5m5D)
+
+    massfactor = 1
+    coeff_1mg5 = ifelse(indices[5] == 1 + nw, -mass, 0)
+    coeff_1pg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
+    #coeff_1pg5 = ifelse(indices[5] == 1 + nw, -mass, 0)
+    #@info indices[5]
+    #coeff_1mg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
+
+    @inbounds for ic = 1:NC1
+        #(1+gamma_5) 3,4 only #LTK definition
+        #if coeff_1mg5 != 0
+        #@info ψdata[ic, 3, indices_5m...]
+        #end
+        if coeff_1pg5 != zero(coeff_1pg5)
+            C[ic, 3, indices...] += coeff_1pg5 * massfactor * ψdata[ic, 3, indices_5p...]
+            C[ic, 4, indices...] += coeff_1pg5 * massfactor * ψdata[ic, 4, indices_5p...]
+        end
+
+        #(1-gamma_5) 1,2 only #LTK definition
+        if coeff_1mg5 != zero(coeff_1mg5)
+            C[ic, 1, indices...] += coeff_1mg5 * massfactor * ψdata[ic, 1, indices_5m...]
+            C[ic, 2, indices...] += coeff_1mg5 * massfactor * ψdata[ic, 2, indices_5m...]
+        end
+
+    end
+
+    return
+
+
+end
 
 
 function kernel_D4x_5D!(C, ψdata, U1, U2, U3, U4, indices, coeff, ::Val{NC1},

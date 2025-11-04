@@ -42,6 +42,10 @@ function Base.adjoint(data::T) where {D,Dim,T<:Shifted_Lattice{D,Dim}}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 
+function Base.adjoint(data::TD) where {TD<:Adjoint_Lattice}
+    return data.data
+end
+
 
 
 

@@ -124,6 +124,41 @@ const shift_5m5D = (0, 0, 0, 0, -1)
 
 end
 
+function D4x_5D!(C::TC,U,ψ::Tp,coeff) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
+    Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    U1 = get_matrix(U[1])
+    U2 = get_matrix(U[2])
+    U3 = get_matrix(U[3])
+    U4 = get_matrix(U[4])
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_D4x_5D_single!,
+        Cdata, U1, U2, U3, U4, ψdata,coeff,
+        Val(NC1), Val(nw), C.indexer)
+end
+
+function kernel_D4x_5D_single!(i, C, U1, U2, U3, U4,ψdata,coeff,
+    ::Val{NC1}, ::Val{nw}, dindexer) where {NC1,nw}
+    indices = delinearize(dindexer, i, nw) #5D indices
+
+    indices_1p = shiftindices(indices, shift_1p5D)
+    indices_1m = shiftindices(indices, shift_1m5D)
+    indices_2p = shiftindices(indices, shift_2p5D)
+    indices_2m = shiftindices(indices, shift_2m5D)
+    indices_3p = shiftindices(indices, shift_3p5D)
+    indices_3m = shiftindices(indices, shift_3m5D)
+    indices_4p = shiftindices(indices, shift_4p5D)
+    indices_4m = shiftindices(indices, shift_4m5D)
+
+    kernel_D4x_5D!(C, ψdata, U1, U2, U3, U4, indices,coeff, Val(NC1),
+        indices_1p, indices_1m, indices_2p, indices_2m,
+        indices_3p, indices_3m, indices_4p, indices_4m)
+end
+
  function kernel_apply_1pD!(C, ψdata, U1, U2, U3, U4, κ, factor,
     indices, ::Val{NC1},
     indices_1p, indices_1m, indices_2p, indices_2m,

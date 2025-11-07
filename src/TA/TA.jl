@@ -21,12 +21,121 @@ const sr3i = 1 / sr3
 const sr3ih = 0.5 * sr3i
 const sqr3inv = sr3i
 const sr3i2 = 2 * sr3i
-    
-function traceless_antihermitian!(A::TA,B::TB) where {D,T1,AT1,N,nw,DI,
+
+function traceless_antihermitian!(A::TA, B::TB) where {D,T1,AT1,N,nw,DI,
     TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI},TB<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
-    substitute!(A, B)
-    traceless_antihermitian!(A)
+
+    JACC.parallel_for(
+        prod(A.PN), kernel_traceless_antihermitian!, A.A, B.A, Val(N), Val(nw), A.indexer
+    )
+    #display(A.A[:, :, 2, 2, 2, 2])
+
+    #substitute!(A, B)
+    #traceless_antihermitian!(A)
+    #display(A.A[:, :, 2, 2, 2, 2])
+
 end
+export traceless_antihermitian!
+
+function kernel_traceless_antihermitian!(i, vout, v, ::Val{N}, ::Val{nw}, dindexer) where {N,nw}
+    indices = delinearize(dindexer, i, nw)
+    fac1N = 1 / N
+    tri = 0.0
+    for k = 1:N
+        tri += imag(v[k, k, indices...])
+    end
+    tri *= fac1N
+    for k = 1:N
+        vout[k, k, indices...] =
+            (imag(v[k, k, indices...]) - tri) * im
+    end
+
+
+    for k1 = 1:N
+        for k2 = k1+1:N
+            vv =
+                0.5 * (
+                    v[k1, k2, indices...] -
+                    conj(v[k2, k1, indices...])
+                )
+            vout[k1, k2, indices...] = vv
+            vout[k2, k1, indices...] = -conj(vv)
+        end
+    end
+
+end
+
+function kernel_traceless_antihermitian!(i, vout, v, ::Val{3}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    v11 = v[1, 1, indices...]
+    v21 = v[2, 1, indices...]
+    v31 = v[3, 1, indices...]
+
+    v12 = v[1, 2, indices...]
+    v22 = v[2, 2, indices...]
+    v32 = v[3, 2, indices...]
+
+    v13 = v[1, 3, indices...]
+    v23 = v[2, 3, indices...]
+    v33 = v[3, 3, indices...]
+
+
+    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+
+    y11 = (imag(v11) - tri) * im
+    y22 = (imag(v22) - tri) * im
+    y33 = (imag(v33) - tri) * im
+
+    x12 = v12 - conj(v21)
+    x13 = v13 - conj(v31)
+    x23 = v23 - conj(v32)
+
+    x21 = -conj(x12)
+    x31 = -conj(x13)
+    x32 = -conj(x23)
+
+    y12 = 0.5 * x12
+    y13 = 0.5 * x13
+    y21 = 0.5 * x21
+    y23 = 0.5 * x23
+    y31 = 0.5 * x31
+    y32 = 0.5 * x32
+
+    vout[1, 1, indices...] = y11
+    vout[2, 1, indices...] = y21
+    vout[3, 1, indices...] = y31
+
+    vout[1, 2, indices...] = y12
+    vout[2, 2, indices...] = y22
+    vout[3, 2, indices...] = y32
+
+    vout[1, 3, indices...] = y13
+    vout[2, 3, indices...] = y23
+    vout[3, 3, indices...] = y33
+
+end
+
+function kernel_traceless_antihermitian!(i, vout, v, ::Val{2}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    v11 = v[1, 1, indices...]
+    v22 = v[2, 2, indices...]
+
+    tri = (imag(v11) + imag(v22)) * 0.5
+
+    v12 = v[1, 2, indices...]
+    v21 = v[2, 1, indices...]
+
+    x12 = v12 - conj(v21)
+
+    x21 = -conj(x12)
+
+    vout[1, 1, indices...] = (imag(v11) - tri) * im
+    vout[1, 2, indices...] = 0.5 * x12
+    vout[2, 1, indices...] = 0.5 * x21
+    vout[2, 2, indices...] = (imag(v22) - tri) * im
+end
+
+
 
 function traceless_antihermitian!(A::TA) where {D,T1,AT1,N,nw,DI,TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
     if N == 3
@@ -46,7 +155,7 @@ function traceless_antihermitian!(A::TA) where {D,T1,AT1,N,nw,DI,TA<:LatticeMatr
     set_halo!(A)
 end
 
-function traceless_antihermitian!(A::TA) where {T,AT,N, TA<:TALattice{4,T,AT,N}}
+function traceless_antihermitian!(A::TA) where {T,AT,N,TA<:TALattice{4,T,AT,N}}
     traceless_antihermitian!(A.lt)
     #=
     if N == 3

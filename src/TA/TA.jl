@@ -22,7 +22,7 @@ const sr3ih = 0.5 * sr3i
 const sqr3inv = sr3i
 const sr3i2 = 2 * sr3i
 
-function traceless_antihermitian!(A::LatticeMatrix{4,T,AT,N,N}) where {T,AT,N}
+function traceless_antihermitian!(A::TA) where {D,T1,AT1,NC1,NC2,nw,DI,TA<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
     if N == 3
         JACC.parallel_for(
             prod(A.PN), kernel_traceless_antihermitian_4DNC3!, A.A, A.nw, A.PN)
@@ -40,7 +40,7 @@ function traceless_antihermitian!(A::LatticeMatrix{4,T,AT,N,N}) where {T,AT,N}
     set_halo!(A)
 end
 
-function traceless_antihermitian!(A::TALattice{4,T,AT,N}) where {T,AT,N}
+function traceless_antihermitian!(A::TA) where {T,AT,N, TA<:TALattice{4,T,AT,N}}
     traceless_antihermitian!(A.lt)
     #=
     if N == 3
@@ -163,7 +163,8 @@ function kernel_traceless_antihermitian_4D!(i, v, N, nw, PN)
 end
 
 
-function expt!(C::LatticeMatrix{4,T,AT,NC1,NC2}, A::TALattice{4,T1,AT1,NC1}, t::S=one(S)) where {T,AT,NC1,NC2,S<:Number,T1,AT1}
+function expt!(C::TC, A::TA, t::S=one(S)) where {T,AT,NC1,NC2,S<:Number,T1,AT1,
+    TC<:LatticeMatrix{4,T,AT,NC1,NC2},TA<:TALattice{4,T1,AT1,NC1}}
     @assert NC1 == NC2 "Matrix exponentiation requires square matrices, but got $(NC1) x $(NC2)."
     if NC1 == 3
         JACC.parallel_for(

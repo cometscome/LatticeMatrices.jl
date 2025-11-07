@@ -21,20 +21,26 @@ const sr3i = 1 / sr3
 const sr3ih = 0.5 * sr3i
 const sqr3inv = sr3i
 const sr3i2 = 2 * sr3i
+    
+function traceless_antihermitian!(A::TA,B::TB) where {D,T1,AT1,N,nw,DI,
+    TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI},TB<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
+    substitute!(A, B)
+    traceless_antihermitian!(A)
+end
 
 function traceless_antihermitian!(A::TA) where {D,T1,AT1,N,nw,DI,TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
     if N == 3
         JACC.parallel_for(
-            prod(A.PN), kernel_traceless_antihermitian_4DNC3!, A.A, A.nw, A.PN)
+            prod(A.PN), kernel_traceless_antihermitian_4DNC3!, A.A, A.nw, A.indexer)
     elseif N == 2
         JACC.parallel_for(
-            prod(A.PN), kernel_traceless_antihermitian_4DNC2!, A.A, A.nw, A.PN)
+            prod(A.PN), kernel_traceless_antihermitian_4DNC2!, A.A, A.nw, A.indexer)
     elseif N == 1
         @warn("No traceless antihermitian condition applied for SU(1). This is a scalar lattice, so no special unitary condition is needed.")
         # For N=1, no SU(N) condition is needed, as it is just a scalar.
     else
         JACC.parallel_for(
-            prod(A.PN), kernel_traceless_antihermitian_4D!, A.A, N, A.nw, A.PN)
+            prod(A.PN), kernel_traceless_antihermitian_4D!, A.A, N, A.nw, A.indexer)
         #error("Unsupported number of colors for special unitary lattice: $N")
     end
     set_halo!(A)
@@ -62,40 +68,41 @@ function traceless_antihermitian!(A::TA) where {T,AT,N, TA<:TALattice{4,T,AT,N}}
 end
 
 
-function kernel_traceless_antihermitian_4DNC2!(i, v, nw, PN)
-    ix, iy, iz, it = get_4Dindex(i, PN)
-    v11 = v[1, 1, ix, iy, iz, it]
-    v22 = v[2, 2, ix, iy, iz, it]
+function kernel_traceless_antihermitian_4DNC2!(i, v, nw, dindexer)
+    #ix, iy, iz, it = get_4Dindex(i, PN)
+    indices = delinearize(dindexer, i, nw)
+    v11 = v[1, 1, indices...]
+    v22 = v[2, 2, indices...]
 
     tri = (imag(v11) + imag(v22)) * 0.5
 
-    v12 = v[1, 2, ix, iy, iz, it]
-    v21 = v[2, 1, ix, iy, iz, it]
+    v12 = v[1, 2, indices...]
+    v21 = v[2, 1, indices...]
 
     x12 = v12 - conj(v21)
 
     x21 = -conj(x12)
 
-    v[1, 1, ix, iy, iz, it] = (imag(v11) - tri) * im
-    v[1, 2, ix, iy, iz, it] = 0.5 * x12
-    v[2, 1, ix, iy, iz, it] = 0.5 * x21
-    v[2, 2, ix, iy, iz, it] = (imag(v22) - tri) * im
+    v[1, 1, indices...] = (imag(v11) - tri) * im
+    v[1, 2, indices...] = 0.5 * x12
+    v[2, 1, indices...] = 0.5 * x21
+    v[2, 2, indices...] = (imag(v22) - tri) * im
 
 end
 
-function kernel_traceless_antihermitian_4DNC3!(i, v, nw, PN)
-    ix, iy, iz, it = get_4Dindex(i, PN)
-    v11 = v[1, 1, ix, iy, iz, it]
-    v21 = v[2, 1, ix, iy, iz, it]
-    v31 = v[3, 1, ix, iy, iz, it]
+function kernel_traceless_antihermitian_4DNC3!(i, v, nw, dindexer)
+    indices = delinearize(dindexer, i, nw)
+    v11 = v[1, 1, indices...]
+    v21 = v[2, 1, indices...]
+    v31 = v[3, 1, indices...]
 
-    v12 = v[1, 2, ix, iy, iz, it]
-    v22 = v[2, 2, ix, iy, iz, it]
-    v32 = v[3, 2, ix, iy, iz, it]
+    v12 = v[1, 2, indices...]
+    v22 = v[2, 2, indices...]
+    v32 = v[3, 2, indices...]
 
-    v13 = v[1, 3, ix, iy, iz, it]
-    v23 = v[2, 3, ix, iy, iz, it]
-    v33 = v[3, 3, ix, iy, iz, it]
+    v13 = v[1, 3, indices...]
+    v23 = v[2, 3, indices...]
+    v33 = v[3, 3, indices...]
 
 
     tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
@@ -119,31 +126,31 @@ function kernel_traceless_antihermitian_4DNC3!(i, v, nw, PN)
     y31 = 0.5 * x31
     y32 = 0.5 * x32
 
-    v[1, 1, ix, iy, iz, it] = y11
-    v[2, 1, ix, iy, iz, it] = y21
-    v[3, 1, ix, iy, iz, it] = y31
+    v[1, 1, indices...] = y11
+    v[2, 1, indices...] = y21
+    v[3, 1, indices...] = y31
 
-    v[1, 2, ix, iy, iz, it] = y12
-    v[2, 2, ix, iy, iz, it] = y22
-    v[3, 2, ix, iy, iz, it] = y32
+    v[1, 2, indices...] = y12
+    v[2, 2, indices...] = y22
+    v[3, 2, indices...] = y32
 
-    v[1, 3, ix, iy, iz, it] = y13
-    v[2, 3, ix, iy, iz, it] = y23
-    v[3, 3, ix, iy, iz, it] = y33
+    v[1, 3, indices...] = y13
+    v[2, 3, indices...] = y23
+    v[3, 3, indices...] = y33
 
 end
 
-function kernel_traceless_antihermitian_4D!(i, v, N, nw, PN)
-    ix, iy, iz, it = get_4Dindex(i, PN)
+function kernel_traceless_antihermitian_4D!(i, v, N, nw, dindexer)
+    indices = delinearize(dindexer, i, nw)
     fac1N = 1 / N
     tri = 0.0
     for k = 1:N
-        tri += imag(v[k, k, ix, iy, iz, it])
+        tri += imag(v[k, k, indices...])
     end
     tri *= fac1N
     for k = 1:N
-        v[k, k, ix, iy, iz, it] =
-            (imag(v[k, k, ix, iy, iz, it]) - tri) * im
+        v[k, k, indices...] =
+            (imag(v[k, k, indices...]) - tri) * im
     end
 
 
@@ -151,11 +158,11 @@ function kernel_traceless_antihermitian_4D!(i, v, N, nw, PN)
         for k2 = k1+1:N
             vv =
                 0.5 * (
-                    v[k1, k2, ix, iy, iz, it] -
-                    conj(v[k2, k1, ix, iy, iz, it])
+                    v[k1, k2, indices...] -
+                    conj(v[k2, k1, indices...])
                 )
-            v[k1, k2, ix, iy, iz, it] = vv
-            v[k2, k1, ix, iy, iz, it] = -conj(vv)
+            v[k1, k2, indices...] = vv
+            v[k2, k1, indices...] = -conj(vv)
         end
     end
 
@@ -182,19 +189,19 @@ function expt!(C::TC, A::TA, t::S=one(S)) where {T,AT,NC1,NC2,S<:Number,T1,AT1,
     set_halo!(C)
 end
 
-function kernel_4Dexpt_SU3!(i, C, A, PN, t)
-    ix, iy, iz, it = get_4Dindex(i, PN)
+function kernel_4Dexpt_SU3!(i, C, A, dindexer, t)
+    indices = delinearize(dindexer, i, nw)
     T = eltype(C)
 
-    y11 = A[1, 1, ix, iy, iz, it]
-    y22 = A[2, 2, ix, iy, iz, it]
-    y33 = A[3, 3, ix, iy, iz, it]
-    y12 = A[1, 2, ix, iy, iz, it]
-    y13 = A[1, 3, ix, iy, iz, it]
-    y21 = A[2, 1, ix, iy, iz, it]
-    y23 = A[2, 3, ix, iy, iz, it]
-    y31 = A[3, 1, ix, iy, iz, it]
-    y32 = A[3, 2, ix, iy, iz, it]
+    y11 = A[1, 1, indices...]
+    y22 = A[2, 2, indices...]
+    y33 = A[3, 3, indices...]
+    y12 = A[1, 2, indices...]
+    y13 = A[1, 3, indices...]
+    y21 = A[2, 1, indices...]
+    y23 = A[2, 3, indices...]
+    y31 = A[3, 1, indices...]
+    y32 = A[3, 2, indices...]
 
     c1_0 = (imag(y12) + imag(y21))
     c2_0 = (real(y12) - real(y21))
@@ -217,15 +224,15 @@ function kernel_4Dexpt_SU3!(i, C, A, PN, t)
     csum = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8
     if csum == 0
         c = Mat3{eltype(C)}(one(eltype(C)))
-        C[1, 1, ix, iy, iz, it] = c.a11
-        C[1, 2, ix, iy, iz, it] = c.a12
-        C[1, 3, ix, iy, iz, it] = c.a13
-        C[2, 1, ix, iy, iz, it] = c.a21
-        C[2, 2, ix, iy, iz, it] = c.a22
-        C[2, 3, ix, iy, iz, it] = c.a23
-        C[3, 1, ix, iy, iz, it] = c.a31
-        C[3, 2, ix, iy, iz, it] = c.a32
-        C[3, 3, ix, iy, iz, it] = c.a33
+        C[1, 1, indices...] = c.a11
+        C[1, 2, indices...] = c.a12
+        C[1, 3, indices...] = c.a13
+        C[2, 1, indices...] = c.a21
+        C[2, 2, indices...] = c.a22
+        C[2, 3, indices...] = c.a23
+        C[3, 1, indices...] = c.a31
+        C[3, 2, indices...] = c.a32
+        C[3, 3, indices...] = c.a33
 
     end
 
@@ -382,51 +389,51 @@ function kernel_4Dexpt_SU3!(i, C, A, PN, t)
         ww15 + im * ww16,
         ww17 + im * ww18)
     c = mul3(conjugate3(w), ww)
-    #C[:, :, ix, iy, iz, it] = T[c.a11 c.a12 c.a13;
+    #C[:, :, indices...] = T[c.a11 c.a12 c.a13;
     #    c.a21 c.a22 c.a23;
     #    c.a31 c.a32 c.a33]
 
-    C[1, 1, ix, iy, iz, it] = c.a11
-    C[1, 2, ix, iy, iz, it] = c.a12
-    C[1, 3, ix, iy, iz, it] = c.a13
-    C[2, 1, ix, iy, iz, it] = c.a21
-    C[2, 2, ix, iy, iz, it] = c.a22
-    C[2, 3, ix, iy, iz, it] = c.a23
-    C[3, 1, ix, iy, iz, it] = c.a31
-    C[3, 2, ix, iy, iz, it] = c.a32
-    C[3, 3, ix, iy, iz, it] = c.a33
+    C[1, 1, indices...] = c.a11
+    C[1, 2, indices...] = c.a12
+    C[1, 3, indices...] = c.a13
+    C[2, 1, indices...] = c.a21
+    C[2, 2, indices...] = c.a22
+    C[2, 3, indices...] = c.a23
+    C[3, 1, indices...] = c.a31
+    C[3, 2, indices...] = c.a32
+    C[3, 3, indices...] = c.a33
 
     #=
-    w[1, 1, ix, iy, iz, it] = w1 + im * w2
-    w[1, 2, ix, iy, iz, it] = w3 + im * w4
-    w[1, 3, ix, iy, iz, it] = w5 + im * w6
-    w[2, 1, ix, iy, iz, it] = w7 + im * w8
-    w[2, 2, ix, iy, iz, it] = w9 + im * w10
-    w[2, 3, ix, iy, iz, it] = w11 + im * w12
-    w[3, 1, ix, iy, iz, it] = w13 + im * w14
-    w[3, 2, ix, iy, iz, it] = w15 + im * w16
-    w[3, 3, ix, iy, iz, it] = w17 + im * w18
+    w[1, 1, indices...] = w1 + im * w2
+    w[1, 2, indices...] = w3 + im * w4
+    w[1, 3, indices...] = w5 + im * w6
+    w[2, 1, indices...] = w7 + im * w8
+    w[2, 2, indices...] = w9 + im * w10
+    w[2, 3, indices...] = w11 + im * w12
+    w[3, 1, indices...] = w13 + im * w14
+    w[3, 2, indices...] = w15 + im * w16
+    w[3, 3, indices...] = w17 + im * w18
 
-    ww[1, 1, ix, iy, iz, it] = ww1 + im * ww2
-    ww[1, 2, ix, iy, iz, it] = ww3 + im * ww4
-    ww[1, 3, ix, iy, iz, it] = ww5 + im * ww6
-    ww[2, 1, ix, iy, iz, it] = ww7 + im * ww8
-    ww[2, 2, ix, iy, iz, it] = ww9 + im * ww10
-    ww[2, 3, ix, iy, iz, it] = ww11 + im * ww12
-    ww[3, 1, ix, iy, iz, it] = ww13 + im * ww14
-    ww[3, 2, ix, iy, iz, it] = ww15 + im * ww16
-    ww[3, 3, ix, iy, iz, it] = ww17 + im * ww18
+    ww[1, 1, indices...] = ww1 + im * ww2
+    ww[1, 2, indices...] = ww3 + im * ww4
+    ww[1, 3, indices...] = ww5 + im * ww6
+    ww[2, 1, indices...] = ww7 + im * ww8
+    ww[2, 2, indices...] = ww9 + im * ww10
+    ww[2, 3, indices...] = ww11 + im * ww12
+    ww[3, 1, indices...] = ww13 + im * ww14
+    ww[3, 2, indices...] = ww15 + im * ww16
+    ww[3, 3, indices...] = ww17 + im * ww18
     =#
 
 end
 
-function kernel_4Dexpt_SU2!(i, uout, v, PN, t)
-    ix, iy, iz, it = get_4Dindex(i, PN)
+function kernel_4Dexpt_SU2!(i, uout, v, dindexer, t)
+    indices = delinearize(dindexer, i, nw)
 
-    y11 = v[1, 1, ix, iy, iz, it]
-    y12 = v[1, 2, ix, iy, iz, it]
-    y21 = v[2, 1, ix, iy, iz, it]
-    y22 = v[2, 2, ix, iy, iz, it]
+    y11 = v[1, 1, indices...]
+    y12 = v[1, 2, indices...]
+    y21 = v[2, 1, indices...]
+    y22 = v[2, 2, indices...]
 
     c1_0 = (imag(y12) + imag(y21))
     c2_0 = (real(y12) - real(y21))
@@ -444,8 +451,8 @@ function kernel_4Dexpt_SU2!(i, uout, v, PN, t)
     a2 = u2 * sR
     a3 = u3 * sR
 
-    uout[1, 1, ix, iy, iz, it] = cos(R) + im * a3
-    uout[1, 2, ix, iy, iz, it] = im * a1 + a2
-    uout[2, 1, ix, iy, iz, it] = im * a1 - a2
-    uout[2, 2, ix, iy, iz, it] = cos(R) - im * a3
+    uout[1, 1, indices...] = cos(R) + im * a3
+    uout[1, 2, indices...] = im * a1 + a2
+    uout[2, 1, indices...] = im * a1 - a2
+    uout[2, 2, indices...] = cos(R) - im * a3
 end

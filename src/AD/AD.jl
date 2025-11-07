@@ -34,10 +34,9 @@ export realtrace
 
 function Enzyme.EnzymeRules.augmented_primal(cfg::RevConfig,
     ::Const{typeof(realtrace)},
-    ::Type{<:Active},                # 出力は Active（ここでは Float64 側に流れる）
-    C::Annotation{T}) where {T<:LatticeMatrix} # Duplicated/MixedDuplicated/Const すべてを許容
+    ::Type{<:Active},
+    C::Annotation{T}) where {T<:LatticeMatrix} # Duplicated/MixedDuplicated/Const 
     if needs_primal(cfg)
-        # Enzyme が「primal が要る」と言っているときだけ計算して返す
         s = realtrace(C.val)
         return AugmentedReturn(s, nothing, nothing)
     else

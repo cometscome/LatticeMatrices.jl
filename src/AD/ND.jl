@@ -1,4 +1,4 @@
-function numerical_differenciation(f, indices, A::T, params...) where {D,T1,AT1,NC1,NC2,nw,DI,T<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+function numerical_differentiation(f, indices, A::T, params...) where {D,T1,AT1,NC1,NC2,nw,DI,T<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
     ϵ = 1e-8
     grad = zeros(T1, NC1, NC2)
 
@@ -20,9 +20,9 @@ function numerical_differenciation(f, indices, A::T, params...) where {D,T1,AT1,
 
     return grad
 end
-export numerical_differenciation
+export numerical_differentiation
 
-function numerical_differenciation(f, indices, A::T, B::T, params...) where {D,T1,AT1,NC1,NC2,nw,DI,T<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+function numerical_differentiation(f, indices, A::T, B::T, params...) where {D,T1,AT1,NC1,NC2,nw,DI,T<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
     ϵ = 1e-8
     gradA = zeros(T1, NC1, NC2)
 
@@ -63,4 +63,3 @@ function numerical_differenciation(f, indices, A::T, B::T, params...) where {D,T
 
     return gradA, gradB
 end
-export numerical_differenciation

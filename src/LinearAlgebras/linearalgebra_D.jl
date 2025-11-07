@@ -5,7 +5,7 @@ function LinearAlgebra.axpby!(
     b::Number,
     Y::TY,
 ) where {T1,AT1,NC1,NC2,nw,D,DI,
-        TX<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TY<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+    TX<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TY<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
 
     JACC.parallel_for(
         prod(Y.PN), kernel_D_axpby!, a, X.A, b, Y.A, Val(NC1), Val(NC2), Val(nw), Y.indexer
@@ -3352,7 +3352,8 @@ end
 @inline _preduce(n, op, kern, A, NC1, dindexer, vnw, init::T) where {T} =
     JACC.parallel_reduce(n, op, kern, A, NC1, dindexer, vnw; init=init)::T
 
-function LinearAlgebra.tr(C::LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI}) where {D,T1,AT1,NC1,nw,DI}
+
+Base.@noinline function LinearAlgebra.tr(C::LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI}) where {D,T1,AT1,NC1,nw,DI}
     s = _preduce(prod(C.PN), +, kernel_tr_4D, C.A, Val(NC1), C.indexer, Val(nw), zero(T1))::T1
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
     return s

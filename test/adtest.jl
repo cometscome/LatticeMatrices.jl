@@ -226,19 +226,33 @@ function test_N(NC, dim)
         mul!(C, A, A)
         return realtrace(C)
     end
+    function loss4(A)
+        C = similar(A)
+        D = similar(A)
+        #mul!(C, A, A)
+        traceless_antihermitian!(D, A)
+        mul!(C, D, D)
+        return realtrace(C)
+    end
     println(loss(M3))
     println(loss2(M3, M2, shift))
     println(loss3(M3))
+    println(loss4(M3))
     # @code_llvm loss(M3)
 
+    traceless_antihermitian!(M3, M2)
 
-
+    #return
 
     #Enzyme.autodiff(Reverse, loss2, Duplicated(M3, dM3), Duplicated(M2, dM2), Const(shift))
-    Enzyme.autodiff(Reverse, loss3, Duplicated(M3, dM3))
+    #Enzyme.autodiff(Reverse, loss3, Duplicated(M3, dM3))
+    Enzyme.autodiff(Reverse, loss4, Duplicated(M3, dM3))
+
     indices = (2, 2, 2, 2)
     #gradA, gradB = numerical_differenciation(loss2, indices, M3, M2, shift)
-    gradA = numerical_differenciation(loss3, indices, M3)
+    #gradA = numerical_differentiation(loss3, indices, M3)
+    gradA = numerical_differentiation(loss4, indices, M3)
+
 
     println("=== AD gradA vs numerical gradA ===")
     println("auto diff gradA:")
@@ -287,7 +301,7 @@ end
 function main()
     MPI.Init()
 
-    for NC = 2:3
+    for NC = 2:4
         println("NC = $NC")
         test_N(NC, 4)
     end

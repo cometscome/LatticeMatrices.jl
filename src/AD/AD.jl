@@ -211,3 +211,85 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
 end
 
 
+
+
+function Enzyme.EnzymeRules.augmented_primal(
+    ::RevConfig,
+    ::Const{typeof(traceless_antihermitian!)},
+    ::Type{<:Duplicated},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:LatticeMatrix}
+)
+    @info "entered tlah reverse"
+    traceless_antihermitian!(A.val, B.val)
+    return AugmentedReturn(nothing, A.dval, nothing)
+end
+
+# 出力Aがconstantな場合
+function Enzyme.EnzymeRules.augmented_primal(
+    ::RevConfig,
+    ::Const{typeof(traceless_antihermitian!)},
+    ::Type{<:Const},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:LatticeMatrix}
+)
+    @info "entered tlah reverse"
+    traceless_antihermitian!(A.val, B.val)
+    return AugmentedReturn(nothing, nothing, nothing)
+end
+
+
+
+
+
+function kernel_traceless_antihermitian_add!(i, vout, dA, ::Val{N}, ::Val{nw}, dindexer) where {N,nw}
+    indices = delinearize(dindexer, i, nw)
+    fac1N = 1 / N
+    tri = 0.0
+    for k = 1:N
+        tri += imag(dA[k, k, indices...])
+    end
+    tri *= fac1N
+    for k = 1:N
+        vout[k, k, indices...] +=
+            (imag(dA[k, k, indices...]) - tri) * im
+    end
+
+
+    for k1 = 1:N
+        for k2 = k1+1:N
+            vv =
+                0.5 * (
+                    dA[k1, k2, indices...] -
+                    conj(dA[k2, k1, indices...])
+                )
+            vout[k1, k2, indices...] += vv
+            vout[k2, k1, indices...] += -conj(vv)
+        end
+    end
+end
+
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(traceless_antihermitian!)},
+    ::Type{<:Const}, _tape,         # ← 第3引数は戻り値のアクティビティ型（Const{Nothing}）
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:LatticeMatrix})
+
+    # 上流は「出力Aのshadow」に溜まって返ってくる（dAoutは渡されない）
+    dA = A.dval
+    dA = dA isa Base.RefValue ? dA[] : dA
+    dA === nothing && return (nothing, nothing)
+
+    dB = B.dval
+    dB = dB isa Base.RefValue ? dB[] : dB
+    dB === nothing && return (nothing, nothing)
+
+    NC1 = Val(A.val.NC1)
+    nw = Val(A.val.nw)
+    idx = A.val.indexer
+    Nsites = prod(A.val.PN)
+
+    # dB += Π_ah,0(dA)
+    JACC.parallel_for(Nsites, kernel_traceless_antihermitian_add!, dB.A, dA.A, NC1, nw, idx)
+    return (nothing, nothing)
+end

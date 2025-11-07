@@ -85,7 +85,7 @@ function diracoperatortest(NC, dim)
     a3 = A3[:, :, indices_a...]
 
     clear_matrix!(M1)
-    mul_and_sum!(M1, MU,oneplusγ1, M2,MU2,oneplusγ2, M3)
+    mul_and_sum!(M1, MU, oneplusγ1, M2, MU2, oneplusγ2, M3)
     m1 = M1.A[:, :, indices...]
 
     gamma1 = zeros(ComplexF64, 4, 4)
@@ -98,7 +98,7 @@ function diracoperatortest(NC, dim)
     for i = 1:4
         gamma2[i, i] += 1
     end
-    a1 = u*a2 * transpose(gamma1)+ u2*a3 * transpose(gamma2)
+    a1 = u * a2 * transpose(gamma1) + u2 * a3 * transpose(gamma2)
 
     if myrank == 0
         @test a1 ≈ Array(m1) atol = 1e-6
@@ -116,18 +116,18 @@ function diracoperatortest(NC, dim)
     end
 
     clear_matrix!(M1)
-    mul_and_sum!(M1, MU,oneplusγ1, M2,MU2_p',oneminusγ1, M3_p)
+    mul_and_sum!(M1, MU, oneplusγ1, M2, MU2_p', oneminusγ1, M3_p)
     m1 = M1.A[:, :, indices...]
-    a1 = u*a2 * transpose(gamma1)+ u2_p'*a3_p * transpose(gamma2)
+    a1 = u * a2 * transpose(gamma1) + u2_p' * a3_p * transpose(gamma2)
 
     if myrank == 0
         @test a1 ≈ Array(m1) atol = 1e-6
     end
 
     clear_matrix!(M1)
-    mul_and_sum!(M1, MU,oneplusγ1, M2_p,MU2_p',oneminusγ1, M3_p)
+    mul_and_sum!(M1, MU, oneplusγ1, M2_p, MU2_p', oneminusγ1, M3_p)
     m1 = M1.A[:, :, indices...]
-    a1 = u*a2_p * transpose(gamma1)+ u2_p'*a3_p * transpose(gamma2)
+    a1 = u * a2_p * transpose(gamma1) + u2_p' * a3_p * transpose(gamma2)
 
     if myrank == 0
         @test a1 ≈ Array(m1) atol = 1e-6
@@ -135,14 +135,14 @@ function diracoperatortest(NC, dim)
 
 
 
-    for i=1:10
+    for i = 1:10
         println("i = $i")
         clear_matrix!(M1)
-        @time mul_and_sum!(M1, MU,oneplusγ1, M2,MU2,oneplusγ2, M3)
+        @time mul_and_sum!(M1, MU, oneplusγ1, M2, MU2, oneplusγ2, M3)
         clear_matrix!(M1)
-        @time  mul_and_sum!(M1, MU,oneplusγ1, M2,MU2_p',oneminusγ1, M3_p)
+        @time mul_and_sum!(M1, MU, oneplusγ1, M2, MU2_p', oneminusγ1, M3_p)
         clear_matrix!(M1)
-        @time  mul_and_sum!(M1, MU,oneplusγ1, M2_p,MU2_p',oneminusγ1, M3_p)
+        @time mul_and_sum!(M1, MU, oneplusγ1, M2_p, MU2_p', oneminusγ1, M3_p)
     end
 
 
@@ -459,7 +459,7 @@ function operatortest2(NC, dim)
         @test a1 ≈ Array(m1) atol = 1e-6
     end
 
-    for i=1:10
+    for i = 1:10
         println("i = $i")
         @time mul!(M1, MU, oneplusγ1, M2)
         @time mul!(M1, MU', oneplusγ1, M2)
@@ -841,21 +841,21 @@ function wilsondiractest(NC)
     MU3 = LatticeMatrix(U3, dim, PEs; nw)
     U4 = rand(ComplexF64, NC, NC, gsize...)
     MU4 = LatticeMatrix(U4, dim, PEs; nw)
-    U = (U1,U2,U3,U4)
+    U = (U1, U2, U3, U4)
 
     #ψ_n - κ sum_ν U_n[ν](1 - γν)*ψ_{n+ν} + U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
     κ = 1.0
-    D = WilsonDiracOperator4D([MU1,MU2,MU3,MU4],κ)
+    D = WilsonDiracOperator4D([MU1, MU2, MU3, MU4], κ)
     ψ = rand(ComplexF64, NC, NG, gsize...)
-    Mψ = LatticeMatrix(ψ, dim, PEs; nw, phases=(1,1,1,-1))
-    Mψ = LatticeMatrix(ψ, dim, PEs; nw, phases=(1,1,1,1))
-    mul!(M1,D,Mψ)
+    Mψ = LatticeMatrix(ψ, dim, PEs; nw, phases=(1, 1, 1, -1))
+    Mψ = LatticeMatrix(ψ, dim, PEs; nw, phases=(1, 1, 1, 1))
+    mul!(M1, D, Mψ)
 
 
     onepgamma = zeros(ComplexF64, 4, 4)
     onemgamma = zeros(ComplexF64, 4, 4)
 
-    L = (4-1)*NX*NX*NX+(4-1)*NX*NX+(4-1)*NX + 4
+    L = (4 - 1) * NX * NX * NX + (4 - 1) * NX * NX + (4 - 1) * NX + 4
     indexer = DIndexer(gsize)
     indices = delinearize(indexer, L, nw)
     indices_a = delinearize(indexer, L, 0)
@@ -868,10 +868,10 @@ function wilsondiractest(NC)
     #ψ_n - κ sum_ν U_n[ν](1 - γν)*ψ_{n+ν} + U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
     aψ1 .= aψ
 
-    shifts_p = ((1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1))
-    shifts_m = ((-1,0,0,0), (0,-1,0,0), (0,0,-1,0), (0,0,0,-1))
+    shifts_p = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+    shifts_m = ((-1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (0, 0, 0, -1))
 
-    for ν=1:4
+    for ν = 1:4
         shift_p = shifts_p[ν]
         indices_p = shiftindices(indices, shift_p)
         indices_a_p = shiftindices(indices_a, shift_p)
@@ -888,7 +888,7 @@ function wilsondiractest(NC)
         uν = U[ν][:, :, indices_a...]
 
         #- κ sum_ν U_n[ν](1 - γν)*ψ_{n+ν}
-        aψ1 += -κ* uν * aψ_p * transpose(onemgamma) 
+        aψ1 += -κ * uν * aψ_p * transpose(onemgamma)
 
         shift_m = shifts_m[ν]
         indices_m = shiftindices(indices, shift_m)
@@ -906,7 +906,7 @@ function wilsondiractest(NC)
         #U_{n-ν}[-ν]^+ (1 + γν)*ψ_{n-ν}
         uν_m = U[ν][:, :, indices_a_m...]
         #if ν == 4
-        aψ1 += -κ* uν_m' * aψ_m * transpose(onepgamma)
+        aψ1 += -κ * uν_m' * aψ_m * transpose(onepgamma)
         #end
     end
 
@@ -916,9 +916,9 @@ function wilsondiractest(NC)
     end
 
 
-    for i=1:10
+    for i = 1:10
         println("i = $i")
-        @time mul!(M1,D,Mψ)
+        @time mul!(M1, D, Mψ)
     end
 
 end
@@ -931,6 +931,17 @@ function main()
     end
 
     =#
+
+    for dim = 2:4
+        for NC = 2:4
+            @testset "NC = $NC, dim = $dim" begin
+                println("NC = $NC, dim = $dim")
+                multtest(NC, dim)
+                @time multtest(NC, dim)
+            end
+        end
+    end
+
     for NC = 2:4
         @testset "NC = $NC" begin
             println("NC = $NC")
@@ -950,7 +961,7 @@ function main()
             end
         end
     end
-   
+
     for dim = 2:4
         for NC = 2:4
             @testset "NC = $NC, dim = $dim" begin
@@ -975,15 +986,7 @@ function main()
     end
 
 
-    for dim = 2:4
-        for NC = 2:4
-            @testset "NC = $NC, dim = $dim" begin
-                println("NC = $NC, dim = $dim")
-                multtest(NC, dim)
-                @time multtest(NC, dim)
-            end
-        end
-    end
+
 end
 
 @testset "LatticeMatrices.jl" begin

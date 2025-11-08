@@ -226,32 +226,40 @@ function test_N(NC, dim)
         mul!(C, A, A)
         return realtrace(C)
     end
-    function loss4(A)
-        C = similar(A)
-        D = similar(A)
+    function loss4(A, C, D)
+
         #mul!(C, A, A)
         traceless_antihermitian!(D, A)
-        mul!(C, D, D)
+        expt!(C, D, 0.3)
+        #mul!(C, D, D)
         return realtrace(C)
     end
-    println(loss(M3))
-    println(loss2(M3, M2, shift))
-    println(loss3(M3))
-    println(loss4(M3))
-    # @code_llvm loss(M3)
 
-    traceless_antihermitian!(M3, M2)
 
     #return
 
     #Enzyme.autodiff(Reverse, loss2, Duplicated(M3, dM3), Duplicated(M2, dM2), Const(shift))
     #Enzyme.autodiff(Reverse, loss3, Duplicated(M3, dM3))
-    Enzyme.autodiff(Reverse, loss4, Duplicated(M3, dM3))
+    C = similar(M3)
+    D = similar(M3)
+
+    println(loss(M3))
+    println(loss2(M3, M2, shift))
+    println(loss3(M3))
+    println(loss4(M3, C, D))
+    # @code_llvm loss(M3)
+
+    traceless_antihermitian!(M3, M2)
+
+    dC = similar(M3)
+    dD = similar(M3)
+
+    Enzyme.autodiff(Reverse, loss4, Duplicated(M3, dM3), DuplicatedNoNeed(C, dC), DuplicatedNoNeed(D, dD))
 
     indices = (2, 2, 2, 2)
     #gradA, gradB = numerical_differenciation(loss2, indices, M3, M2, shift)
     #gradA = numerical_differentiation(loss3, indices, M3)
-    gradA = numerical_differentiation(loss4, indices, M3)
+    gradA = numerical_differentiation(loss4, indices, M3, C, D)
 
 
     println("=== AD gradA vs numerical gradA ===")
@@ -259,7 +267,7 @@ function test_N(NC, dim)
     display(dM3.A[:, :, indices...])
     println("numerical gradA:")
     display(gradA)
-
+    println("===  ===")
     #=
     println("=== AD gradB vs numerical gradB ===")
     println("auto diff gradB:")

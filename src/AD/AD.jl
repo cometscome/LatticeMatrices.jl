@@ -233,12 +233,10 @@ function Enzyme.EnzymeRules.augmented_primal(
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:LatticeMatrix}
 )
-    @info "entered tlah reverse"
+    #@info "entered tlah reverse"
     traceless_antihermitian!(A.val, B.val)
     return AugmentedReturn(nothing, nothing, nothing)
 end
-
-
 
 
 

@@ -227,11 +227,31 @@ function test_N(NC, dim)
         return realtrace(C)
     end
     function loss4(A, C, D)
-
         #mul!(C, A, A)
         traceless_antihermitian!(D, A)
         expt!(C, D, 0.3)
         #mul!(C, D, D)
+        return realtrace(C)
+    end
+
+    function loss5(A, C)
+        #mul!(C, A, A)
+        #traceless_antihermitian!(D, A)
+        #expt!(C, D, 0.3)
+        mul!(C, A, A')
+        return realtrace(C)
+    end
+
+
+    function loss6(U1, U2, C, D)
+        #mul!(C, A, A)
+        shift_1 = ntuple(i -> ifelse(i == 1, 1, 0), dim)
+        shift_2 = ntuple(i -> ifelse(i == 2, 1, 0), dim)
+        U2_p = Shifted_Lattice(U2, shift_1)
+        U1_p = Shifted_Lattice(U1, shift_2)
+        mul!(C, U1, U2_p)
+        mul!(D, C, U1_p')
+        mul!(C, D, U2')
         return realtrace(C)
     end
 
@@ -247,6 +267,8 @@ function test_N(NC, dim)
     println(loss2(M3, M2, shift))
     println(loss3(M3))
     println(loss4(M3, C, D))
+    println(loss5(M3, C))
+    println(loss6(M3, M2, C, D))
     # @code_llvm loss(M3)
 
     traceless_antihermitian!(M3, M2)
@@ -254,12 +276,19 @@ function test_N(NC, dim)
     dC = similar(M3)
     dD = similar(M3)
 
-    Enzyme.autodiff(Reverse, loss4, Duplicated(M3, dM3), DuplicatedNoNeed(C, dC), DuplicatedNoNeed(D, dD))
+    #Enzyme.autodiff(Reverse, loss4, Duplicated(M3, dM3), DuplicatedNoNeed(C, dC), DuplicatedNoNeed(D, dD))
+    #Enzyme.autodiff(Reverse, loss5, Duplicated(M3, dM3), DuplicatedNoNeed(C, dC))
+    Enzyme.autodiff(Reverse, loss6, Duplicated(M3, dM3), Duplicated(M2, dM2), DuplicatedNoNeed(C, dC), DuplicatedNoNeed(D, dD))
+
+
 
     indices = (2, 2, 2, 2)
     #gradA, gradB = numerical_differenciation(loss2, indices, M3, M2, shift)
     #gradA = numerical_differentiation(loss3, indices, M3)
-    gradA = numerical_differentiation(loss4, indices, M3, C, D)
+    #gradA = numerical_differentiation(loss4, indices, M3, C, D)
+    #gradA = numerical_differentiation(loss5, indices, M3, C)
+    gradA, gradB = numerical_differentiation(loss6, indices, M3, M2, C, D)
+
 
 
     println("=== AD gradA vs numerical gradA ===")
@@ -268,13 +297,13 @@ function test_N(NC, dim)
     println("numerical gradA:")
     display(gradA)
     println("===  ===")
-    #=
+
     println("=== AD gradB vs numerical gradB ===")
     println("auto diff gradB:")
     display(dM2.A[:, :, indices...])
     println("numerical gradB:")
     display(gradB)
-    =#
+
 
     substitute!(dM2, dM3)
     Wiltinger!(dM3)

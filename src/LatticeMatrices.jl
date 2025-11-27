@@ -2,7 +2,7 @@ module LatticeMatrices
 using MPI
 using LinearAlgebra
 using JACC
-using Enzyme
+#using Enzyme
 
 include("utilities/randomgenerator.jl")
 
@@ -54,7 +54,7 @@ include("Latticeindices.jl")
 include("LatticeMatrices_core.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
-include("AD/AD.jl")
+#include("AD/AD.jl")
 include("AD/ND.jl")
 
 function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}

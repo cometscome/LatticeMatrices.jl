@@ -1,9 +1,10 @@
 name = "LatticeMatrices"
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
 authors = ["Yuki Nagai <cometscome@gmail.com>"]
-version = "0.2.3"
+version = "0.2.4"
 
 [deps]
+Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 JACC = "0979c8fe-16a4-4796-9b82-89a9f10403ea"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -12,7 +13,15 @@ MPIPreferences = "3da0fdf6-3ccc-4f1b-acd9-58baa6c99267"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+[weakdeps]
+Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+
+[extensions]
+LatticeMatricesEnzymeExt = "Enzyme"
+
+
 [compat]
+Enzyme = "0.13.108"
 InteractiveUtils = "1.11"
 JACC = "0.5"
 LinearAlgebra = "1.11"

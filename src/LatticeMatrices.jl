@@ -55,7 +55,7 @@ include("LatticeMatrices_core.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 #include("AD/AD.jl")
-include("AD/ND.jl")
+include("ND.jl")
 
 function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     return x.shift
@@ -374,6 +374,12 @@ function get_PEs(ls::LatticeMatrix{D,T,AT,NC1,NC2}) where {D,T,AT,NC1,NC2}
     return ls.dims
 end
 export get_PEs
+
+function Wiltinger! end
+export Wiltinger!
+function realtrace end
+export realtrace
+
 
 
 

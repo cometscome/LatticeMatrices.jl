@@ -20,13 +20,13 @@ function kernel_Wiltinger!(i, A, dindexer, ::Val{NC1}, ::Val{NC2}, ::Val{nw}) wh
     end
 end
 
-function Wiltinger!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
+function LatticeMatrices.Wiltinger!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
     JACC.parallel_for(prod(C.PN), kernel_Wiltinger!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw))
 end
 export Wiltinger!
 
 
-Base.@noinline function realtrace(C::T) where {T<:LatticeMatrix}
+Base.@noinline function LatticeMatrices.realtrace(C::T) where {T<:LatticeMatrix}
     return real(LinearAlgebra.tr(C))
 end
 export realtrace

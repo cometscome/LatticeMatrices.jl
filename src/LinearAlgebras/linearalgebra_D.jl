@@ -3373,13 +3373,13 @@ end
 
 function LinearAlgebra.tr(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}) where {D,T1,AT1,NC1,NC2,nw,DI}
     @assert NC1 == NC2 "Trace is only defined for square matrices"
-    s = JACC.parallel_reduce(prod(C.PN), +, kernel_tr_4D, C.A, Val(NC1), C.indexer, Val(nw); init=zero(eltype(C.A)))::T1
+    s = JACC.parallel_reduce(prod(C.PN), kernel_tr_4D, C.A, Val(NC1), C.indexer, Val(nw); init=zero(eltype(C.A)), op=+)::T1
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
     return s
 end
 
 @inline _preduce(n, op, kern, A, NC1, dindexer, vnw, init::T) where {T} =
-    JACC.parallel_reduce(n, op, kern, A, NC1, dindexer, vnw; init=init)::T
+    JACC.parallel_reduce(n, kern, A, NC1, dindexer, vnw; init=init, op)::T
 
 
 Base.@noinline function LinearAlgebra.tr(C::LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI}) where {D,T1,AT1,NC1,nw,DI}
@@ -3399,7 +3399,7 @@ end
 end
 
 @inline _preduce(n, op, kern, A, B, NC1, dindexer, vnw, init::T) where {T} =
-    JACC.parallel_reduce(n, op, kern, A, B, NC1, dindexer, vnw; init=init)::T
+    JACC.parallel_reduce(n, kern, A, B, NC1, dindexer, vnw; init=init, op)::T
 
 function LinearAlgebra.tr(C::LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI}, B::LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI}) where {D,T1,AT1,NC1,nw,DI}
     s = _preduce(prod(C.PN), +, kernel_tr_4D, C.A, B.A, Val(NC1), C.indexer, Val(nw), zero(T1))::T1
@@ -3424,8 +3424,8 @@ end
 
 
 function LinearAlgebra.dot(A::LatticeMatrix{D,T1,AT1,NC1,1,nw,DI}, B::LatticeMatrix{D,T2,AT2,NC1,1,nw,DI}) where {D,T1<:Real,T2<:Real,AT1,AT2,NC1,nw,DI}
-    s = JACC.parallel_reduce(prod(A.PN), +, kernel_dot_real_1,
-        A.A, B.A, A.indexer, Val(NC1), Val(nw); init=zero(eltype(A.A)))
+    s = JACC.parallel_reduce(prod(A.PN), kernel_dot_real_1,
+        A.A, B.A, A.indexer, Val(NC1), Val(nw); init=zero(eltype(A.A)), op=+)
     s = MPI.Allreduce(s, MPI.SUM, A.comm)
 end
 
@@ -3461,7 +3461,7 @@ end
 =#
 
 function partial_trace(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, μ::Int, position::Int=1) where {D,T1,AT1,NC1,NC2,nw,DI}
-    s = JACC.parallel_reduce(prod(C.PN), +, kernel_partial_trace_D, C.A, NC1, C.indexer, μ, position, Val(nw); init=zero(eltype(C.A)))
+    s = JACC.parallel_reduce(prod(C.PN), kernel_partial_trace_D, C.A, NC1, C.indexer, μ, position, Val(nw); init=zero(eltype(C.A)), op=+)
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
     return s
 end

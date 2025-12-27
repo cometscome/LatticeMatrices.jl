@@ -311,8 +311,8 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
     T2,AT2,NC2,NG2,nw2}
     a = get_matrix(A)
     s = JACC.parallel_reduce(
-        prod(C.PN), +, kernelfunction, C.A, a, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), C.indexer
-        ; init=zero(eltype(C.A))
+        prod(C.PN), kernelfunction, C.A, a, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), C.indexer
+        ; init=zero(eltype(C.A)), op=+
     )
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
 end
@@ -337,8 +337,8 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
     a = get_matrix(A)
     b = get_matrix(B)
     s = JACC.parallel_reduce(
-        prod(C.PN), +, kernelfunction, C.A, a, b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
-        ; init=zero(eltype(C.A))
+        prod(C.PN), kernelfunction, C.A, a, b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+        ; init=zero(eltype(C.A), op=+)
     )
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
 end
@@ -363,8 +363,8 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
     a = get_matrix(A)
     b = get_matrix(B)
     s = JACC.parallel_reduce(
-        prod(C.PN), +, kernelfunction, C.A, a, b, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
-        ; init=zero(eltype(C.A))
+        prod(C.PN), kernelfunction, C.A, a, b, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
+        ; init=zero(eltype(C.A)), op=+
     )
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
 end

@@ -21,9 +21,9 @@ LatticeMatricesEnzymeExt = "Enzyme"
 
 
 [compat]
-Enzyme = "0.13.108"
+Enzyme = "0.13"
 InteractiveUtils = "1.11"
-JACC = "0.5"
+JACC = "0.6"
 LinearAlgebra = "1.11"
 MPI = "0.20"
 MPIPreferences = "0.1"

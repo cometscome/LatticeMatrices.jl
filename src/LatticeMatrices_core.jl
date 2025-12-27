@@ -10,181 +10,100 @@
 #
 #  Back-end: CPU threads / CUDA / ROCm via JACC.
 ##############################################################################
+using StaticArrays, JACC
 
-using MPI, StaticArrays, JACC
+
 
 abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} end
 
-# ---------------------------------------------------------------------------
-# container  (faces / derived datatypes are GONE)
-# ---------------------------------------------------------------------------
-#struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
-struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
-    nw::Int                          # ghost width
-    phases::SVector{D,T}                 # phases
-    NC1::Int
-    NC2::Int                        # internal DoF
-    gsize::NTuple{D,Int}                # global size
+function get_comm end
 
-    cart::MPI.Comm
-    coords::NTuple{D,Int}
-    dims::NTuple{D,Int}
-    nbr::NTuple{D,NTuple{2,Int}}
-
-    A::AT                           # main array (NC first)
-    buf::Vector{AT}                   # 2D work buffers (minus/plus)
-    myrank::Int
-    PN::NTuple{D,Int}
-    comm::MPI.Comm
-    indexer::DI
-    #stride::NTuple{D,Int}
-end
-
-
-function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
-    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
-        ls.phases,
-        ls.NC1,
-        ls.NC2,
-        ls.gsize,
-        ls.cart,
-        ls.coords,
-        ls.dims,
-        ls.nbr,
-        zero(ls.A),
-        ls.buf,
-        ls.myrank,
-        ls.PN,
-        ls.comm,
-        ls.indexer)
-end
+function LatticeMatrix_construct end
 
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
-function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
-    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0)
-end
-
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
-    return LatticeMatrix_standard(A, dim, PEs; nw, phases, comm0)
-end
-
-# ---------------------------------------------------------------------------
-# constructor + heavy init (still cheap to call)
-# ---------------------------------------------------------------------------
-function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
-
-    # Cartesian grid
-    D = dim
-    T = elementtype
-    dims = PEs #MPI.dims_create(MPI.Comm_size(MPI.COMM_WORLD), D)
-    periodic = ntuple(_ -> true, D)
-    #println(dims)
-    #println(periodic)
-    cart = MPI.Cart_create(comm0, dims; periodic=periodic)
-    coords = MPI.Cart_coords(cart, MPI.Comm_rank(cart))
-
-    #comm  = MPI.Cart_create(MPI.COMM_WORLD, dims; periods=ntuple(_->true,D))
-    #coords= MPI.Cart_coords(cart, MPI.Comm_rank(cart))
-    nbr = ntuple(d -> ntuple(s -> MPI.Cart_shift(cart, d - 1, ifelse(s == 1, -1, 1))[2], 2), D)
-    # local array (NC first)
-    #println(gsize)
-    locS = ntuple(i -> gsize[i] ÷ dims[i] + 2nw, D)
-    loc = (NC1, NC2, locS...)
-    A = JACC.zeros(T, loc...)
-    #stride = ntuple(i -> (i == 1 ? 1 : prod(locS[1:i-1])), D)
-
-    # contiguous buffers for each face
-    buf = Vector{typeof(A)}(undef, 4D)
-    for d in 1:D
-        shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
-        buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
-        buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
-        buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
-        buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
-    end
-
-
-    PN = ntuple(i -> gsize[i] ÷ dims[i], D)
-    #println("LatticeMatrix: $dims, $gsize, $PN, $nw")
-    #indexer = DIndexer(gsize)
-    indexer = DIndexer(PN)
-    DI = typeof(indexer)
-
-    #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
-    #    cart, Tuple(coords), dims, nbr,
-    #    A, buf, MPI.Comm_rank(cart), PN, comm0)
-    return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
-        cart, Tuple(coords), dims, nbr,
-        A, buf, MPI.Comm_rank(cart), PN, comm0, indexer)
-end
-
-function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
-
-    NC1, NC2, NN... = size(A)
-    #println(NN)
-    elementtype = eltype(A)
-
-    @assert dim == length(NN) "Dimension mismatch: expected $dim, got $(length(NN))"
-    #if dim == 1
-    #    gsize = (NN,)
-    #else
-    #    gsize = NN
-    #end
-    gsize = NN
-
-    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs; elementtype, nw, phases, comm0)
-    MPI.Bcast!(A, ls.cart)
-    Acpu = Array(ls.A)
-
-    idx = ntuple(i -> (i == 1 || i == 2) ? Colon() : (ls.nw+1):(size(ls.A, i)-ls.nw), dim .+ 2)
-
-
-
-    idx_global = ntuple(i -> (i == 1 || i == 2) ? Colon() : get_globalrange(ls, i - 2), dim .+ 2)
-
-    #println(idx)
-    #=
-    for i = 1:MPI.Comm_size(ls.cart)
-        if ls.myrank == i
-            println(get_globalrange(ls, 1))
+function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=nothing)
+    if isdefined(Base, :get_extension)
+        ext = Base.get_extension(LatticeMatrices, :LatticeMatricesMPIExt)
+        if ext !== nothing
+            #println("MPI extension is available")
+            comm_i = get_comm(comm0)
+            return LatticeMatrix_construct(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0=comm_i)
+            #return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm_i)
         end
-        MPI.Barrier(ls.cart)
     end
-    =#
-
-
-
-    #println(idx_global)
-    Acpu[idx...] = A[idx_global...]
-    #println(Acpu)
-
-
-    Agpu = JACC.array(Acpu)
-    ls.A .= Agpu
-
-    set_halo!(ls)
-    #println(ls.A)
-
-    return ls
-
-    #coords_r = MPI.Cart_coords(ls.cart, ls.myrank)
-    # 0-based coords
-    #println(coords_r)
 
 end
+
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing)
+    if isdefined(Base, :get_extension)
+        ext = Base.get_extension(LatticeMatrices, :LatticeMatricesMPIExt)
+        if ext !== nothing
+            #println("MPI extension is available")
+            comm_i = get_comm(comm0)
+            return LatticeMatrix_construct(A, dim, PEs; nw, phases, comm0=comm_i)
+        end
+    end
+end
+
+
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims; nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm)
 end
 
+function get_nprocs(x)
+    error("get_nprocs is not implemented for $(typeof(x))")
+end
+
+function get_myrank(x)
+    error("get_myrank is not implemented for $(typeof(x))")
+end
+
+function barrier(x)
+    error("barrier is not implemented for $(typeof(x))")
+end
+
+function reduce_sum(x, b, rank)
+    error("reducesum is not implemented for $(typeof(x))")
+end
+
+function get_coords_r(x)
+    error("get_coords_r is not implemented for $(typeof(x))")
+end
+
+function get_coords_r(x, r)
+    error("get_coords_r is not implemented for $(typeof(x))")
+end
+
+function isend_L(x, bufSM, rankM, d)
+    error("isend_L is not implemented for $(typeof(x))")
+end
+
+function irecv_L!(x, bufRP, rankP, d)
+    error("irecv_L! is not implemented for $(typeof(x))")
+end
+
+function recv_L!(x, recvbuf, r, tag)
+    error("recv_L! is not implemented for $(typeof(x))")
+end
+
+function send_L(x, sendbuf, root, tag)
+    error("send_L is not implemented for $(typeof(x))")
+end
+
+function bcast_L!(x, G, root)
+    error("bcast_L! is not implemented for $(typeof(x))")
+end
 
 
 function Base.display(ls::TL) where {T,AT,NC1,NC2,TL<:LatticeMatrix{4,T,AT,NC1,NC2}}
 
     NN = size(ls.A)
-    for rank = 0:MPI.Comm_size(ls.cart)-1
+    nprocs = get_nprocs(ls)
+
+    for rank = 0:nprocs-1 #MPI.Comm_size(ls.cart)-1
         if ls.myrank == rank
             println("LatticeMatrix (rank $rank):")
             indices = map(d -> get_globalrange(ls, d), 1:4)
@@ -203,7 +122,8 @@ function Base.display(ls::TL) where {T,AT,NC1,NC2,TL<:LatticeMatrix{4,T,AT,NC1,N
             end
             #display(ls.A[:, :, ls.nw+1:end-ls.nw, ls.nw+1:end-ls.nw, ls.nw+1:end-ls.nw, ls.nw+1:end-ls.nw])
         end
-        MPI.Barrier(ls.cart)
+        barrier(ls)
+        #MPI.Barrier(ls.cart)
     end
 end
 
@@ -216,14 +136,16 @@ function allsum(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     local_sum = sum(ls.A[indices...])
     #local_sum = sum(ls.A[:, :, ls.nw+1:ls.nw+NN[1], ls.nw+1:ls.nw+NN[2], ls.nw+1:ls.nw+NN[3], ls.nw+1:ls.nw+NN[4]])
     # reduce to all processes
-    global_sum = MPI.Reduce(local_sum, MPI.SUM, 0, ls.cart)
+    global_sum = reduce_sum(ls, local_sum, 0)#.cart)
+    #global_sum = MPI.Reduce(local_sum, MPI.SUM, 0, ls.cart)
     return global_sum
 end
 
 export allsum
 
 function get_globalrange(ls::TL, dim) where {TL<:LatticeMatrix}
-    coords_r = MPI.Cart_coords(ls.cart, ls.myrank)
+    #coords_r = MPI.Cart_coords(ls.cart, ls.myrank)
+    coords_r = get_coords_r(ls)
     istart = get_globalindex(ls, 1, dim, coords_r[dim])
     #if dim == 1
     #    println(" $( ls.PN[dim])")
@@ -291,106 +213,7 @@ function _ghostMatrix(A, nw, d, side::Symbol)
 end
 
 
-##############################################################################
-# exchange_dim!  –  no-derived-datatype version that never aliases buffers
-#                   (works with MPI.jl v0.20.x)
-#
-#  * four contiguous buffers per spatial dimension:
-#        bufSM (send minus), bufRM (recv minus),
-#        bufSP (send plus) , bufRP (recv plus)
-#  * send-buffers are filled with `_faceMatrix`, optionally phase-multiplied,
-#    then passed to MPI.Isend
-#  * recv-buffers are passed to MPI.Irecv!  and finally copied into `_ghostMatrix`
-##############################################################################
-function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
-    # buffer indices
-    iSM, iRM = 4d - 3, 4d - 2
-    iSP, iRP = 4d - 1, 4d
-
-    bufSM, bufRM = ls.buf[iSM], ls.buf[iRM]      # minus side: send / recv
-    bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]      # plus  side: send / recv
-
-    rankM, rankP = ls.nbr[d]                     # neighbour ranks
-    me = ls.myrank
-    reqs = MPI.Request[]
-
-    # --- self-neighbor on BOTH sides (happens iff dims[d] == 1) -------------
-    if rankM == me && rankP == me
-        # minus ghost <= plus face
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :minus),
-            _faceMatrix(ls.A, ls.nw, d, :plus))
-        _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :minus), ls.phases[d])
-
-        # plus  ghost <= minus face
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :plus),
-            _faceMatrix(ls.A, ls.nw, d, :minus))
-        _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :plus), ls.phases[d])
-
-        # no MPI in the self-case; just compute the interior and return
-        compute_interior!(ls)
-        return
-    end
-
-
-    baseT = MPI.Datatype(eltype(ls.A))           # elementary datatype
-    #println("M ", rankM, "\t $me")
-    MPI.Barrier(ls.cart)
-    #println("P ", rankP, "\t $me")
-    # ---------------- minus direction -------------------
-    if rankM == me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :minus),
-            _faceMatrix(ls.A, ls.nw, d, :minus))
-        if ls.coords[d] == 0                     # wrap ⇒ phase
-            _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :minus), ls.phases[d])
-        end
-    else
-        copy!(bufSM, _faceMatrix(ls.A, ls.nw, d, :minus))
-        if ls.coords[d] == 0
-            _mul_phase!(bufSM, ls.phases[d])
-        end
-
-        cnt = length(bufSM)
-
-        push!(reqs, MPI.Isend(bufSM, rankM, d, ls.cart))#;
-        #count=cnt, datatype=baseT))
-
-        push!(reqs, MPI.Irecv!(bufRM, rankM, d + D, ls.cart))#;
-        #count=cnt, datatype=baseT))
-    end
-
-    # ---------------- plus direction --------------------
-    if rankP == me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :plus),
-            _faceMatrix(ls.A, ls.nw, d, :plus))
-        if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :plus), ls.phases[d])
-        end
-    else
-        copy!(bufSP, _faceMatrix(ls.A, ls.nw, d, :plus))
-        if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(bufSP, ls.phases[d])
-        end
-
-        cnt = length(bufSP)
-
-        push!(reqs, MPI.Isend(bufSP, rankP, d + D, ls.cart))#;
-        #count=cnt, datatype=baseT))
-        push!(reqs, MPI.Irecv!(bufRP, rankP, d, ls.cart))
-        #count=cnt, datatype=baseT))
-    end
-
-    # -------- overlap bulk computation -----------------
-    compute_interior!(ls)
-    isempty(reqs) || MPI.Waitall!(reqs)
-
-    # -------- copy received data into ghosts -----------
-    if rankM != me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :minus), bufRM)
-    end
-    if rankP != me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :plus), bufRP)
-    end
-end
+function exchange_dim! end
 
 # ---------------------------------------------------------------------------
 # hooks (user overrides)
@@ -407,9 +230,11 @@ export LatticeMatrix
 # ---------------------------------------------------------------------------
 function gather_matrix(ls::TL;
     root::Int=0) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
-    comm = ls.cart
-    me = ls.myrank
-    nprocs = MPI.Comm_size(comm)
+    #comm = ls.cart
+    #me = ls.myrank
+    me = get_myrank(ls)
+    nprocs = get_nprocs(ls)
+    #nprocs = MPI.Comm_size(comm)
 
     # 1) Build view of the interior block (without halos)
     #    Spatial dims are shifted by +2 because array layout = (NC1, NC2, X, Y, Z, ...)
@@ -450,8 +275,10 @@ function gather_matrix(ls::TL;
         recvbuf = similar(sendbuf)  # reuse buffer
         for r in 0:nprocs-1
             r == root && continue
-            MPI.Recv!(recvbuf, r, tag, comm)
-            coords_r = Tuple(MPI.Cart_coords(comm, r))  # 0-based coords
+            #MPI.Recv!(recvbuf, r, tag, comm)
+            recv_L!(ls, recvbuf, r, tag)
+            #coords_r = Tuple(MPI.Cart_coords(comm, r))  # 0-based coords
+            coords_r = Tuple(get_coords_r(ls, r))  # 0-based coords
             blk = reshape(recvbuf, size(local_block_cpu))
             _place_block!(G, blk, coords_r)
         end
@@ -459,7 +286,8 @@ function gather_matrix(ls::TL;
     else
         # Non-root: send and return nothing
         tag = 900
-        MPI.Send(sendbuf, root, tag, comm)
+        send_L(ls, sendbuf, root, tag)
+        #MPI.Send(sendbuf, root, tag, comm)
         return nothing
     end
 end
@@ -479,9 +307,11 @@ export gather_matrix
 # ---------------------------------------------------------------------------
 function gather_and_bcast_matrix(ls::TL;
     root::Int=0) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
-    comm = ls.cart
-    me = ls.myrank
-    nprocs = MPI.Comm_size(comm)
+    #comm = ls.cart
+    #me = ls.myrank
+    #nprocs = MPI.Comm_size(comm)
+    me = get_myrank(ls)
+    nprocs = get_nprocs(ls)
 
     # --- 1) local interior (no halo) on HOST ---
     interior_idx = ntuple(i -> (i <= 2 ? Colon() : (ls.nw+1):(ls.nw+ls.PN[i-2])), D + 2)
@@ -514,14 +344,17 @@ function gather_and_bcast_matrix(ls::TL;
         recvbuf = similar(sendbuf)
         for r in 0:nprocs-1
             r == root && continue
-            MPI.Recv!(recvbuf, r, 900, comm)
-            coords_r = Tuple(MPI.Cart_coords(comm, r))
+            #MPI.Recv!(recvbuf, r, 900, comm)
+            recv_L!(ls, recvbuf, r, 900)
+            #coords_r = Tuple(MPI.Cart_coords(comm, r))
+            coords_r = Tuple(get_coords_r(ls, r))  # 0-based coords
             blk = reshape(recvbuf, size(local_block_cpu))
             _place_block!(G, blk, coords_r)
         end
     else
         # non-root: send local block
-        MPI.Send(sendbuf, root, 900, comm)
+        #MPI.Send(sendbuf, root, 900, comm)
+        send_L(ls, sendbuf, root, 900)
     end
 
     # --- 3) broadcast ONLY the data (shape is deterministic) ---
@@ -529,8 +362,8 @@ function gather_and_bcast_matrix(ls::TL;
     if me != root
         G = Array{T}(undef, gshape)          # allocate receive buffer
     end
-    MPI.Bcast!(G, root, comm)                # broadcast the global array
-
+    #MPI.Bcast!(G, root, comm)                # broadcast the global array
+    bcast_L!(ls, G, root)
     return G
 end
 export gather_and_bcast_matrix

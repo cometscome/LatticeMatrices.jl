@@ -1273,6 +1273,35 @@ end
     end
 end
 
+function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::TA) where {D,T1,AT1,NC1,NC2,nw,DI,TA<:AbstractArray}
+    n1, n2, nsize... = size(C.A)
+    n1A, n2A, nsizeA... = size(A)
+    @assert n1 == n1A && n2 == n2A "size of A is wrong!"
+    @assert length(nsizeA) == D "dimension of A is wrong!"
+    for i = 1:D
+        @assert nsize[i] == nsizeA[i] + 2nw "lattice size of A is wrong!"
+    end
+    At = JACC.array(A)
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_4Dsubstitute_matrix!, C.A, At, Val(NC1), Val(NC2), Val(nw), C.indexer
+    )
+    #set_halo!(C)
+end
+
+@inline function kernel_4Dsubstitute_matrix!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_0 = delinearize(dindexer, i, 0)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = A[ic, jc, indices_0...]
+        end
+    end
+end
+
+
+
+
 function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Shifted_Lattice{L,D}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
     shift = get_shift(A)

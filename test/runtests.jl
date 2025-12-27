@@ -5,7 +5,7 @@ import JACC
 using LinearAlgebra
 using InteractiveUtils
 JACC.@init_backend
-using MPI, JACC, StaticArrays
+using JACC, StaticArrays
 
 function dotproduct(i, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
     indices = delinearize(dindexer, i, nw)
@@ -509,6 +509,19 @@ function multtest(NC, dim)
     A2 = rand(ComplexF64, NC, NC, gsize...)
     M2 = LatticeMatrix(A2, dim, PEs; nw)
 
+    substitute!(M1, A2)
+    L = 1
+    indexer = DIndexer(gsize)
+    indices = delinearize(indexer, L, nw)
+    indices_a = delinearize(indexer, L, 0)
+    a2 = A2[:, :, indices_a...]
+    m1 = M1.A[:, :, indices...]
+    if myrank == 0
+        @test a2 ≈ Array(m1) atol = 1e-6
+    end
+
+    #return
+
 
     A3 = rand(ComplexF64, NC, NC, gsize...)
     M3 = LatticeMatrix(A3, dim, PEs; nw)
@@ -608,13 +621,6 @@ function multtest(NC, dim)
         M1g = LatticeMatrix(A1g, dim, PEs; nw)
         M2g = LatticeMatrix(A2g, dim, PEs; nw)
 
-        s = JACC.parallel_reduce(dotproduct, M1g, M2g)
-        #mul!(a1, c)
-        if myrank == 0
-            #display(a1g)
-            #display(Array(m1))
-            #println(s)
-        end
 
 
 

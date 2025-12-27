@@ -1,8 +1,9 @@
 module LatticeMatrices
-using MPI
+#using MPI
 using LinearAlgebra
 using JACC
 #using Enzyme
+
 
 include("utilities/randomgenerator.jl")
 

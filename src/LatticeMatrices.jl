@@ -379,7 +379,21 @@ function Wiltinger! end
 export Wiltinger!
 function realtrace end
 export realtrace
+function Wiltinger_derivative! end
+export Wiltinger_derivative!
 
+struct DiffArg{T}
+    x::T
+end
+struct NoDiffArg{T}
+    x::T
+end
+# User-facing helpers
+diff(x) = DiffArg(x)      # argument should be differentiated
+nodiff(x) = NoDiffArg(x)    # argument is treated as constant
+export diff, nodiff
+function toann end
+export toann
 
 
 

@@ -133,7 +133,7 @@ end
 @generated function delinearize(
     ::DIndexer{D,dims,strides}, L::Integer, offset::Integer=0
 ) where {D,dims,strides}
-    # 返すブロックを組み立て
+    # Build the block to return
     body = Expr(:block,
         :(Base.@_inline_meta true),
         :(r   = Int(L) - 1),
@@ -142,13 +142,13 @@ end
 
     comps = Vector{Any}(undef, D)
 
-    # d = D..2 まで割り算
+    # Divide for d = D..2
     for d = D:-1:2
         sd = Int(strides[d])
         push!(body.args, :(q, r = Base.divrem(r, $(sd))))
         comps[d] = :(q + off + 1)
     end
-    # d = 1 は余り
+    # Remainder for d = 1
     comps[1] = :(r + off + 1)
 
     push!(body.args, Expr(:tuple, comps...))
@@ -156,7 +156,7 @@ end
 end
 =#
 
-# ラッパ（ここに @inline を付けるのはOK）
+# Wrapper (OK to add @inline here)
 @inline function delinearize(
     idx::DIndexer{D,dims,strides}, L::Integer, ::Val{nw}
 ) where {D,dims,strides,nw}

@@ -16,6 +16,7 @@ function kernel_Wiltinger!(i, A, dindexer, ::Val{NC1}, ::Val{NC2}, ::Val{nw}) wh
         for ic = 1:NC1
             X = real(A[ic, jc, indices...])
             Y = imag(A[ic, jc, indices...])
+            #A[jc, ic, indices...] = Complex(0.5 * X, -0.5 * Y)  # ∂/∂A
             A[ic, jc, indices...] = Complex(0.5 * X, -0.5 * Y)  # ∂/∂A
         end
     end
@@ -191,7 +192,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     dAstruct = A.dval isa Base.RefValue ? A.dval[] : A.dval
     dAstruct === nothing && return (nothing, nothing, nothing)
 
-    # 便利ハンドル
+    # Handy handles
     dAval = dAstruct.A
     dBval = dB.val.A
     N1 = Val(A.val.NC1)
@@ -226,7 +227,7 @@ function Enzyme.EnzymeRules.augmented_primal(
     return AugmentedReturn(nothing, A.dval, nothing)
 end
 
-# 出力Aがconstantな場合
+# When output A is constant
 function Enzyme.EnzymeRules.augmented_primal(
     ::RevConfig,
     ::Const{typeof(traceless_antihermitian!)},
@@ -270,11 +271,11 @@ end
 
 function Enzyme.EnzymeRules.reverse(::RevConfig,
     ::Const{typeof(traceless_antihermitian!)},
-    ::Type{<:Const}, _tape,         # ← 第3引数は戻り値のアクティビティ型（Const{Nothing}）
+    ::Type{<:Const}, _tape,         # Third arg is the return activity type (Const{Nothing})
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:LatticeMatrix})
 
-    # 上流は「出力Aのshadow」に溜まって返ってくる（dAoutは渡されない）
+    # Upstream accumulates in the "shadow of output A" (dAout is not passed)
     dA = A.dval
     dA = dA isa Base.RefValue ? dA[] : dA
     dA === nothing && return (nothing, nothing)

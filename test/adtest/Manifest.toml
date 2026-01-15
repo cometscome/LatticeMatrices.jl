@@ -2,7 +2,7 @@
 
 julia_version = "1.11.7"
 manifest_format = "2.0"
-project_hash = "01c82758f73cd3429f05cb914b9aa8b4521ac660"
+project_hash = "a1df0ad81702a7c2342978ab8f50db5262ba9ebe"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -176,7 +176,7 @@ version = "0.0.38+0"
 deps = ["InteractiveUtils", "JACC", "LinearAlgebra", "MPI", "MPIPreferences", "StaticArrays", "Test"]
 path = "../.."
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
-version = "0.2.5"
+version = "0.2.6"
 weakdeps = ["Enzyme"]
 
     [deps.LatticeMatrices.extensions]
@@ -326,6 +326,11 @@ deps = ["Pkg"]
 git-tree-sha1 = "f9501cc0430a26bc3d156ae1b5b0c1b47af4d6da"
 uuid = "eebad327-c553-4316-9ea0-9fa01ccd7688"
 version = "0.3.3"
+
+[[deps.PreallocatedArrays]]
+git-tree-sha1 = "0b830bea41ead6351512cf1aaba3e3d6f745238b"
+uuid = "f9710d63-ac16-4fea-bcef-3ac1fb623b0a"
+version = "0.0.1"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]

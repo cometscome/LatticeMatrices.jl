@@ -25,20 +25,20 @@ end
 #function tr2(z)
 #    return tr(z)
 #end
-# tr の augmented_primal：前進は既存を呼ぶだけ。テープ不要。
+# tr augmented_primal: forward pass just calls the existing one. No tape needed.
 function augmented_primal(cfg::RevConfig,
     ::Const{typeof(tr2)},
     ::Type{<:Active},
     C::Annotation)
     println("ap")
     #error("dd")
-    # 前進（needs_primal を見る最適化は省略可）
+    # Forward pass (can omit the needs_primal optimization)
     s = LinearAlgebra.tr(C.val)
-    # tr の出力はスカラーなので shadow は nothing、tape も不要
+    # tr output is scalar, so shadow is nothing and no tape is needed
     return AugmentedReturn(s, nothing, nothing)
 end
 
-# 逆伝播カーネル：Ā[ic,ic,indices...] += ds
+# Reverse kernel: Ā[ic,ic,indices...] += ds
 @inline function kernel_tr_pullback_4D(i, dA, ::Val{NC1}, dindexer, ::Val{nw}, dsval) where {NC1,nw}
     indices = delinearize(dindexer, i, nw)
     @inbounds for ic = 1:NC1
@@ -50,7 +50,7 @@ end
 
 
 
-# tr の reverse：上流スカラー ds を、各サイトの対角へ加算
+# tr reverse: add upstream scalar ds to each site's diagonal
 function Enzyme.EnzymeRules.reverse(cfg,
     ::Const{typeof(tr2)},
     ds, _tape,
@@ -58,7 +58,7 @@ function Enzyme.EnzymeRules.reverse(cfg,
     #C::Duplicated{<:LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI}}) where {D,T1,AT1,NC1,nw,DI}
     println("re")
     error("dd")
-    # 各サイトは互いに別の要素へ書き込むためレースなし
+    # No race: each site writes to distinct elements
     JACC.parallel_for(prod(C.val.PN)) do i
         kernel_tr_pullback_4D(i, C.dval.A, Val(NC1), C.val.indexer, Val(nw), ds.val)
     end
@@ -66,7 +66,7 @@ function Enzyme.EnzymeRules.reverse(cfg,
 end
 =#
 
-# ===== あなたの tr 本体（既存）を呼ぶ loss =====
+# ===== Loss calling your existing tr implementation =====
 
 Base.@noinline function loss(A::AbstractMatrix{<:Real})::Float64
     s = 0.0
@@ -78,14 +78,14 @@ end
 
 function Enzyme.EnzymeRules.augmented_primal(cfg::RevConfig,
     ::Const{typeof(tr2)},
-    ::Type{<:Active},                # 出力は Active（ここでは Float64 側に流れる）
-    C::Annotation{T}) where {T<:LatticeMatrix} # Duplicated/MixedDuplicated/Const すべてを許容
+    ::Type{<:Active},                # Output is Active (flows to Float64 here)
+    C::Annotation{T}) where {T<:LatticeMatrix} # Allow Duplicated/MixedDuplicated/Const
     if needs_primal(cfg)
-        # Enzyme が「primal が要る」と言っているときだけ計算して返す
+        # Compute only when Enzyme says it needs the primal
         s = tr2(C.val)               # ComplexF64 でOK
         return AugmentedReturn(s, nothing, nothing)
     else
-        # いまのクラッシュはここ：Nothing を返す必要がある
+        # Current crash is here: must return Nothing
         return AugmentedReturn(nothing, nothing, nothing)
     end
 end
@@ -93,14 +93,14 @@ end
 
 function Enzyme.EnzymeRules.augmented_primal(cfg::RevConfig,
     ::Const{typeof(tr2)},
-    ::Type{<:Active},                # 出力は Active（ここでは Float64 側に流れる）
-    C::Annotation{<:AbstractMatrix}) # Duplicated/MixedDuplicated/Const すべてを許容
+    ::Type{<:Active},                # Output is Active (flows to Float64 here)
+    C::Annotation{<:AbstractMatrix}) # Allow Duplicated/MixedDuplicated/Const
     if needs_primal(cfg)
-        # Enzyme が「primal が要る」と言っているときだけ計算して返す
+        # Compute only when Enzyme says it needs the primal
         s = tr(C.val)               # ComplexF64 でOK
         return AugmentedReturn(s, nothing, nothing)
     else
-        # いまのクラッシュはここ：Nothing を返す必要がある
+        # Current crash is here: must return Nothing
         return AugmentedReturn(nothing, nothing, nothing)
     end
 end
@@ -110,7 +110,7 @@ function reverse(cfg::RevConfig,
     ds::Active, _tape,
     C::Annotation{<:AbstractMatrix})
     @info ">>> tr reverse rule ENTERED" ds = ds.val typeofC = typeof(C.val)
-    # ここでは “必ず呼ばれた”ことだけ確認。実装は後で本物に差し替え
+    # Here we only confirm it was called; replace with real implementation later
     n, _ = size(C.val)
     for i in 1:n
         C.dval[i, i] += ds.val
@@ -201,16 +201,16 @@ function test_N(NC, dim)
     dM3 = similar(M3)
     f(M) = real(tr(M))
 
-    # 実スカラー損失にしておく（例：real ∘ tr）
+    # Use a real scalar loss (e.g., real ∘ tr)
     #loss(C) = real(tr2(C))
 
     #display(methods(Enzyme.EnzymeRules.reverse))
 
-    dM3 = similar(M3)  # Aだけゼロで、メタはCを踏襲する勾配用バッファ
+    dM3 = similar(M3)  # Gradient buffer: zero A, metadata follows C
 
     #M3 = rand(ComplexF64, 4, 4)
     #dM3 = zero(M3)
-    loss(C) = realtrace(C)  # 実スカラーにするのがコツ
+    loss(C) = realtrace(C)  # Key: make it a real scalar
     shift = ntuple(i -> ifelse(i == 1, -1, 0), dim)
 
 
@@ -313,8 +313,8 @@ function test_N(NC, dim)
 
     #Enzyme.autodiff(Reverse, loss, Duplicated(M3, dM3))
     #display(dM3)
-    # dC.A には複素の“実・虚”勾配が溜まっている
-    # ──ウィルティンガー勾配が欲しければ最後に変換──
+    # dC.A holds complex "real/imag" gradients
+    # If you want Wirtinger gradients, convert at the end
     GX, GY = real.(dM2.A), imag.(dM2.A)              # ∂L/∂Re(A), ∂L/∂Im(A)
     ∂L_∂A = Complex.(0.5 .* GX, -0.5 .* GY)  # (∂X - i∂Y)/2
     ∂L_∂Aconj = Complex.(0.5 .* GX, 0.5 .* GY)  # (∂X + i∂Y)/2

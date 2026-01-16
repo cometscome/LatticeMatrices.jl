@@ -69,36 +69,39 @@ function loss_plaquette(U, shift1, shift2)
     return realtrace(E)
 end
 
-function run_case(label, f, U, dU, indices_mid, indices_halo)
+function _report_diff(label, dU, dUn, indices; tol=1e-6)
+    diffs = dU.A[:, :, indices...] .- dUn
+    maxerr = maximum(abs, diffs)
+    if maxerr > tol
+        println(label, " max |diff| = ", maxerr)
+        println("AD:")
+        display(dU.A[:, :, indices...])
+        println("Numerical:")
+        display(dUn)
+        println("Diff:")
+        display(diffs)
+    else
+        println(label, " max |diff| = ", maxerr)
+    end
+    return nothing
+end
+
+function run_case(label, f, U, dU, indices_mid, indices_halo; tol=1e-5)
     println("=== ", label, " ===")
 
     clear_matrix!.(dU)
     dUn_mid = Wiltinger_numerical_derivative(f, indices_mid, U)
     Wiltinger_derivative!(f, U, dU)
 
-    println("AD grad (U1) at mid indices:")
-    display(dU[1].A[:, :, indices_mid...])
-    println("Numerical grad (U1) at mid indices:")
-    display(dUn_mid[1])
-
-    println("AD grad (U2) at mid indices:")
-    display(dU[2].A[:, :, indices_mid...])
-    println("Numerical grad (U2) at mid indices:")
-    display(dUn_mid[2])
+    _report_diff("U1 mid", dU[1], dUn_mid[1], indices_mid; tol)
+    _report_diff("U2 mid", dU[2], dUn_mid[2], indices_mid; tol)
 
     clear_matrix!.(dU)
     dUn_halo = Wiltinger_numerical_derivative(f, indices_halo, U)
     Wiltinger_derivative!(f, U, dU)
 
-    println("AD grad (U1) at halo indices:")
-    display(dU[1].A[:, :, indices_halo...])
-    println("Numerical grad (U1) at halo indices:")
-    display(dUn_halo[1])
-
-    println("AD grad (U2) at halo indices:")
-    display(dU[2].A[:, :, indices_halo...])
-    println("Numerical grad (U2) at halo indices:")
-    display(dUn_halo[2])
+    _report_diff("U1 halo", dU[1], dUn_halo[1], indices_halo; tol)
+    _report_diff("U2 halo", dU[2], dUn_halo[2], indices_halo; tol)
 end
 
 function main()

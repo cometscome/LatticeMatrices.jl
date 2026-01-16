@@ -254,7 +254,7 @@ end
             for jc = 1:NC2
                 acc += conj(dC[ic, jc, indices...]) * B[jc, kc, indices...]
             end
-            dA[kc, ic, indices...] += acc
+            dA[kc, ic, indices...] += conj(acc)
         end
     end
 end
@@ -267,7 +267,7 @@ end
             for ic = 1:NC1
                 acc += conj(dC[ic, jc, indices...]) * A[kc, ic, indices...]
             end
-            dB[jc, kc, indices...] += acc
+            dB[jc, kc, indices...] += conj(acc)
         end
     end
 end

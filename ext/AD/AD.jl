@@ -49,6 +49,18 @@ function Enzyme.EnzymeRules.augmented_primal(cfg::RevConfig,
     end
 end
 
+function Enzyme.EnzymeRules.augmented_primal(cfg::RevConfig,
+    ::Const{typeof(realtrace)},
+    ::Type{<:Const},
+    C::Annotation{T}) where {T<:LatticeMatrix}
+    if needs_primal(cfg)
+        s = realtrace(C.val)
+        return AugmentedReturn(s, nothing, nothing)
+    else
+        return AugmentedReturn(nothing, nothing, nothing)
+    end
+end
+
 
 @inline function kernel_tr_pullback_4D(i, dA, ::Val{NC1}, dindexer, ::Val{nw}, dsval) where {NC1,nw}
     indices = delinearize(dindexer, i, nw)
@@ -63,18 +75,22 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
     ::Const{typeof(realtrace)},
     ds::Active, _tape,
     C::Annotation{T}) where {T<:LatticeMatrix}
-    #s = tr(C.val)
-    #@info ">>> tr reverse rule ENTERED" ds = ds.val typeofC = typeof(C.val)
-    #@info typeof(C.dval)
-    #println("entered reverse for realtrace")
 
-    dstruct = C.dval isa Base.RefValue ? C.dval[] : C.dval
+    dstruct = _getshadow(C.dval)
+    dstruct isa LatticeMatrix || return (nothing,)
     NC = Val(C.val.NC1)
     nw = Val(C.val.nw)
 
     JACC.parallel_for(
         prod(C.val.PN), kernel_tr_pullback_4D, dstruct.A, NC, C.val.indexer, nw, ds.val
     )
+    return (nothing,)
+end
+
+function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
+    ::Const{typeof(realtrace)},
+    ::Type{<:Const}, _tape,
+    C::Annotation{T}) where {T<:LatticeMatrix}
     return (nothing,)
 end
 
@@ -276,7 +292,7 @@ end
 
 
 _getshadow(x) = nothing
-_getshadow(x::Base.RefValue) = x[]
+_getshadow(x::Base.RefValue) = (x[] isa Type ? nothing : x[])
 _getshadow(x::LatticeMatrix) = x
 _getshadow(::Nothing) = nothing
 _getshadow(::Type) = nothing
@@ -287,6 +303,43 @@ _getshadow_data(x::LatticeMatrix) = x
 _getshadow_data(x::Shifted_Lattice) = x.data
 _getshadow_data(x::Adjoint_Lattice) = _getshadow_data(x.data)
 
+function Enzyme.EnzymeRules.overwritten(::Const{typeof(LinearAlgebra.mul!)},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation,
+    B::Annotation)
+    return (true, false, false)
+end
+
+@inline function _getshadow_out(dCout, C::Annotation{<:LatticeMatrix})
+    if dCout isa Active
+        return _getshadow(dCout.val)
+    elseif dCout isa Base.RefValue
+        return dCout[]
+    elseif dCout === nothing
+        return _getshadow(C.dval)
+    else
+        return dCout
+    end
+end
+
+@inline function _ad_debug_enabled()
+    return get(ENV, "LM_AD_DEBUG", "") == "1"
+end
+
+@inline function _debug_mul_context(tag, dCout, C, A, B, dA_struct, dB_struct)
+    _ad_debug_enabled() || return nothing
+    println(tag, " dCout=", typeof(dCout),
+        " C.dval=", typeof(C.dval),
+        " A=", typeof(A.val),
+        " B=", typeof(B.val),
+        " dA=", typeof(dA_struct),
+        " dB=", typeof(dB_struct))
+    return nothing
+end
+
+@inline function _should_zero_dC(dCout)
+    return !(dCout === nothing || dCout isa Type)
+end
 
 @inline function _zero_shadow!(C::LatticeMatrix)
     JACC.parallel_for(
@@ -305,16 +358,17 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     B::Annotation{<:LatticeMatrix})
 
     #println("entered mul! reverse for LatticeMatrix")
-    dC_struct = _getshadow(C.dval)
-    if dC_struct === nothing
-        return (nothing, nothing, nothing)
-    end
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
     dCval = dC_struct.A
 
     dA_struct = _getshadow(A.dval)
     dB_struct = _getshadow(B.dval)
     dAval = (dA_struct === nothing) ? nothing : dA_struct.A
     dBval = (dB_struct === nothing) ? nothing : dB_struct.A
+
+    _debug_mul_context("mul! LatticeMatrix", dCout, C, A, B, dA_struct, dB_struct)
 
     Aval, Bval = A.val.A, B.val.A
 
@@ -338,8 +392,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
             Nsites, kernel_Dmatrix_mulAdagBadd!, dBval, Aval, dCval, NC1, NC2, NC3, nw, idxr
         )
     end
-    _zero_shadow!(dC_struct)
-
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 
@@ -502,7 +555,8 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:Shifted_Lattice})
 
-    dC_struct = _getshadow(C.dval)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
 
     dA_struct = _getshadow(A.dval)
@@ -535,6 +589,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
                 =#
     end
 
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 =#
@@ -595,7 +650,8 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:Shifted_Lattice})
 
-    dC_struct = _getshadow(C.dval)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
 
     dA_struct = _getshadow(A.dval)
@@ -603,6 +659,8 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
 
     Bdata = B.val.data
     shift = get_shift(B.val)
+
+    _debug_mul_context("mul! Shifted_Lattice", dCout, C, A, B, dA_struct, dB_data)
 
     #println("entered mul! reverse for Shifted_Lattice")
     if dA_struct !== nothing
@@ -623,8 +681,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
         )
         fold_halo_grad!(dB_data)
     end
-    _zero_shadow!(dC_struct)
-
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 
@@ -637,7 +694,8 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}})
 
-    dC_struct = _getshadow(C.dval)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
 
     dA_struct = _getshadow(A.dval)
@@ -645,6 +703,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
 
     Bdata = B.val.data.data
     shift = get_shift(B.val)
+    _debug_mul_context("mul! Adjoint{Shifted}", dCout, C, A, B, dA_struct, dB_data)
     #println("entered mul! reverse for Adjoint{Shifted_Lattice}")
     if dA_struct !== nothing
         JACC.parallel_for(
@@ -661,8 +720,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
         )
         fold_halo_grad!(dB_data)
     end
-    _zero_shadow!(dC_struct)
-
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 
@@ -673,13 +731,15 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
     B::Annotation{<:LatticeMatrix})
 
-    dC_struct = _getshadow(C.dval)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
 
     dA_data = _getshadow_data(A.dval)
     dB_struct = _getshadow(B.dval)
 
     Adata = A.val.data
+    _debug_mul_context("mul! Adjoint left", dCout, C, A, B, dA_data, dB_struct)
 
     #println("entered mul! reverse for Adjoint_Lattice (left)")
     if dA_data !== nothing
@@ -697,8 +757,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
             Val(B.val.NC1), Val(C.val.NC2), Val(C.val.NC1), Val(C.val.nw), C.val.indexer
         )
     end
-
-    _zero_shadow!(dC_struct)
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 
@@ -709,13 +768,15 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
 
-    dC_struct = _getshadow(C.dval)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
 
     dA_struct = _getshadow(A.dval)
     dB_data = _getshadow_data(B.dval)
 
     Bdata = B.val.data
+    _debug_mul_context("mul! Adjoint right", dCout, C, A, B, dA_struct, dB_data)
 
     #println("entered mul! reverse for Adjoint_Lattice (right)")
     if dA_struct !== nothing
@@ -733,8 +794,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
             Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer
         )
     end
-
-    _zero_shadow!(dC_struct)
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 
@@ -745,7 +805,8 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
     B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
 
-    dC_struct = _getshadow(C.dval)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
 
     dA_data = _getshadow_data(A.dval)
@@ -753,6 +814,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
 
     Adata = A.val.data
     Bdata = B.val.data
+    _debug_mul_context("mul! Adjoint both", dCout, C, A, B, dA_data, dB_data)
 
     #println("entered mul! reverse for Adjoint_Lattice (both)")
     if dA_data !== nothing
@@ -770,8 +832,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
             Val(C.val.NC1), Val(C.val.NC2), Val(Adata.NC1), Val(C.val.nw), C.val.indexer
         )
     end
-
-    _zero_shadow!(dC_struct)
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 

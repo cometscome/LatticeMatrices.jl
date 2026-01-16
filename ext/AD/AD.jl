@@ -1,9 +1,12 @@
 import Enzyme: autodiff, Duplicated, Const
+import LatticeMatrices: kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
+    kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!
 import Enzyme.EnzymeRules: forward, augmented_primal, reverse, FwdConfig, RevConfigWidth,
     Active, needs_primal, needs_shadow, AugmentedReturn,
     overwritten
 
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig
+using MPI
 
 
 
@@ -55,6 +58,7 @@ end
     return nothing
 end
 
+# Reverse rule for realtrace: dC gets identity on the diagonal.
 function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
     ::Const{typeof(realtrace)},
     ds::Active, _tape,
@@ -62,6 +66,7 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
     #s = tr(C.val)
     #@info ">>> tr reverse rule ENTERED" ds = ds.val typeofC = typeof(C.val)
     #@info typeof(C.dval)
+    #println("entered reverse for realtrace")
 
     dstruct = C.dval isa Base.RefValue ? C.dval[] : C.dval
     NC = Val(C.val.NC1)
@@ -105,6 +110,7 @@ function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
 end
 
 
+
 @inline function kernel_Dmatrix_mulAdagBadd!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
     indices = delinearize(dindexer, i, nw)
     @inbounds for jc = 1:NC2
@@ -113,6 +119,52 @@ end
             for ic = 1:NC1
                 C[ic, jc, indices...] += conj(A[kc, ic, indices...]) * b# B[kc, jc, indices...]
             end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulAdag_dC_gather!(i, dB, A, dC,
+    ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+
+    indices = delinearize(dindexer, i, nw)
+    # 読む側を indices - shift にする（gather）
+    indices_m = shiftindices(indices, ntuple(j -> -shift[j], length(shift)))
+
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(A[ic, kc, indices_m...]) * dC[ic, jc, indices_m...]
+            end
+            dB[kc, jc, indices...] += acc   # 書き込みは indices
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulAdagBadd_shift!(i, dB, A, dC, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(A[ic, kc, indices...]) * dC[ic, jc, indices...]
+            end
+            dB[kc, jc, indices_p...] += acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_dC_A_conj_add_shift!(i, dB, dC, A, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(dC[ic, jc, indices...]) * A[ic, kc, indices...]
+            end
+            dB[jc, kc, indices_p...] += acc
         end
     end
 end
@@ -129,6 +181,59 @@ end
     end
 end
 
+@inline function kernel_Dmatrix_mulABdagadd_shift!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = conj(B[kc, jc, indices_p...])
+            for ic = 1:NC1
+                C[ic, jc, indices...] += A[ic, kc, indices...] * b
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_dC_Bdag_shift!(i, dA, dC, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    @inbounds for ic = 1:NC1
+        for kc = 1:NC3
+            acc = zero(eltype(dA))
+            for jc = 1:NC2
+                acc += dC[ic, jc, indices...] * conj(B[kc, jc, indices_p...])
+            end
+            dA[ic, kc, indices...] += acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulABadd!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = B[kc, jc, indices...]
+            for ic = 1:NC1
+                C[ic, jc, indices...] += A[ic, kc, indices...] * b
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulABadd_shift!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = B[kc, jc, indices_p...]
+            for ic = 1:NC1
+                C[ic, jc, indices...] += A[ic, kc, indices...] * b
+            end
+        end
+    end
+end
+
+
 
 
 _getshadow(x) = nothing
@@ -137,6 +242,22 @@ _getshadow(x::LatticeMatrix) = x
 _getshadow(::Nothing) = nothing
 _getshadow(::Type) = nothing
 
+_getshadow_data(x) = nothing
+_getshadow_data(x::Base.RefValue) = _getshadow_data(x[])
+_getshadow_data(x::LatticeMatrix) = x
+_getshadow_data(x::Shifted_Lattice) = x.data
+_getshadow_data(x::Adjoint_Lattice) = _getshadow_data(x.data)
+
+
+@inline function _zero_shadow!(C::LatticeMatrix)
+    JACC.parallel_for(
+        prod(C.PN), kernel_clear_4D!, C.A, C.indexer, Val(C.NC1), Val(C.NC2), Val(C.nw)
+    )
+    return nothing
+end
+
+
+# Reverse rule for mul!(C, A, B) with LatticeMatrix inputs.
 function Enzyme.EnzymeRules.reverse(::RevConfig,
     ::Const{typeof(LinearAlgebra.mul!)},
     dCout, _tape,
@@ -144,6 +265,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:LatticeMatrix})
 
+    println("entered mul! reverse for LatticeMatrix")
     dC_struct = _getshadow(C.dval)
     if dC_struct === nothing
         return (nothing, nothing, nothing)
@@ -177,18 +299,267 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
             Nsites, kernel_Dmatrix_mulAdagBadd!, dBval, Aval, dCval, NC1, NC2, NC3, nw, idxr
         )
     end
-    #display(dBval[:, :, 2, 2, 2, 2])
+    _zero_shadow!(dC_struct)
+
+    return (nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Duplicated},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Shifted_Lattice})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(C.val, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:DuplicatedNoNeed},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Shifted_Lattice})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Const},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Shifted_Lattice})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Duplicated},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(C.val, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:DuplicatedNoNeed},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Const},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, nothing, nothing)
+end
+
+#=
+# Reverse rule for mul!(C, A, Shifted_Lattice).
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Shifted_Lattice})
+
+    dC_struct = _getshadow(C.dval)
+    dC_struct === nothing && return (nothing, nothing, nothing)
+
+    dA_struct = _getshadow(A.dval)
+    dB_data = _getshadow_data(B.dval)
+
+    Bdata = B.val.data
+    shift = get_shift(B.val)
+    shiftp = ntuple(i -> -shift[i], length(shift))
+
+    println("entered mul! reverse for Shifted_Lattice")
+    if dA_struct !== nothing
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_dC_Bdag_shift!, dA_struct.A, dC_struct.A, Bdata.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer, shift
+        )
+    end
+
+    if dB_data !== nothing
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mulAdag_dC_gather!, dB_data.A, A.val.A, dC_struct.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer, shift
+        )
+        fold_halo_grad!(dB_data)
+        #=
+                JACC.parallel_for(
+                    prod(C.val.PN), kernel_Dmatrix_mulAdagBadd_shift!, dB_data.A, A.val.A, dC_struct.A,
+                    Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer, shiftp
+                )
+                fold_halo_grad!(dB_data)
+                =#
+    end
+
+    return (nothing, nothing, nothing)
+end
+=#
+
+# =========================
+# Gather kernels
+# =========================
+
+# dA[x] += dC[x] * Bdag[x+shift]
+@inline function kernel_Dmatrix_mul_dC_Bdag_gather!(i, dA, dC, Bdata,
+    ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)  # = x + shift (forward と同じ)
+
+    @inbounds for jc = 1:NC3            # NC3 = A.NC3 (= B.NC1)
+        for ic = 1:NC1
+            acc = zero(eltype(dA))
+            for kc = 1:NC2              # NC2 = C.NC2 (= B.NC2)
+                # (dC * B†)_{ic,jc} = Σ_k dC_{ic,k} * conj(B_{jc,k})
+                acc += dC[ic, kc, indices...] * conj(Bdata[jc, kc, indices_p...])
+            end
+            dA[ic, jc, indices...] += acc
+        end
+    end
+end
+
+# dBdata[y] += A†[y-shift] * dC[y-shift]   (gather)
+@inline function kernel_Dmatrix_mul_Adag_dC_gather!(i, dBdata, A, dC,
+    ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
+
+    indices = delinearize(dindexer, i, nw)
+    # gather：読む側だけ y-shift
+    shiftm = ntuple(j -> -shift[j], length(shift))
+    indices_m = shiftindices(indices, shiftm)  # = y - shift
+
+    @inbounds for jc = 1:NC2            # NC2 = B.NC2
+        for kc = 1:NC3                  # NC3 = B.NC1 (= A.NC3)
+            acc = zero(eltype(dBdata))
+            for ic = 1:NC1              # NC1 = A.NC1 (= C.NC1)
+                # (A† * dC)_{kc,jc} = Σ_i conj(A_{i,kc}) * dC_{i,jc}
+                acc += conj(A[ic, kc, indices_m...]) * dC[ic, jc, indices_m...]
+            end
+            dBdata[kc, jc, indices...] += acc   # 書き込みは indices (= y)
+        end
+    end
+end
+
+
+# =========================
+# Reverse rule (gather-only)
+# =========================
+
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Shifted_Lattice})
+
+    dC_struct = _getshadow(C.dval)
+    dC_struct === nothing && return (nothing, nothing, nothing)
+
+    dA_struct = _getshadow(A.dval)
+    dB_data = _getshadow_data(B.dval)
+
+    Bdata = B.val.data
+    shift = get_shift(B.val)
+
+    println("entered mul! reverse for Shifted_Lattice")
+    if dA_struct !== nothing
+        # dA += dC * Bdag(shifted)
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_dC_Bdag_gather!,
+            dA_struct.A, dC_struct.A, Bdata.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw),
+            C.val.indexer, shift
+        )
+    end
+
+    if dB_data !== nothing
+        # dB_shift(x+shift) += A†(x) * dC(x); Shifted_Lattice reverse shifts back to B.
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mulAdagBadd_shift!, dB_data.A, A.val.A, dC_struct.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer, shift
+        )
+        fold_halo_grad!(dB_data)
+    end
+    _zero_shadow!(dC_struct)
 
     return (nothing, nothing, nothing)
 end
 
 
+# Reverse rule for mul!(C, A, Adjoint{Shifted_Lattice}).
 function Enzyme.EnzymeRules.reverse(::RevConfig,
-    ::Const{typeof(Shifted_Lattice)},
-    dB::Active, _tape,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
     A::Annotation{<:LatticeMatrix},
-    mu::Const, n::Const)
+    B::Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}})
 
+    dC_struct = _getshadow(C.dval)
+    dC_struct === nothing && return (nothing, nothing, nothing)
+
+    dA_struct = _getshadow(A.dval)
+    dB_data = _getshadow_data(B.dval)
+
+    Bdata = B.val.data.data
+    shift = get_shift(B.val)
+    println("entered mul! reverse for Adjoint{Shifted_Lattice}")
+    if dA_struct !== nothing
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_AshiftB!, dA_struct.A, dC_struct.A, Bdata.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer, shift,
+            1, 1
+        )
+    end
+
+    if dB_data !== nothing
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_dC_A_conj_add_shift!, dB_data.A, dC_struct.A, A.val.A,
+            Val(C.val.NC1), Val(Bdata.NC1), Val(Bdata.NC2), Val(C.val.nw), C.val.indexer, shift
+        )
+        fold_halo_grad!(dB_data)
+    end
+    _zero_shadow!(dC_struct)
+
+    return (nothing, nothing, nothing)
+end
+
+
+
+@inline function _normalize_shift(shift, D)
+    if shift isa NTuple{D,Int}
+        return shift
+    elseif shift isa NTuple{D,<:Integer}
+        return ntuple(i -> Int(shift[i]), D)
+    elseif shift isa AbstractVector{<:Integer}
+        @assert length(shift) == D "shift length must be $D"
+        return ntuple(i -> Int(shift[i]), D)
+    elseif shift isa Tuple
+        @assert length(shift) == D "shift length must be $D"
+        return ntuple(i -> Int(shift[i]), D)
+    else
+        error("Unsupported shift type: $(typeof(shift)).")
+    end
+end
+
+@inline function _shift_from_mu_n(mu, n, D)
+    return ntuple(i -> i == mu ? n : 0, D)
+end
+
+function _reverse_shifted_lattice!(dB::Active, A::Annotation{<:LatticeMatrix}, shift)
     dAstruct = A.dval isa Base.RefValue ? A.dval[] : A.dval
     dAstruct === nothing && return (nothing, nothing, nothing)
 
@@ -202,14 +573,155 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     PN = A.val.PN
     Nsites = prod(PN)
 
-    shift = get_shift(A.val)
-    shiftp = ntuple(i -> -shift[i], length(shift))
+    D = length(PN)
+    shiftp = ntuple(i -> -shift[i], D)
 
+    JACC.parallel_for(Nsites, kernel_add_4D_shift!, dAval, dBval, idx, N1, N2, 1, shiftp, nwv)
 
-    JACC.parallel_for(Nsites, kernel_add_4D_shift!, dAval, dBval, idx, N1, N2, 1, shiftp, nw)
-
+    # Fold halo gradients back to the core (self-neighbor) or exchange with MPI.
+    for d in 1:D
+        rankM, rankP = A.val.nbr[d]
+        if rankM == A.val.myrank && rankP == A.val.myrank
+            JACC.parallel_for(
+                Nsites, kernel_fold_halo_dim!, dAval, idx, N1, N2, nwv, PN[d], Val(d), A.val.phases[d]
+            )
+        else
+            reverse_exchange_dim!(dAstruct, d)
+        end
+    end
 
     return (nothing, nothing, nothing)
+end
+
+# Fold halo gradients back into the core, or exchange with MPI as needed.
+function fold_halo_grad!(ls::LatticeMatrix)
+    PN = ls.PN
+    Nsites = prod(PN)
+    N1 = Val(ls.NC1)
+    N2 = Val(ls.NC2)
+    nwv = Val(ls.nw)
+    idx = ls.indexer
+
+    for d in 1:length(PN)
+        rankM, rankP = ls.nbr[d]
+        if rankM == ls.myrank && rankP == ls.myrank
+            JACC.parallel_for(
+                Nsites, kernel_fold_halo_dim!, ls.A, idx, N1, N2, nwv, PN[d], Val(d), ls.phases[d]
+            )
+        else
+            reverse_exchange_dim!(ls, d)
+        end
+    end
+    return nothing
+end
+
+
+# Reverse rule for Shifted_Lattice constructor with shift tuple.
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(Shifted_Lattice)},
+    dB::Active, _tape,
+    A::Annotation{<:LatticeMatrix},
+    shift_in::Const)
+
+    D = length(A.val.PN)
+    shift = _normalize_shift(shift_in.val, D)
+    return _reverse_shifted_lattice!(dB, A, shift)
+end
+
+# Reverse rule for Shifted_Lattice constructor with (mu, n).
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(Shifted_Lattice)},
+    dB::Active, _tape,
+    A::Annotation{<:LatticeMatrix},
+    mu::Const, n::Const)
+
+    D = length(A.val.PN)
+    muval = Int(mu.val)
+    nval = Int(n.val)
+    shift = _shift_from_mu_n(muval, nval, D)
+    return _reverse_shifted_lattice!(dB, A, shift)
+end
+
+
+@inline function _replace_index(indices, dim, newval)
+    return ntuple(i -> i == dim ? newval : indices[i], length(indices))
+end
+
+@inline function kernel_fold_halo_dim!(i, dA, dindexer, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, pn_d, ::Val{d}, phase) where {NC1,NC2,nw,d}
+    indices = delinearize(dindexer, i, nw)
+    id = indices[d]
+    phase_conj = conj(phase)
+
+    if id <= nw
+        idxg = _replace_index(indices, d, id + pn_d)
+        @inbounds for jc = 1:NC2
+            for ic = 1:NC1
+                dA[ic, jc, indices...] += phase_conj * dA[ic, jc, idxg...]
+            end
+        end
+    elseif id > pn_d + nw
+        idxg = _replace_index(indices, d, id - pn_d)
+        @inbounds for jc = 1:NC2
+            for ic = 1:NC1
+                dA[ic, jc, indices...] += phase_conj * dA[ic, jc, idxg...]
+            end
+        end
+    end
+end
+
+@inline function _mul_phase_conj!(buf, phase)
+    phase_conj = conj(phase)
+    JACC.parallel_for(length(buf)) do i
+        buf[i] *= phase_conj
+    end
+end
+
+@inline function _add_buffer!(dst, src)
+    JACC.parallel_for(length(src)) do i
+        dst[i] += src[i]
+    end
+end
+
+function reverse_exchange_dim!(ls::LatticeMatrix{D}, d::Int) where {D}
+    iSM, iRM = 4d - 3, 4d - 2
+    iSP, iRP = 4d - 1, 4d
+
+    bufSM, bufRM = ls.buf[iSM], ls.buf[iRM]
+    bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]
+
+    rankM, rankP = ls.nbr[d]
+    me = ls.myrank
+    reqs = MPI.Request[]
+
+    if rankM != me
+        copy!(bufSM, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus))
+        if ls.coords[d] == 0
+            _mul_phase_conj!(bufSM, ls.phases[d])
+        end
+        push!(reqs, MPI.Isend(bufSM, rankM, d + D, ls.cart))
+        push!(reqs, MPI.Irecv!(bufRM, rankM, d, ls.cart))
+    end
+
+    if rankP != me
+        copy!(bufSP, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus))
+        if ls.coords[d] == ls.dims[d] - 1
+            _mul_phase_conj!(bufSP, ls.phases[d])
+        end
+        push!(reqs, MPI.Isend(bufSP, rankP, d, ls.cart))
+        push!(reqs, MPI.Irecv!(bufRP, rankP, d + D, ls.cart))
+    end
+
+    isempty(reqs) || MPI.Waitall!(reqs)
+
+    if rankM != me
+        faceM = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :minus)
+        _add_buffer!(faceM, bufRM)
+    end
+    if rankP != me
+        faceP = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :plus)
+        _add_buffer!(faceP, bufRP)
+    end
+    return nothing
 end
 
 

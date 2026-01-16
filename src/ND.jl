@@ -6,14 +6,18 @@ function numerical_differentiation(f, indices, A::T, params...) where {D,T1,AT1,
         for ic = 1:NC1
             Ap = deepcopy(A)
             Ap.A[ic, jc, indices...] += ϵ
+            set_halo!(Ap)
             Am = deepcopy(A)
             Am.A[ic, jc, indices...] -= ϵ
+            set_halo!(Am)
             grad[ic, jc] = (f(Ap, params...) - f(Am, params...)) / (2ϵ)
 
             Ap = deepcopy(A)
             Ap.A[ic, jc, indices...] += im * ϵ
+            set_halo!(Ap)
             Am = deepcopy(A)
             Am.A[ic, jc, indices...] -= im * ϵ
+            set_halo!(Am)
             grad[ic, jc] += im * (f(Ap, params...) - f(Am, params...)) / (2ϵ)
         end
     end

@@ -90,16 +90,13 @@ function run_case(label, f, U, dU, indices_mid, indices_halo; tol=1e-5)
     println("=== ", label, " ===")
 
     clear_matrix!.(dU)
-    dUn_mid = Wiltinger_numerical_derivative(f, indices_mid, U)
     Wiltinger_derivative!(f, U, dU)
 
+    dUn_mid = Wiltinger_numerical_derivative(f, indices_mid, U)
     _report_diff("U1 mid", dU[1], dUn_mid[1], indices_mid; tol)
     _report_diff("U2 mid", dU[2], dUn_mid[2], indices_mid; tol)
 
-    clear_matrix!.(dU)
     dUn_halo = Wiltinger_numerical_derivative(f, indices_halo, U)
-    Wiltinger_derivative!(f, U, dU)
-
     _report_diff("U1 halo", dU[1], dUn_halo[1], indices_halo; tol)
     _report_diff("U2 halo", dU[2], dUn_halo[2], indices_halo; tol)
 end

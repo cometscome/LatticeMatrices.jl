@@ -233,6 +233,45 @@ end
     end
 end
 
+@inline function kernel_Dmatrix_mul_dC_A_conj_add!(i, dB, dC, A, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(dC[ic, jc, indices...]) * A[ic, kc, indices...]
+            end
+            dB[jc, kc, indices...] += acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_Bt_dC_conj_add!(i, dA, B, dC, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for kc = 1:NC3
+        for ic = 1:NC1
+            acc = zero(eltype(dA))
+            for jc = 1:NC2
+                acc += conj(dC[ic, jc, indices...]) * B[jc, kc, indices...]
+            end
+            dA[kc, ic, indices...] += acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_At_dC_conj_add!(i, dB, A, dC, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(dC[ic, jc, indices...]) * A[kc, ic, indices...]
+            end
+            dB[jc, kc, indices...] += acc
+        end
+    end
+end
+
 
 
 
@@ -265,7 +304,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:LatticeMatrix})
 
-    println("entered mul! reverse for LatticeMatrix")
+    #println("entered mul! reverse for LatticeMatrix")
     dC_struct = _getshadow(C.dval)
     if dC_struct === nothing
         return (nothing, nothing, nothing)
@@ -360,6 +399,96 @@ function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
     C::Annotation{<:LatticeMatrix},
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Duplicated},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:LatticeMatrix})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(C.val, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:DuplicatedNoNeed},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:LatticeMatrix})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Const},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:LatticeMatrix})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Duplicated},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(C.val, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:DuplicatedNoNeed},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Const},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Duplicated},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(C.val, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:DuplicatedNoNeed},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+    LinearAlgebra.mul!(C.val, A.val, B.val)
+    return AugmentedReturn(nothing, C.dval, nothing)
+end
+
+function Enzyme.EnzymeRules.augmented_primal(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    ::Type{<:Const},
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
     LinearAlgebra.mul!(C.val, A.val, B.val)
     return AugmentedReturn(nothing, nothing, nothing)
 end
@@ -475,7 +604,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     Bdata = B.val.data
     shift = get_shift(B.val)
 
-    println("entered mul! reverse for Shifted_Lattice")
+    #println("entered mul! reverse for Shifted_Lattice")
     if dA_struct !== nothing
         # dA += dC * Bdag(shifted)
         JACC.parallel_for(
@@ -516,7 +645,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
 
     Bdata = B.val.data.data
     shift = get_shift(B.val)
-    println("entered mul! reverse for Adjoint{Shifted_Lattice}")
+    #println("entered mul! reverse for Adjoint{Shifted_Lattice}")
     if dA_struct !== nothing
         JACC.parallel_for(
             prod(C.val.PN), kernel_Dmatrix_mul_AshiftB!, dA_struct.A, dC_struct.A, Bdata.A,
@@ -534,6 +663,115 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     end
     _zero_shadow!(dC_struct)
 
+    return (nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:LatticeMatrix})
+
+    dC_struct = _getshadow(C.dval)
+    dC_struct === nothing && return (nothing, nothing, nothing)
+
+    dA_data = _getshadow_data(A.dval)
+    dB_struct = _getshadow(B.dval)
+
+    Adata = A.val.data
+
+    #println("entered mul! reverse for Adjoint_Lattice (left)")
+    if dA_data !== nothing
+        # dA += B * dC'
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mulABdagadd!, dA_data.A, B.val.A, dC_struct.A,
+            Val(B.val.NC1), Val(C.val.NC1), Val(C.val.NC2), Val(C.val.nw), C.val.indexer
+        )
+    end
+
+    if dB_struct !== nothing
+        # dB += A * dC
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mulABadd!, dB_struct.A, Adata.A, dC_struct.A,
+            Val(B.val.NC1), Val(C.val.NC2), Val(C.val.NC1), Val(C.val.nw), C.val.indexer
+        )
+    end
+
+    _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:LatticeMatrix},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+
+    dC_struct = _getshadow(C.dval)
+    dC_struct === nothing && return (nothing, nothing, nothing)
+
+    dA_struct = _getshadow(A.dval)
+    dB_data = _getshadow_data(B.dval)
+
+    Bdata = B.val.data
+
+    #println("entered mul! reverse for Adjoint_Lattice (right)")
+    if dA_struct !== nothing
+        # dA += dC * B
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mulABadd!, dA_struct.A, dC_struct.A, Bdata.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer
+        )
+    end
+
+    if dB_data !== nothing
+        # dB += dC' * A
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_dC_A_conj_add!, dB_data.A, dC_struct.A, A.val.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(A.val.NC2), Val(C.val.nw), C.val.indexer
+        )
+    end
+
+    _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.reverse(::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
+    A::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::Annotation{<:Adjoint_Lattice{<:LatticeMatrix}})
+
+    dC_struct = _getshadow(C.dval)
+    dC_struct === nothing && return (nothing, nothing, nothing)
+
+    dA_data = _getshadow_data(A.dval)
+    dB_data = _getshadow_data(B.dval)
+
+    Adata = A.val.data
+    Bdata = B.val.data
+
+    #println("entered mul! reverse for Adjoint_Lattice (both)")
+    if dA_data !== nothing
+        # dA += B' * dC'
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_Bt_dC_conj_add!, dA_data.A, Bdata.A, dC_struct.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(Adata.NC1), Val(C.val.nw), C.val.indexer
+        )
+    end
+
+    if dB_data !== nothing
+        # dB += A' * dC'
+        JACC.parallel_for(
+            prod(C.val.PN), kernel_Dmatrix_mul_At_dC_conj_add!, dB_data.A, Adata.A, dC_struct.A,
+            Val(C.val.NC1), Val(C.val.NC2), Val(Adata.NC1), Val(C.val.nw), C.val.indexer
+        )
+    end
+
+    _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 

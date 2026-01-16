@@ -43,6 +43,18 @@ function loss_plain_adjoint(U)
     return realtrace(C)
 end
 
+function loss_plain_left_adjoint(U)
+    C = similar(U[1])
+    mul!(C, U[1]', U[2])    # U_mu(x)† * U_nu(x)
+    return realtrace(C)
+end
+
+function loss_plain_both_adjoint(U)
+    C = similar(U[1])
+    mul!(C, U[1]', U[2]')   # U_mu(x)† * U_nu(x)†
+    return realtrace(C)
+end
+
 function loss_plaquette(U, shift1, shift2)
     C = similar(U[1])
     D = similar(U[1])
@@ -117,6 +129,8 @@ function main()
     loss_combined_f(Uin) = loss_combined(Uin, shift1)
     loss_shifted_adj_f(Uin) = loss_shifted_adjoint(Uin, shift1)
     loss_plain_adj_f(Uin) = loss_plain_adjoint(Uin)
+    loss_plain_left_adj_f(Uin) = loss_plain_left_adjoint(Uin)
+    loss_plain_both_adj_f(Uin) = loss_plain_both_adjoint(Uin)
     loss_plaquette_f(Uin) = loss_plaquette(Uin, shift1, (0, 1, 0, 0))
 
     run_case("plain mul! (U1 * U2)", loss_plain_f, U, dU, indices_mid, indices_halo)
@@ -124,6 +138,8 @@ function main()
     run_case("combined (plain + shifted)", loss_combined_f, U, dU, indices_mid, indices_halo)
     run_case("shifted adjoint mul! (U1 * shifted(U2)')", loss_shifted_adj_f, U, dU, indices_mid, indices_halo)
     run_case("plain adjoint mul! (U1 * U2')", loss_plain_adj_f, U, dU, indices_mid, indices_halo)
+    run_case("plain adjoint mul! (U1' * U2)", loss_plain_left_adj_f, U, dU, indices_mid, indices_halo)
+    run_case("plain adjoint mul! (U1' * U2')", loss_plain_both_adj_f, U, dU, indices_mid, indices_halo)
     run_case("plaquette (U1 * U2_p1 * U1_p2' * U2')", loss_plaquette_f, U, dU, indices_mid, indices_halo)
 
     MPI.Finalize()

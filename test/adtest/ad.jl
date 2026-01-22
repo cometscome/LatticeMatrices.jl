@@ -82,6 +82,36 @@ function run_case_all(label, f, f_num, U1, U2, U3, U4, dU1, dU2, dU3, dU4, temp,
     end
 end
 
+function run_case_all_vector(label, f, f_num, U, dU, temp, dtemp, indices_mid, indices_halo; tol=1e-4)
+    println("=== ", label, " ===")
+
+
+
+    clear_matrix!.(dU)
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    Enzyme_derivative!(
+        f,
+        U,
+        dU; temp=temp, dtemp=dtemp)
+
+    clear_matrix!.(temp)
+    f_num_1(Uvec) = f_num(Uvec, temp)
+    dUn_mid = Numerical_derivative_Enzyme(f_num_1, indices_mid, U)
+    for k in 1:length(U)
+        _report_diff("U$k mid", dU[k], dUn_mid[k], indices_mid; tol)
+    end
+
+    indices_halo_core = _halo_to_core_indices(indices_halo, U[1].PN, U[1].nw)
+    clear_matrix!.(temp)
+    dUn_halo = Numerical_derivative_Enzyme(f_num_1, indices_halo_core, U)
+    for k in 1:length(U)
+        _report_diff("U$k halo", dU[k], dUn_halo[k], indices_halo_core; tol)
+    end
+end
+
+
 function loss_mulABtest(U1, U2, U3, U4, temp)
     C = temp[1]
     mul!(C, U1, U2)
@@ -321,6 +351,148 @@ function calc_action(U1, U2, U3, U4, β, NC, temp)
     return -S * β / NC
 end
 
+function calc_action_unrolled(U1, U2, U3, U4, β, NC, temp)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    S = 0.0
+
+    shift_1 = (1, 0, 0, 0)
+    shift_2 = (0, 1, 0, 0)
+    shift_3 = (0, 0, 1, 0)
+    shift_4 = (0, 0, 0, 1)
+
+    U1_p2 = shift_L(U1, shift_2)
+    U2_p1 = shift_L(U2, shift_1)
+    mul!(C, U1, U2_p1)
+    mul!(D, C, U1_p2')
+    mul!(E, D, U2')
+    S += realtrace(E)
+    mul!(C, U2, U1_p2)
+    mul!(D, C, U2_p1')
+    mul!(E, D, U1')
+    S += realtrace(E)
+
+    U1_p3 = shift_L(U1, shift_3)
+    U3_p1 = shift_L(U3, shift_1)
+    mul!(C, U1, U3_p1)
+    mul!(D, C, U1_p3')
+    mul!(E, D, U3')
+    S += realtrace(E)
+    mul!(C, U3, U1_p3)
+    mul!(D, C, U3_p1')
+    mul!(E, D, U1')
+    S += realtrace(E)
+
+    U1_p4 = shift_L(U1, shift_4)
+    U4_p1 = shift_L(U4, shift_1)
+    mul!(C, U1, U4_p1)
+    mul!(D, C, U1_p4')
+    mul!(E, D, U4')
+    S += realtrace(E)
+    mul!(C, U4, U1_p4)
+    mul!(D, C, U4_p1')
+    mul!(E, D, U1')
+    S += realtrace(E)
+
+    U2_p3 = shift_L(U2, shift_3)
+    U3_p2 = shift_L(U3, shift_2)
+    mul!(C, U2, U3_p2)
+    mul!(D, C, U2_p3')
+    mul!(E, D, U3')
+    S += realtrace(E)
+    mul!(C, U3, U2_p3)
+    mul!(D, C, U3_p2')
+    mul!(E, D, U2')
+    S += realtrace(E)
+
+    U2_p4 = shift_L(U2, shift_4)
+    U4_p2 = shift_L(U4, shift_2)
+    mul!(C, U2, U4_p2)
+    mul!(D, C, U2_p4')
+    mul!(E, D, U4')
+    S += realtrace(E)
+    mul!(C, U4, U2_p4)
+    mul!(D, C, U4_p2')
+    mul!(E, D, U2')
+    S += realtrace(E)
+
+    U3_p4 = shift_L(U3, shift_4)
+    U4_p3 = shift_L(U4, shift_3)
+    mul!(C, U3, U4_p3)
+    mul!(D, C, U3_p4')
+    mul!(E, D, U4')
+    S += realtrace(E)
+    mul!(C, U4, U3_p4)
+    mul!(D, C, U4_p3')
+    mul!(E, D, U3')
+    S += realtrace(E)
+
+    return -S * β / NC
+end
+
+function _calc_action_step!(C, D, E, Uμ, Uν, shift_μ, shift_ν)
+    Uμ_pν = shift_L(Uμ, shift_ν)
+    Uν_pμ = shift_L(Uν, shift_μ)
+
+    mul!(C, Uμ, Uν_pμ)
+    mul!(D, C, Uμ_pν')
+    mul!(E, D, Uν')
+    S = realtrace(E)
+
+    mul!(C, Uν, Uμ_pν)
+    mul!(D, C, Uν_pμ')
+    mul!(E, D, Uμ')
+    S += realtrace(E)
+
+    return S
+end
+
+function calc_action_loopfn(U1, U2, U3, U4, β, NC, temp)
+    U = (U1, U2, U3, U4)
+    ndir = length(U)
+    dim = length(U1.PN)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    S = 0.0
+
+    for μ = 1:ndir
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:ndir
+            if ν == μ
+                continue
+            end
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            S += _calc_action_step!(C, D, E, U[μ], U[ν], shift_μ, shift_ν)
+        end
+    end
+
+    return -S * β / NC
+end
+
+function calc_action_loopfn(U, β, NC, temp)
+    ndir = length(U)
+    dim = length(U[1].PN)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    S = 0.0
+
+    for μ = 1:ndir
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:ndir
+            if ν == μ
+                continue
+            end
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            S += _calc_action_step!(C, D, E, U[μ], U[ν], shift_μ, shift_ν)
+        end
+    end
+
+    return -S * β / NC
+end
+
 function main()
     MPI.Init()
 
@@ -351,12 +523,30 @@ function main()
     S = realtrace(U[1])
     println(S)
 
+    run_case_all("mulAshiftedBtest_munuloop", loss_mulAshiftedBtest_munuloop,
+        loss_mulAshiftedBtest_munuloop, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
     fs3(U1, U2, U3, U4, temp) = loss_plaquette(U1, U2, U3, U4, (1, 0, 0, 0), (0, 1, 0, 0), temp)
     run_case_all("loss_plaquette", fs3, fs3, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
     β = 3.0
-    fs4(U1, U2, U3, U4, temp) = calc_action(U1, U2, U3, U4, β, NC, temp)
-    run_case_all("calc_action", fs4, fs4, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    #fs4l_1(U, temp) = calc_action_loopfn(U, β, NC, temp)
+    #run_case_all_vector("calc_action_loopfn_1", fs4l_1, fs4l_1, U, dU, temp, dtemp, indices_mid, indices_halo)
+
+
+    fs4l(U1, U2, U3, U4, temp) = calc_action_loopfn(U1, U2, U3, U4, β, NC, temp)
+    run_case_all("calc_action_loopfn", fs4l, fs4l, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+    fs4u(U1, U2, U3, U4, temp) = calc_action_unrolled(U1, U2, U3, U4, β, NC, temp)
+    run_case_all("calc_action_unrolled", fs4u, fs4u, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+    #
+    #fs4(U1, U2, U3, U4, temp) = calc_action(U1, U2, U3, U4, β, NC, temp)
+    #run_case_all("calc_action", fs4, fs4, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
 
 
@@ -377,8 +567,6 @@ function main()
     run_case_all("mulAshiftedBtest_munuloop_val", loss_mulAshiftedBtest_munuloop_val,
         loss_mulAshiftedBtest_munuloop_val, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
-    run_case_all("mulAshiftedBtest_munuloop", loss_mulAshiftedBtest_munuloop,
-        loss_mulAshiftedBtest_munuloop, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
     fs(U1, U2, U3, U4, temp) = loss_mulAshiftedBtest(U1, U2, U3, U4, (1, 0, 0, 0), temp)
     run_case_all("mulAshiftedBtest", fs, fs, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)

@@ -170,6 +170,89 @@ function Wiltinger_numerical_derivative(f, indices, U;
     end
 end
 
+function Numerical_derivative_Enzyme(f, indices, U1, U2, U3, U4;
+    params=(),
+    targets=:all,
+    ϵ::Real=1e-8)
+    U = [U1, U2, U3, U4]
+
+    # normalize U to a mutable container for easy copying/replacement
+    is_tuple = U isa Tuple
+    Uvec = is_tuple ? collect(U) : copy(U)
+
+    # which components of U to differentiate
+    Ks = targets === :all ? eachindex(Uvec) : targets
+
+    grads = Vector{Any}(undef, length(Uvec))
+    for i in eachindex(grads)
+        grads[i] = nothing
+    end
+
+    # helper to call f with the same container type as the original U
+    function callf(Uwork...)
+        if is_tuple
+            return f(Tuple(Uwork...)..., params...)
+        else
+            return f(Uwork..., params...)   # If your f expects f(U::Vector, ...) keep this
+        end
+    end
+
+    # Important:
+    # - If your f is defined as f(U, temp, ...) (single U container),
+    #   then set callf accordingly. Here we support both common styles:
+    #
+    #   (A) f(U::Vector, params...)
+    #   (B) f(U1, U2, ..., params...)
+    #
+    # If you always use style (A), we can simplify.
+
+    for k in Ks
+        Uk = Uvec[k]
+        @assert hasfield(typeof(Uk), :A) "U[$k] must have field `.A`"
+
+        # infer element type and matrix size from Uk.A
+        Aarr = Uk.A
+        T1 = eltype(Aarr)
+        NC1, NC2 = size(Aarr, 1), size(Aarr, 2)
+
+        grad = zeros(T1, NC1, NC2)
+
+        for jc = 1:NC2, ic = 1:NC1
+            # --- Re part derivative ---
+            Up = deepcopy(Uvec)
+            Up[k].A[ic, jc, indices...] += ϵ
+            set_halo!(Up[k])
+            Um = deepcopy(Uvec)
+            Um[k].A[ic, jc, indices...] -= ϵ
+            set_halo!(Um[k])
+            dRe = (callf(Up...) - callf(Um...)) / (2ϵ)
+
+            # --- Im part derivative ---
+            Up = deepcopy(Uvec)
+            Up[k].A[ic, jc, indices...] += im * ϵ
+            set_halo!(Up[k])
+            Um = deepcopy(Uvec)
+            Um[k].A[ic, jc, indices...] -= im * ϵ
+            set_halo!(Um[k])
+            dIm = (callf(Up...) - callf(Um...)) / (2ϵ)
+
+            # your convention: df/dx + i df/dy
+            grad[ic, jc] = dRe + im * dIm
+            # Wiltinger: 
+            #grad[ic, jc] = (dRe - im * dIm) / 2
+        end
+
+        grads[k] = grad
+    end
+
+    # return in the same container style
+    if is_tuple
+        return Tuple(grads)
+    else
+        return grads
+    end
+end
+
 function Numerical_derivative_Enzyme(f, indices, U;
     params=(),
     targets=:all,

@@ -74,7 +74,10 @@ function ER.reverse(cfg::ER.RevConfig,
     B::ER.Duplicated{<:LatticeMatrix},
     shift::RT,
 ) where {RT}
-    return _rev_mul_AshiftB!(cfg, dCout, tape, C, A, B, shift; do_dB=true)
+    do_dB = false
+    s = _getshadow(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_AshiftB!(cfg, dCout, tape, C, A, B, shift; do_dB=do_dB)
 end
 #=
 function ER.reverse(cfg::ER.RevConfig,

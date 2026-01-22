@@ -200,6 +200,64 @@ function loss_exp_traceless_antihermitian(U1, U2, U3, U4, t, temp)
     return realtrace(C)
 end
 
+function _calc_action_step_add_expt_traceless_antihermitian!(Uout, t, C, D, Uμ, Uν, shift_μ, shift_ν)
+    Uμ_pν = shift_L(Uμ, shift_ν)
+    Uν_pμ = shift_L(Uν, shift_μ)
+
+    mul!(C, Uμ, Uν_pμ)
+    mul!(D, C, Uμ_pν')
+    mul!(Uout, D, Uν')
+    #add_matrix!(Uout, C)
+    #S = realtrace(E)
+
+    mul!(C, Uν, Uμ_pν)
+    mul!(D, C, Uν_pμ')
+    mul!(C, D, Uμ')
+    add_matrix!(Uout, C)
+
+    UTA = Traceless_AntiHermitian(Uout)
+    expt!(C, UTA, t)
+
+    #traceless_antihermitian!(D, Uout)
+    #expt!(C, D, t)
+    mul!(Uout, C, Uμ)
+    #S += realtrace(E)
+
+    #return S
+end
+
+function loss_expt_TA(U1, U2, U3, U4, t, temp)
+    C = temp[1]
+    UTA = Traceless_AntiHermitian(U1)
+    expt!(C, UTA, t)
+    return realtrace(C)
+end
+
+function calc_action_loss_expt_traceless_antihermitian(U1, U2, U3, U4, β, NC, t, temp)
+    U = (U1, U2, U3, U4)
+    ndir = length(U)
+    dim = length(U1.PN)
+    Uout = temp[1]
+    C = temp[2]
+    D = temp[3]
+    S = 0.0
+
+    for μ = 1:ndir
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:ndir
+            if ν == μ
+                continue
+            end
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            _calc_action_step_add_expt_traceless_antihermitian!(Uout, t, C, D, U[μ], U[ν], shift_μ, shift_ν)
+            S += realtrace(Uout)
+        end
+    end
+
+    return -S * β / NC
+end
+
+
 function calc_action_loss_exp_traceless_antihermitian(U1, U2, U3, U4, β, NC, t, temp)
     U = (U1, U2, U3, U4)
     ndir = length(U)
@@ -660,6 +718,25 @@ function main()
     S = realtrace(U[1])
     println(S)
 
+    t = 0.2
+    traceless_antihermitian!(temp[1], U[1])
+    expt!(temp[2], temp[1], t)
+    display(temp[2].A[:, :, 2, 2, 2, 2])
+    UTA = Traceless_AntiHermitian(U[1])
+    expt!(temp[1], UTA, t)
+    display(temp[1].A[:, :, 2, 2, 2, 2])
+
+
+    fs_expt_ta(U1, U2, U3, U4, temp) = loss_expt_TA(U1, U2, U3, U4, texp, temp)
+    run_case_all("expt_TA", fs_expt_ta, fs_expt_ta,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    fs_expt_tan(U1, U2, U3, U4, temp) = calc_action_loss_expt_traceless_antihermitian(U1, U2, U3, U4, β, NC, texp, temp)
+    run_case_all("calc_action_loss_expt_traceless_antihermitian", fs_expt_tan, fs_expt_tan,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    #return
+
     run_case_all("add_matrix", loss_add_matrix_test, loss_add_matrix_test,
         U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
@@ -683,6 +760,7 @@ function main()
     fs_exp_ta(U1, U2, U3, U4, temp) = loss_exp_traceless_antihermitian(U1, U2, U3, U4, texp, temp)
     run_case_all("exp_traceless_antihermitian", fs_exp_ta, fs_exp_ta,
         U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
 
     fs4l_add(U1, U2, U3, U4, temp) = calc_action_loopfn_add(U1, U2, U3, U4, β, NC, temp)
     run_case_all("calc_action_loopfn_add", fs4l_add, fs4l_add, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)

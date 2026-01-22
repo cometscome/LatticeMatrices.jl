@@ -509,6 +509,315 @@ end
 end
 
 
+function expt!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Traceless_AntiHermitian{L}, t::S=one(S)) where {
+    D,T,AT,NC1,NC2,S<:Number,T1,AT1,nw,DI,L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+
+    expt_TA!(C, A.data, t)
+    return
+    #set_halo!(C)
+end
+
+function expt_TA!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, t::S=one(S)) where {
+    D,T,AT,NC1,NC2,S<:Number,nw,DI}
+    traceless_antihermitian!(C, A)
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_4Dexpt_TA!, C.A, C.indexer, Val(nw), t, Val(NC1)
+    )
+    return
+    #set_halo!(C)
+end
+
+
+@inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{3}) where nw
+    indices = delinearize(dindexer, i, nw)
+
+    v11 = C[1, 1, indices...]
+    v22 = C[2, 2, indices...]
+    v33 = C[3, 3, indices...]
+    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+
+
+    y11 = (imag(v11) - tri) * im
+    y22 = (imag(v22) - tri) * im
+    y33 = (imag(v33) - tri) * im
+
+    v12 = C[1, 2, indices...]
+    v13 = C[1, 3, indices...]
+    v21 = C[2, 1, indices...]
+    v23 = C[2, 3, indices...]
+    v31 = C[3, 1, indices...]
+    v32 = C[3, 2, indices...]
+
+    x12 = v12 - conj(v21)
+    x13 = v13 - conj(v31)
+    x23 = v23 - conj(v32)
+
+    x21 = -conj(x12)
+    x31 = -conj(x13)
+    x32 = -conj(x23)
+
+    y12 = 0.5 * x12
+    y13 = 0.5 * x13
+    y21 = 0.5 * x21
+    y23 = 0.5 * x23
+    y31 = 0.5 * x31
+    y32 = 0.5 * x32
+
+    c1_0 = (imag(y12) + imag(y21))
+    c2_0 = (real(y12) - real(y21))
+    c3_0 = (imag(y11) - imag(y22))
+    c4_0 = (imag(y13) + imag(y31))
+    c5_0 = (real(y13) - real(y31))
+
+    c6_0 = (imag(y23) + imag(y32))
+    c7_0 = (real(y23) - real(y32))
+    c8_0 = sr3i * (imag(y11) + imag(y22) - 2 * imag(y33))
+
+    c1 = t * c1_0 * 0.5
+    c2 = t * c2_0 * 0.5
+    c3 = t * c3_0 * 0.5
+    c4 = t * c4_0 * 0.5
+    c5 = t * c5_0 * 0.5
+    c6 = t * c6_0 * 0.5
+    c7 = t * c7_0 * 0.5
+    c8 = t * c8_0 * 0.5
+    csum = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8
+
+    if csum == 0
+        C[1, 1, indices...] = 1
+        C[1, 2, indices...] = 0
+        C[1, 3, indices...] = 0
+        C[2, 1, indices...] = 0
+        C[2, 2, indices...] = 1
+        C[2, 3, indices...] = 0
+        C[3, 1, indices...] = 0
+        C[3, 2, indices...] = 0
+        C[3, 3, indices...] = 1
+        return
+    end
+
+
+    #x[1,1,icum] =  c3+sr3i*c8 +im*(  0.0 )
+    v1 = c3 + sr3i * c8
+    v2 = 0.0
+    #x[1,2,icum] =  c1         +im*( -c2   )
+    v3 = c1
+    v4 = -c2
+    #x[1,3,icum] =  c4         +im*(-c5   )
+    v5 = c4
+    v6 = -c5
+
+    #x[2,1,icum] =  c1         +im*(  c2   )
+    v7 = c1
+    v8 = c2
+
+    #x[2,2,icum] =  -c3+sr3i*c8+im*(  0.0 )
+    v9 = -c3 + sr3i * c8
+    v10 = 0.0
+
+    #x[2,3,icum] =  c6         +im*( -c7   )
+    v11 = c6
+    v12 = -c7
+
+    #x[3,1,icum] =  c4         +im*(  c5   )
+    v13 = c4
+    v14 = c5
+
+    #x[3,2,icum] =  c6         +im*(  c7   )
+    v15 = c6
+    v16 = c7
+    #x[3,3,icum] =  -sr3i2*c8  +im*(  0.0 )
+    v17 = -sr3i2 * c8
+    v18 = 0.0
+
+
+    #c find eigenvalues of v
+    trv3 = (v1 + v9 + v17) / 3.0
+    cofac =
+        v1 * v9 - v3^2 - v4^2 + v1 * v17 - v5^2 - v6^2 + v9 * v17 - v11^2 -
+        v12^2
+    det =
+        v1 * v9 * v17 - v1 * (v11^2 + v12^2) - v9 * (v5^2 + v6^2) -
+        v17 * (v3^2 + v4^2) +
+        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * 2.0
+    p3 = cofac / 3.0 - trv3^2
+    q = trv3 * cofac - det - 2.0 * trv3^3
+    x = sqrt(-4.0 * p3) + tinyvalue
+    arg = q / (x * p3)
+
+    arg = min(1, max(-1, arg))
+    theta = acos(arg) / 3.0
+    e1 = x * cos(theta) + trv3
+    theta = theta + pi23
+    e2 = x * cos(theta) + trv3
+    #       theta = theta + pi23
+    #       e3 = x * cos(theta) + trv3
+    e3 = 3.0 * trv3 - e1 - e2
+
+    # solve for eigenvectors
+
+    w1 = v5 * (v9 - e1) - v3 * v11 + v4 * v12
+    w2 = -v6 * (v9 - e1) + v4 * v11 + v3 * v12
+    w3 = (v1 - e1) * v11 - v3 * v5 - v4 * v6
+    w4 = -(v1 - e1) * v12 - v4 * v5 + v3 * v6
+    w5 = -(v1 - e1) * (v9 - e1) + v3^2 + v4^2
+    w6 = 0.0
+
+    coeff = 1.0 / sqrt(w1^2 + w2^2 + w3^2 + w4^2 + w5^2)
+
+
+    w1 = w1 * coeff
+    w2 = w2 * coeff
+    w3 = w3 * coeff
+    w4 = w4 * coeff
+    w5 = w5 * coeff
+
+    w7 = v5 * (v9 - e2) - v3 * v11 + v4 * v12
+    w8 = -v6 * (v9 - e2) + v4 * v11 + v3 * v12
+    w9 = (v1 - e2) * v11 - v3 * v5 - v4 * v6
+    w10 = -(v1 - e2) * v12 - v4 * v5 + v3 * v6
+    w11 = -(v1 - e2) * (v9 - e2) + v3^2 + v4^2
+    w12 = 0.0
+
+    coeff = 1.0 / sqrt(w7^2 + w8^2 + w9^2 + w10^2 + w11^2)
+
+    w7 = w7 * coeff
+    w8 = w8 * coeff
+    w9 = w9 * coeff
+    w10 = w10 * coeff
+    w11 = w11 * coeff
+
+    w13 = v5 * (v9 - e3) - v3 * v11 + v4 * v12
+    w14 = -v6 * (v9 - e3) + v4 * v11 + v3 * v12
+    w15 = (v1 - e3) * v11 - v3 * v5 - v4 * v6
+    w16 = -(v1 - e3) * v12 - v4 * v5 + v3 * v6
+    w17 = -(v1 - e3) * (v9 - e3) + v3^2 + v4^2
+    w18 = 0.0
+
+    coeff = 1.0 / sqrt(w13^2 + w14^2 + w15^2 + w16^2 + w17^2)
+    w13 = w13 * coeff
+    w14 = w14 * coeff
+    w15 = w15 * coeff
+    w16 = w16 * coeff
+    w17 = w17 * coeff
+
+    # construct the projection v
+    c1 = cos(e1)
+    s1 = sin(e1)
+    ww1 = w1 * c1 - w2 * s1
+    ww2 = w2 * c1 + w1 * s1
+    ww3 = w3 * c1 - w4 * s1
+    ww4 = w4 * c1 + w3 * s1
+    ww5 = w5 * c1 - w6 * s1
+    ww6 = w6 * c1 + w5 * s1
+
+    c2 = cos(e2)
+    s2 = sin(e2)
+    ww7 = w7 * c2 - w8 * s2
+    ww8 = w8 * c2 + w7 * s2
+    ww9 = w9 * c2 - w10 * s2
+    ww10 = w10 * c2 + w9 * s2
+    ww11 = w11 * c2 - w12 * s2
+    ww12 = w12 * c2 + w11 * s2
+
+    c3 = cos(e3)
+    s3 = sin(e3)
+    ww13 = w13 * c3 - w14 * s3
+    ww14 = w14 * c3 + w13 * s3
+    ww15 = w15 * c3 - w16 * s3
+    ww16 = w16 * c3 + w15 * s3
+    ww17 = w17 * c3 - w18 * s3
+    ww18 = w18 * c3 + w17 * s3
+
+    w11m = w1 + im * w2
+    w12m = w3 + im * w4
+    w13m = w5 + im * w6
+    w21m = w7 + im * w8
+    w22m = w9 + im * w10
+    w23m = w11 + im * w12
+    w31m = w13 + im * w14
+    w32m = w15 + im * w16
+    w33m = w17 + im * w18
+
+    ww11m = ww1 + im * ww2
+    ww12m = ww3 + im * ww4
+    ww13m = ww5 + im * ww6
+    ww21m = ww7 + im * ww8
+    ww22m = ww9 + im * ww10
+    ww23m = ww11 + im * ww12
+    ww31m = ww13 + im * ww14
+    ww32m = ww15 + im * ww16
+    ww33m = ww17 + im * ww18
+
+    #mul!(uout, w', ww)
+
+    C[1, 1, indices...] = w11m' * ww11m + w21m' * ww21m + w31m' * ww31m
+    C[1, 2, indices...] = w11m' * ww12m + w21m' * ww22m + w31m' * ww32m
+    C[1, 3, indices...] = w11m' * ww13m + w21m' * ww23m + w31m' * ww33m
+    C[2, 1, indices...] = w12m' * ww11m + w22m' * ww21m + w32m' * ww31m
+    C[2, 2, indices...] = w12m' * ww12m + w22m' * ww22m + w32m' * ww32m
+    C[2, 3, indices...] = w12m' * ww13m + w22m' * ww23m + w32m' * ww33m
+    C[3, 1, indices...] = w13m' * ww11m + w23m' * ww21m + w33m' * ww31m
+    C[3, 2, indices...] = w13m' * ww12m + w23m' * ww22m + w33m' * ww32m
+    C[3, 3, indices...] = w13m' * ww13m + w23m' * ww23m + w33m' * ww33m
+
+
+end
+
+@inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{2}) where nw
+    indices = delinearize(dindexer, i, nw)
+    v11 = C[1, 1, indices...]
+    v22 = C[2, 2, indices...]
+
+    tri = fac12 * (imag(v11) + imag(v22))
+
+
+
+    v12 = C[1, 2, indices...]
+    #v13 = vin[1,3,ix,iy,iz,it]
+    v21 = C[2, 1, indices...]
+
+    x12 = v12 - conj(v21)
+
+    x21 = -conj(x12)
+
+    y11 = (imag(v11) - tri) * im
+    y12 = 0.5 * x12
+    y21 = 0.5 * x21
+    y22 = (imag(v22) - tri) * im
+
+    c1_0 = (imag(y12) + imag(y21))
+    c2_0 = (real(y12) - real(y21))
+    c3_0 = (imag(y11) - imag(y22))
+
+    #icum = (((it-1)*NX+iz-1)*NY+iy-1)*NX+ix  
+    u1 = t * c1_0 / 2
+    u2 = t * c2_0 / 2
+    u3 = t * c3_0 / 2
+    R = sqrt(u1^2 + u2^2 + u3^2) + tinyvalue
+    sR = sin(R) / R
+    #sR = ifelse(R == 0,1,sR)
+    a0 = cos(R)
+    a1 = u1 * sR
+    a2 = u2 * sR
+    a3 = u3 * sR
+
+    C[1, 1, indices...] = cos(R) + im * a3
+    C[1, 2, indices...] = im * a1 + a2
+    C[2, 1, indices...] = im * a1 - a2
+    C[2, 2, indices...] = cos(R) - im * a3
+
+end
+
+
+
+@inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{N}) where {N,nw}
+    indices = delinearize(dindexer, i, nw)
+    expm_pade13_writeback!(C, C, indices..., t, Val(N))
+    #C[:, :, indices...] = expm_pade13(A[:, :, indices...], t)
+end
+
 function expt!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, t::S=one(S)) where {D,T,AT,NC1,NC2,S<:Number,T1,AT1,nw,DI}
     @assert NC1 == NC2 "Matrix exponentiation requires square matrices, but got $(NC1) x $(NC2)."
 

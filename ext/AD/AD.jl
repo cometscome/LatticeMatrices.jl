@@ -1,7 +1,7 @@
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn, needs_primal, needs_shadow
 import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add_matrix_shiftedAdag!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
-    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, substitute!, AbstractLattice
+    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, substitute!, AbstractLattice, expt_TA!
 using PreallocatedArrays
 
 const ER = Enzyme.EnzymeRules
@@ -615,48 +615,77 @@ function ER.reverse(cfg::ER.RevConfig,
     return (nothing, nothing, nothing)
 end
 
-#=
-# add_matrix! (C += α * A†)
+
+
+
+const _expt_ta_eps_q = 1e-18
+
 function ER.augmented_primal(cfg::ER.RevConfig,
-    ::ER.Const{typeof(add_matrix!)},
+    ::ER.Const{typeof(expt_TA!)},
     ::Type{RT},
     C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:Adjoint_Lattice},
-    α::S,
+    A::ER.Annotation{<:LatticeMatrix},
+    t::S,
 ) where {RT,S}
-    αval = hasproperty(α, :val) ? α.val : α
-    add_matrix!(C.val, A.val, αval)
-    return ER.AugmentedReturn(nothing, nothing, nothing)
+    tval = hasproperty(t, :val) ? t.val : t
+    expt_TA!(C.val, A.val, tval)
+
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA,))
 end
 
 function ER.reverse(cfg::ER.RevConfig,
-    ::ER.Const{typeof(add_matrix!)},
-    dCout, _tape,
+    ::ER.Const{typeof(expt_TA!)},
+    dCout, tape,
     C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:Adjoint_Lattice},
-    α::S,
+    A::ER.Annotation{<:LatticeMatrix},
+    t::S,
 ) where {S}
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
     dCval = dC_struct.A
 
-    dA_struct = _getshadow_data(A.dval)
+    dA_struct = _getshadow(A.dval)
     dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
-    if dAval !== nothing
-        αval = hasproperty(α, :val) ? α.val : α
+    dAval === nothing && return (nothing, nothing, nothing)
+
+    tapeA = (tape === nothing) ? nothing : tape[1]
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+
+    tval = hasproperty(t, :val) ? t.val : t
+
+    if C.val.NC1 == 2 && C.val.NC2 == 2
         JACC.parallel_for(
             prod(C.val.PN),
-            kernel_add_4D_dag!,
-            dAval, dCval, C.val.indexer,
-            Val(C.val.NC2), Val(C.val.NC1),
-            conj(αval), Val(C.val.nw)
+            kernel_expt_TA_rev_su2!,
+            dAval, dCval, Aval,
+            C.val.indexer, Val(C.val.nw),
+            tval, _expt_ta_eps_q
         )
+    elseif C.val.NC1 == 3 && C.val.NC2 == 3
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_expt_TA_rev_su3!,
+            dAval, dCval, Aval,
+            C.val.indexer, Val(C.val.nw),
+            tval, _expt_ta_eps_q
+        )
+    else
+        error("expt_TA! reverse is only implemented for NC=2 or NC=3.")
     end
 
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
-=#
+
 
 # dA[ic,kc] += sum_j dC[ic,j] * conj(B[kc,j])   (with shift on B indices)
 @inline function kernel_Dmatrix_mul_dA_from_dC_Bdag_shift!(
@@ -674,6 +703,72 @@ end
             end
         end
     end
+    return nothing
+end
+
+@inline function kernel_expt_TA_rev_su2!(i, dA, dC, A, dindexer, ::Val{nw}, t, eps_Q) where {nw}
+    indices = delinearize(dindexer, i, nw)
+
+    a11 = A[1, 1, indices...]
+    a12 = A[1, 2, indices...]
+    a21 = A[2, 1, indices...]
+    a22 = A[2, 2, indices...]
+
+    tri = 0.5 * (imag(a11) + imag(a22))
+    y11 = (imag(a11) - tri) * im
+    y22 = (imag(a22) - tri) * im
+    x12 = a12 - conj(a21)
+    y12 = 0.5 * x12
+    y21 = -0.5 * conj(x12)
+
+    q11 = t * y11
+    q12 = t * y12
+    q21 = t * y21
+    q22 = t * y22
+
+    trQ2 = q11 * q11 + q12 * q21 + q21 * q12 + q22 * q22
+
+    c11 = dC[1, 1, indices...]
+    c12 = dC[1, 2, indices...]
+    c21 = dC[2, 1, indices...]
+    c22 = dC[2, 2, indices...]
+
+    if abs(trQ2) <= eps_Q
+        dq11 = t * c11
+        dq12 = t * c12
+        dq21 = t * c21
+        dq22 = t * c22
+    else
+        q = sqrt(-0.5 * trQ2)
+        f = sin(q) / q
+        b0 = 0.5 * f
+        b1 = (sin(q) - q * cos(q)) / (2 * q^3)
+
+        b11 = b0 + b1 * q11
+        b12 = b1 * q12
+        b21 = b1 * q21
+        b22 = b0 + b1 * q22
+
+        trsum = c11 * b11 + c12 * b21 + c21 * b12 + c22 * b22
+
+        dqs11 = f * c11 + trsum * q11
+        dqs12 = f * c12 + trsum * q12
+        dqs21 = f * c21 + trsum * q21
+        dqs22 = f * c22 + trsum * q22
+
+        dq11 = t * dqs11
+        dq12 = t * dqs12
+        dq21 = t * dqs21
+        dq22 = t * dqs22
+    end
+
+    tri_dq = 0.5 * (imag(dq11) + imag(dq22))
+    dA[1, 1, indices...] -= (imag(dq11) - tri_dq) * im
+    dA[2, 2, indices...] -= (imag(dq22) - tri_dq) * im
+
+    vv = 0.5 * (dq12 - conj(dq21))
+    dA[1, 2, indices...] -= vv
+    dA[2, 1, indices...] += conj(vv)
     return nothing
 end
 
@@ -796,7 +891,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:LatticeMatrix})
 
-    println("mul!: reverse")
+    #println("mul!: reverse")
 
     #println("entered mul! reverse for LatticeMatrix")
     dC_struct = _getshadow_out(dCout, C)

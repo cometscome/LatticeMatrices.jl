@@ -1,7 +1,7 @@
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn, needs_primal, needs_shadow
-import LatticeMatrices: kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
+import LatticeMatrices: add_matrix!, add_matrix_shiftedA!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
-    mul_AshiftB!, substitute!, AbstractLattice
+    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, substitute!, AbstractLattice
 using PreallocatedArrays
 
 const ER = Enzyme.EnzymeRules
@@ -201,6 +201,145 @@ function _rev_mul_AshiftB!(
         #end
     end
     return (nothing, nothing, nothing, nothing)
+end
+
+# add_matrix_shiftedA! (C += α * shift(A))
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix_shiftedA!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    shift,
+    α::S
+) where {RT,S}
+    αval = hasproperty(α, :val) ? α.val : α
+    shiftval = hasproperty(shift, :val) ? shift.val : shift
+    add_matrix_shiftedA!(C.val, A.val, shiftval, αval)
+    return ER.AugmentedReturn(nothing, nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix_shiftedA!)},
+    dCout, _tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    shift,
+    α::S,
+) where {S}
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = _getshadow(A.dval)
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+    if dAval !== nothing
+        αval = hasproperty(α, :val) ? α.val : α
+        shiftval = hasproperty(shift, :val) ? shift.val : shift
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_add_4D_shift_scatter!,
+            dAval, dCval, C.val.indexer,
+            Val(C.val.NC1), Val(C.val.NC2),
+            conj(αval), shiftval, Val(C.val.nw)
+        )
+        fold_halo_to_core_grad!(dA_struct)
+    end
+
+    return (nothing, nothing, nothing, nothing)
+end
+
+@inline function kernel_add_4D_shift_scatter!(i, u, v, dindexer, ::Val{NC1}, ::Val{NC2}, α, shift, ::Val{nw}) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+    indices_p = shiftindices(indices, shift)
+
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            u[ic, jc, indices_p...] += α * v[ic, jc, indices...]
+        end
+    end
+end
+
+# add_matrix! (C += α * A)
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    α::S,
+) where {RT,S}
+    αval = hasproperty(α, :val) ? α.val : α
+    add_matrix!(C.val, A.val, αval)
+    return ER.AugmentedReturn(nothing, nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix!)},
+    dCout, _tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    α::S,
+) where {S}
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = _getshadow(A.dval)
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+    if dAval !== nothing
+        αval = hasproperty(α, :val) ? α.val : α
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_add_4D!,
+            dAval, dCval, C.val.indexer,
+            Val(C.val.NC1), Val(C.val.NC2),
+            conj(αval), Val(C.val.nw)
+        )
+    end
+
+    return (nothing, nothing, nothing)
+end
+
+# add_matrix! (C += α * A†)
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice},
+    α::S,
+) where {RT,S}
+    αval = hasproperty(α, :val) ? α.val : α
+    add_matrix!(C.val, A.val, αval)
+    return ER.AugmentedReturn(nothing, nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix!)},
+    dCout, _tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice},
+    α::S,
+) where {S}
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = _getshadow_data(A.dval)
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+    if dAval !== nothing
+        αval = hasproperty(α, :val) ? α.val : α
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_add_4D_dag!,
+            dAval, dCval, C.val.indexer,
+            Val(C.val.NC2), Val(C.val.NC1),
+            conj(αval), Val(C.val.nw)
+        )
+    end
+
+    return (nothing, nothing, nothing)
 end
 
 # dA[ic,kc] += sum_j dC[ic,j] * conj(B[kc,j])   (with shift on B indices)

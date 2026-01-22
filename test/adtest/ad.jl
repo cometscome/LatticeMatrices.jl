@@ -118,6 +118,38 @@ function loss_mulABtest(U1, U2, U3, U4, temp)
     return realtrace(C)
 end
 
+function loss_add_matrix_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    mul!(C, U1, U2)
+    add_matrix!(C, U1, 0.7)
+    add_matrix!(C, U2, -0.2)
+    return realtrace(C)
+end
+
+function loss_add_matrix_adj_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    mul!(C, U1, U2)
+    add_matrix!(C, U1', 0.3)
+    return realtrace(C)
+end
+
+function loss_add_matrix_shiftedA_test(U1, U2, U3, U4, shift1, temp)
+    C = temp[1]
+    mul!(C, U1, U2)
+    U1_p1 = shift_L(U1, shift1)
+    add_matrix!(C, U1_p1)
+    #LatticeMatrices.add_matrix_shiftedA!(C, U1, shift1, 0.7)
+    return realtrace(C)
+end
+
+function loss_add_matrix_shifted_adj_test(U1, U2, U3, U4, shift1, temp)
+    C = temp[1]
+    mul!(C, U1, U2)
+    Ashift = shift_L(U1, shift1)
+    add_matrix!(C, Ashift', 0.4)
+    return realtrace(C)
+end
+
 function loss_mulABtest_loop(U1, U2, U3, U4, temp)
     C = temp[1]
     D = temp[2]
@@ -471,6 +503,51 @@ function calc_action_loopfn(U1, U2, U3, U4, β, NC, temp)
     return -S * β / NC
 end
 
+function _calc_action_step_add!(Uout, C, D, Uμ, Uν, shift_μ, shift_ν)
+    Uμ_pν = shift_L(Uμ, shift_ν)
+    Uν_pμ = shift_L(Uν, shift_μ)
+
+    mul!(C, Uμ, Uν_pμ)
+    mul!(D, C, Uμ_pν')
+    mul!(Uout, D, Uν')
+    #add_matrix!(Uout, C)
+    #S = realtrace(E)
+
+    mul!(C, Uν, Uμ_pν)
+    mul!(D, C, Uν_pμ')
+    mul!(C, D, Uμ')
+    add_matrix!(Uout, C)
+    #S += realtrace(E)
+
+    #return S
+end
+
+
+function calc_action_loopfn_add(U1, U2, U3, U4, β, NC, temp)
+    U = (U1, U2, U3, U4)
+    ndir = length(U)
+    dim = length(U1.PN)
+    Uout = temp[1]
+    C = temp[2]
+    D = temp[3]
+    S = 0.0
+
+    for μ = 1:ndir
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:ndir
+            if ν == μ
+                continue
+            end
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            _calc_action_step_add!(Uout, C, D, U[μ], U[ν], shift_μ, shift_ν)
+            S += realtrace(Uout)
+        end
+    end
+
+    return -S * β / NC
+end
+
+
 function calc_action_loopfn(U, β, NC, temp)
     ndir = length(U)
     dim = length(U[1].PN)
@@ -520,8 +597,29 @@ function main()
     indices_mid = (3, 3, 3, 3)
     indices_halo = (2, 3, 3, 3)
 
+    β = 3.0
+
     S = realtrace(U[1])
     println(S)
+
+    fs4l_add(U1, U2, U3, U4, temp) = calc_action_loopfn_add(U1, U2, U3, U4, β, NC, temp)
+    run_case_all("calc_action_loopfn_add", fs4l_add, fs4l_add, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+    run_case_all("add_matrix", loss_add_matrix_test, loss_add_matrix_test,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    run_case_all("add_matrix_adj", loss_add_matrix_adj_test, loss_add_matrix_adj_test,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    fs_add_shift(U1, U2, U3, U4, temp) = loss_add_matrix_shiftedA_test(U1, U2, U3, U4, shift1, temp)
+    run_case_all("add_matrix_shiftedA", fs_add_shift, fs_add_shift,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    fs_add_shiftdag(U1, U2, U3, U4, temp) = loss_add_matrix_shifted_adj_test(U1, U2, U3, U4, shift1, temp)
+    run_case_all("add_matrix_shifted_adj", fs_add_shiftdag, fs_add_shiftdag,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
     run_case_all("mulAshiftedBtest_munuloop", loss_mulAshiftedBtest_munuloop,
         loss_mulAshiftedBtest_munuloop, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
@@ -530,7 +628,7 @@ function main()
     fs3(U1, U2, U3, U4, temp) = loss_plaquette(U1, U2, U3, U4, (1, 0, 0, 0), (0, 1, 0, 0), temp)
     run_case_all("loss_plaquette", fs3, fs3, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
-    β = 3.0
+
 
     #fs4l_1(U, temp) = calc_action_loopfn(U, β, NC, temp)
     #run_case_all_vector("calc_action_loopfn_1", fs4l_1, fs4l_1, U, dU, temp, dtemp, indices_mid, indices_halo)

@@ -245,7 +245,7 @@ All combinations of shifted and adjoint operands are supported and tested in `te
 
 ## Automatic differentiation (Enzyme)
 
-We provide Enzyme-based AD extensions and test cases. See `test/adtest/ad.jl` for a concrete comparison between
+(above v0.3: experimental) We provide Enzyme-based AD extensions and test cases. See `test/adtest/ad.jl` for a concrete comparison between
 automatic differentiation and numerical differentiation using `calc_action_loopfn`. The loop body is factored
 into a small helper function (`_calc_action_step!`), which makes Enzyme AD more reliable for loop-heavy code.
 

@@ -179,7 +179,7 @@ function loss_mulAshiftedBtest_munuloop_pairs(U1, U2, U3, U4, temp)
     return S
 end
 
-function _loss_mulAshiftedBtest_munuloop_val_step!(C, D, Uvec, ::Val{μ}, ::Val{ν}) where {μ, ν}
+function _loss_mulAshiftedBtest_munuloop_val_step!(C, D, Uvec, ::Val{μ}, ::Val{ν}) where {μ,ν}
     shifts = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
     shift_μ = shifts[μ]
     shift_ν = shifts[ν]
@@ -351,6 +351,15 @@ function main()
     S = realtrace(U[1])
     println(S)
 
+    fs3(U1, U2, U3, U4, temp) = loss_plaquette(U1, U2, U3, U4, (1, 0, 0, 0), (0, 1, 0, 0), temp)
+    run_case_all("loss_plaquette", fs3, fs3, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    β = 3.0
+    fs4(U1, U2, U3, U4, temp) = calc_action(U1, U2, U3, U4, β, NC, temp)
+    run_case_all("calc_action", fs4, fs4, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
     run_case_all("mulAshiftedBtest_munuloop_unrolled_shiftmul", loss_mulAshiftedBtest_munuloop_unrolled_shiftmul,
         loss_mulAshiftedBtest_munuloop_unrolled_shiftmul, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
@@ -393,13 +402,7 @@ function main()
 
 
 
-    β = 3.0
-    fs4(U1, U2, U3, U4, temp) = calc_action(U1, U2, U3, U4, β, NC, temp)
-    run_case_all("calc_action", fs4, fs4, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
-
-    fs3(U1, U2, U3, U4, temp) = loss_plaquette(U1, U2, U3, U4, (1, 0, 0, 0), (0, 1, 0, 0), temp)
-    run_case_all("loss_plaquette", fs3, fs3, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
 
 

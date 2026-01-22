@@ -27,119 +27,6 @@ end
 # Extract the shadow lattice matrix from an Annotation (Duplicated/MixedDuplicated).
 @inline _shadow_of(ann::ER.Annotation) = _getshadow(ann.dval)
 
-#=
-function ER.augmented_primal(cfg::ER.RevConfig,
-    ::ER.Const{typeof(LinearAlgebra.mul!)},
-    ::Type{RT},
-    C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:LatticeMatrix},
-    Bsh::ER.Annotation{<:Shifted_Lattice{<:Any,Dim}},
-) where {RT,Dim}
-    println("mul! Shifted_Lattice augmented_primal(")
-    # Forward: C = A * shift(B)
-    LinearAlgebra.mul!(C.val, A.val, Bsh.val)
-
-    # Always tape A and parent(B) primals to survive workspace reuse.
-    tapeA_obj, itA = get_block(A.val.temps)
-    tapeA_obj .= A.val.A
-    tapeA = (tapeA_obj, itA)
-
-    # Parent B is stored inside Bsh.data (which is an Annotation in AD mode).
-    parentB_ann = Bsh.val.data
-    parentB = _primal_of(parentB_ann)
-
-    tapeB_obj, itB = get_block(parentB.temps)
-    tapeB_obj .= parentB.A
-    tapeB = (tapeB_obj, itB)
-
-    sh = Bsh.val.shift
-
-    # mul! returns nothing => primal/shadow must be nothing.
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, sh))
-end
-=#
-
-#=
-
-function ER.reverse(cfg::ER.RevConfig,
-    ::ER.Const{typeof(LinearAlgebra.mul!)},
-    dCout, tape,
-    C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:LatticeMatrix},
-    Bsh::ER.Annotation{<:Shifted_Lattice{<:Any,Dim}},
-) where {Dim}
-    println("mul! Shifted_Lattice reverse")
-
-    # Fetch dC (output adjoint)
-    dC_struct = _getshadow_out(dCout, C)
-    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, nothing)
-    dCval = dC_struct.A
-
-    # Fetch dA buffer
-    dA_struct = _getshadow(A.dval)
-    dAval = (dA_struct === nothing) ? nothing : dA_struct.A
-
-    # Fetch dB buffer: accumulate into the parent of the shifted lattice
-    parentB_ann = Bsh.val.data
-    dB_struct = _shadow_of(parentB_ann)
-    dBval = (dB_struct === nothing) ? nothing : dB_struct.A
-
-    # Unpack tapes
-    tapeA, tapeB, sh = tape
-
-    # Use taped primals
-    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
-
-    parentB = _primal_of(parentB_ann)
-    Bval = (tapeB === nothing) ? parentB.A : tapeB[1]
-
-    # Context
-    NC1 = Val(C.val.NC1)
-    NC2 = Val(C.val.NC2)
-    NC3 = Val(A.val.NC2)  # (=B.val.NC1)
-    nw = Val(C.val.nw)
-    idxr = C.val.indexer
-    Nsites = prod(C.val.PN)
-
-    # (1) dA[x] += dC[x] * (B[x+sh])†
-    if dAval isa AbstractArray
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mulABdagadd_shift!,
-            dAval, dCval, Bval,
-            NC1, NC2, NC3, nw, idxr, sh
-        )
-    end
-
-    # (2) dB[x+sh] += (A[x])† * dC[x]
-    if dBval isa AbstractArray
-        println("reverse shiftAdag? dBval ok: typeof(dBval)=$(typeof(dBval)) typeof(dB_struct)=$(typeof(dB_struct))")
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mulAdagBadd_scatter_shift!,
-            dBval, Aval, dCval,
-            NC1, NC2, NC3, nw, idxr, sh
-        )
-
-        # If your numerical diff compares core-index gradients, fold halo gradients here.
-        # (No MPI case: local fold; MPI case: reverse_exchange_dim! etc.)
-        fold_halo_to_core_grad!(dB_struct)
-    end
-
-    # Release tape blocks back to the pool
-    # if tapeA !== nothing
-    #     unused!(A.val.temps, tapeA[2])
-    # end
-    # if tapeB !== nothing
-    #     unused!(B.val.temps, tapeB[2])
-    # end
-
-    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
-    return (nothing, nothing, nothing)
-end
-
-=#
 
 
 
@@ -168,95 +55,16 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     tapeB_obj = deepcopy(B.val.A)
     tapeB = (tapeB_obj, nothing)
 
+    tape_shift = shift.val
     if get(ENV, "LM_DEBUG_MULASHIFTB", "") == "1"
-        println("mul_AshiftB! augmented_primal: itA=$(tapeA[2]) itB=$(tapeB[2]) A_id=$(objectid(tapeA_obj)) B_id=$(objectid(tapeB_obj))")
+        println("mul_AshiftB! augmented_primal: itA=$(tapeA[2]) itB=$(tapeB[2]) A_id=$(objectid(tapeA_obj)) B_id=$(objectid(tapeB_obj)) shift.val=$(tape_shift)")
     end
 
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, tape_shift))
 end
 
 
 
-#=
-
-function ER.reverse(cfg::ER.RevConfig,
-    ::ER.Const{typeof(mul_AshiftB!)},
-    dCout, tape,
-    C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:LatticeMatrix},
-    B::ER.Annotation{<:LatticeMatrix},
-    shift::RT,
-) where {RT}
-    #println("mul_AshiftB!: reverse")
-
-    # Fetch dC (output adjoint)
-    dC_struct = _getshadow_out(dCout, C)
-    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, nothing)
-    dCval = dC_struct.A
-
-    # Fetch dA buffer
-    dA_struct = _getshadow(A.dval)
-    dAval = (dA_struct === nothing) ? nothing : dA_struct.A
-
-    # Fetch dB buffer
-    dB_struct = _getshadow(B.dval)
-
-    # Unpack tapes
-    tapeA, tapeB = tape
-
-    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
-    Bval = (tapeB === nothing) ? B.val.A : tapeB[1]
-
-    # Context
-    NC1 = Val(C.val.NC1)
-    NC2 = Val(C.val.NC2)
-    NC3 = Val(A.val.NC2)
-    nw = Val(C.val.nw)
-    idxr = C.val.indexer
-    Nsites = prod(C.val.PN)
-    sh = shift.val
-
-    # dA += dC * (B[x+sh])†
-    #if dAval !== nothing
-    #    JACC.parallel_for(Nsites, kernel_Dmatrix_mulABdagadd_shift!,
-    #        dAval, dCval, Bval, NC1, NC2, NC3, nw, idxr, sh)
-    #end
-    # dA += dC * (B[x+sh])†
-    if dAval isa AbstractArray
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mul_dA_from_dC_Bdag_shift!,
-            dAval, dCval, Bval,
-            NC1, NC2, NC3, nw, idxr, sh
-        )
-    end
-
-    # dB[x+sh] += (A[x])† * dC
-    dBval = (dB_struct isa LatticeMatrix) ? dB_struct.A : nothing
-    if dBval isa AbstractArray
-        println("reverse mul_AshiftB!: dBval ok: typeof(dBval)=$(typeof(dBval)) typeof(dB_struct)=$(typeof(dB_struct)) typeof(B.dval)=$(typeof(B.dval))")
-        JACC.parallel_for(Nsites, kernel_Dmatrix_mulAdagBadd_scatter_shift!,
-            dBval, Aval, dCval, NC1, NC2, NC3, nw, idxr, sh)
-        fold_halo_to_core_grad!(dB_struct)
-    else
-        println("mul_AshiftB!: reverse dB inactive; typeof(dBval)=$(typeof(dBval)) typeof(dB_struct)=$(typeof(dB_struct)) typeof(B.dval)=$(typeof(B.dval))")
-    end
-
-    # Release tape blocks
-    if tapeA !== nothing && tapeA[2] !== nothing
-        unused!(A.val.temps, tapeA[2])
-    end
-    if tapeB !== nothing && tapeB[2] !== nothing
-        unused!(B.val.temps, tapeB[2])
-    end
-
-    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
-    return (nothing, nothing, nothing, nothing)
-end
-
-
-=#
 
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(mul_AshiftB!)},
@@ -341,7 +149,7 @@ function _rev_mul_AshiftB!(
     dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
 
     # Unpack tapes
-    tapeA, tapeB = tape
+    tapeA, tapeB, tape_shift = tape
     Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
     Bval = (tapeB === nothing) ? B.val.A : tapeB[1]
 
@@ -352,7 +160,7 @@ function _rev_mul_AshiftB!(
     nw = Val(C.val.nw)
     idxr = C.val.indexer
     Nsites = prod(C.val.PN)
-    sh = shift.val
+    sh = tape_shift
 
     # dA += dC * (B[x+sh])†
     if dAval !== nothing
@@ -781,37 +589,6 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 
-#=
-function ER.augmented_primal(cfg::ER.RevConfig,
-    ::ER.Const{typeof(mul!)},
-    ::Type{RT},
-    C::ER.Annotation{T},
-    A::ER.Annotation{T},
-    Bsh::ER.Annotation{<:Shifted_Lattice},
-) where {T<:LatticeMatrix,RT}
-    println("mul AshiftedB!: augmented_primal")
-
-    # Forward (primal) computation
-    # You need a primal mul! method that accepts (LatticeMatrix, LatticeMatrix, ShiftedLatticeMatrix)
-    mul!(C.val, A.val, Bsh.val)
-
-    # Conservative tapes: always store A and B(parent) for correctness under workspace reuse.
-    tapeA_obj, it_tapeA = get_block(A.val.temps)
-    tapeA_obj .= A.val.A
-    tapeA = (tapeA_obj, it_tapeA)
-
-    parentB = Bsh.val.data
-    tapeB_obj, it_tapeB = get_block(parentB.temps)
-    tapeB_obj .= parentB.A
-    tapeB = (tapeB_obj, it_tapeB)
-
-    # Save the shift descriptor as well (cheap, but needed in reverse)
-    sh = Bsh.val.shift
-
-    # mul! returns nothing → primal/shadow are nothing
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, sh))
-end
-=#
 
 @inline function _replace_index(indices, dim, newval)
     return ntuple(i -> i == dim ? newval : indices[i], length(indices))
@@ -859,83 +636,6 @@ function fold_halo_to_core_grad!(ls::LatticeMatrix)
     return nothing
 end
 
-#=
-function Enzyme.EnzymeRules.reverse(::RevConfig,
-    ::Const{typeof(LinearAlgebra.mul!)},
-    dCout, tape,
-    C::Annotation{<:LatticeMatrix},
-    A::Annotation{<:LatticeMatrix},
-    Bsh::Annotation{<:Shifted_Lattice{<:Any,Dim}},
-) where {Dim}
-    println("mul AshiftedB!: reverse")
-
-    # Fetch dC (output adjoint)
-    dC_struct = _getshadow_out(dCout, C)
-    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, nothing)
-    dCval = dC_struct.A
-
-    # Fetch dA buffer
-    dA_struct = _getshadow(A.dval)
-    dAval = (dA_struct === nothing) ? nothing : dA_struct.A
-
-    # IMPORTANT: gradient must be accumulated into the parent of the shifted lattice
-    parentB = Bsh.val.data
-    dB_struct = _getshadow(parentB.dval)
-    dBval = (dB_struct === nothing) ? nothing : dB_struct.A
-
-    # Unpack tapes
-    tapeA, tapeB, sh = tape
-
-    # Use taped primals
-    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
-    Bval = (tapeB === nothing) ? parentB.A : tapeB[1]
-
-    NC1 = Val(C.val.NC1)
-    NC2 = Val(C.val.NC2)
-    NC3 = Val(A.val.NC2)  # (=B.val.NC1)
-    nw = Val(C.val.nw)
-    idxr = C.val.indexer
-    Nsites = prod(C.val.PN)
-
-    # (1) dA[x] += dC[x] * (Bparent[x+sh])'
-    if dAval isa AbstractArray
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mulABdagadd_shift!,
-            dAval, dCval, Bval,
-            NC1, NC2, NC3, nw, idxr, sh
-        )
-    end
-
-    # (2) dBparent[x+sh] += (A[x])' * dC[x]
-    if dBval isa AbstractArray
-        println("reverse mul! shift_L ann: dBval ok: typeof(dBval)=$(typeof(dBval)) typeof(dB_struct)=$(typeof(dB_struct))")
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mulAdagBadd_scatter_shift!,
-            dBval, Aval, dCval,
-            NC1, NC2, NC3, nw, idxr, sh
-        )
-    else
-        println("reverse mul! shift_L ann: dB inactive: typeof(dBval)=$(typeof(dBval)) typeof(dB_struct)=$(typeof(dB_struct))")
-    end
-
-    # Release tape blocks back to the pool
-    if tapeA !== nothing
-        unused!(A.val.temps, tapeA[2])
-    end
-    if tapeB !== nothing
-        unused!(parentB.temps, tapeB[2])
-    end
-
-    # Optional: accumulate halo gradients back to owners (if scatter can hit halo)
-    # halo_accumulate!(parentB.dval)
-
-    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
-    return (nothing, nothing, nothing)
-end
-=#
 
 @inline function kernel_Dmatrix_mulABdagadd_shift!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}
     indices = delinearize(dindexer, i, nw)

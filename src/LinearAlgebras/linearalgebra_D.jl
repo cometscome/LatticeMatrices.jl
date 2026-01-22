@@ -4588,7 +4588,13 @@ end
 #C = C+ α*shiftAdag
 function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{Shifted_Lattice{L,D}}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
     shift = get_shift(A)
-    JACC.parallel_for(prod(C.PN), kernel_add_4D_shiftdag!, C.A, A.data.data.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
+    add_matrix_shiftedAdag!(C, A.data.data, shift, α)
+    #set_halo!(C)
+end
+
+function add_matrix_shiftedAdag!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, shift, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+    JACC.parallel_for(prod(C.PN), kernel_add_4D_shiftdag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
     #set_halo!(C)
 end
 

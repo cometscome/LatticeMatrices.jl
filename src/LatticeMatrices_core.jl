@@ -12,6 +12,7 @@
 ##############################################################################
 
 using MPI, StaticArrays, JACC
+using PreallocatedArrays
 
 abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} end
 
@@ -37,11 +38,16 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
     PN::NTuple{D,Int}
     comm::MPI.Comm
     indexer::DI
+    temps::PreallocatedArray{AT,Union{Nothing,String},false}
     #stride::NTuple{D,Int}
 end
 
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
+    numtemps = length(ls.temps._data)
+    tA = zero(ls.A)
+    temps = PreallocatedArray(tA; num=numtemps, haslabel=false)
+
     return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
         ls.phases,
         ls.NC1,
@@ -51,29 +57,33 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         ls.coords,
         ls.dims,
         ls.nbr,
-        zero(ls.A),
+        tA,
         ls.buf,
         ls.myrank,
         ls.PN,
         ls.comm,
-        ls.indexer)
+        ls.indexer,
+        temps
+    )
 end
 
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
-function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
-    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0)
+function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
+    comm0=MPI.COMM_WORLD, numtemps=1)
+    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0, numtemps)
 end
 
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
-    return LatticeMatrix_standard(A, dim, PEs; nw, phases, comm0)
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
+    return LatticeMatrix_standard(A, dim, PEs; nw, phases, comm0, numtemps)
 end
 
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
-function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
+function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD,
+    numtemps=1)
 
     # Cartesian grid
     D = dim
@@ -112,15 +122,17 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     indexer = DIndexer(PN)
     DI = typeof(indexer)
 
+    temps = PreallocatedArray(A; num=numtemps, haslabel=false)
+
     #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
     #    cart, Tuple(coords), dims, nbr,
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
     return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, MPI.Comm_rank(cart), PN, comm0, indexer)
+        A, buf, MPI.Comm_rank(cart), PN, comm0, indexer, temps)
 end
 
-function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
+function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
 
     NC1, NC2, NN... = size(A)
     #println(NN)
@@ -134,7 +146,7 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
     #end
     gsize = NN
 
-    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs; elementtype, nw, phases, comm0)
+    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs; elementtype, nw, phases, comm0, numtemps)
     MPI.Bcast!(A, ls.cart)
     Acpu = Array(ls.A)
 
@@ -176,7 +188,7 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
 end
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
-    return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims; nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm)
+    return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims; nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1)
 end
 
 

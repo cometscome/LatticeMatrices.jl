@@ -1800,6 +1800,13 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Shifted_Lattice{L,D}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}}
     shift = get_shift(A)
+    mul_shiftA_B!(C, A, B, shift)
+    #set_halo!(C)
+end
+
+function mul_shiftA_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L,D}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftAB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
@@ -1911,7 +1918,14 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftA_B!(C, A, B, shift, α, β)
+    #set_halo!(C)
+end
 
+function mul_shiftA_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L,D}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftAB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
@@ -1985,9 +1999,34 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     #display(B.data.A[:, :, 2, 2, 2, 2])
     #println("BdataA")
     shift = get_shift(B)
-    JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
-    )
+    #for i = 1:prod(C.PN)
+    #    kernel_Dmatrix_mul_AshiftB!(i, C.A, A.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift)
+    #end
+    mul_AshiftB!(C, A, B.data, shift)
+    #JACC.parallel_for(
+    #    prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
+    #)
+    #set_halo!(C)
+end
+
+
+function mul_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    #println("C = A*shiftedB $NC1 $NC2 $NC3 ")
+    #display(B.data.A[:, :, 2, 2, 2, 2])
+    #println("BdataA")
+    #shift = get_shift(B)
+
+    for i = 1:prod(C.PN)
+        kernel_Dmatrix_mul_AshiftB!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift)
+    end
+
+
+    #JACC.parallel_for(
+    #    prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
+    #)
+
     #set_halo!(C)
 end
 
@@ -2105,10 +2144,23 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     shift = get_shift(B)
+    #βin = T1(β)
+    #αin = T1(α)
+    mul_AshiftB!(C, A, B.data, shift, α, β)
+    #JACC.parallel_for(
+    #    prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, αin, βin
+    #)
+    #set_halo!(C)
+end
+
+function mul_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     βin = T1(β)
     αin = T1(α)
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, αin, βin
+        prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, αin, βin
     )
     #set_halo!(C)
 end
@@ -2243,6 +2295,13 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftAdag_B!(C, A, B, shift)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagB!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
@@ -2313,7 +2372,14 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftAdag_B!(C, A, B, shift, α, β)
+    #set_halo!(C)
+end
 
+function mul_shiftAdag_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagB!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
@@ -2427,6 +2493,13 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftA_Bdag!(C, A, B, shift)
+    #set_halo!(C)
+end
+
+function mul_shiftA_Bdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L1,D}, B::Adjoint_Lattice{L2}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftABdag!, C.A, A.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
@@ -2541,6 +2614,14 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftA_Bdag!(C, A, B, shift, α, β)
+    #set_halo!(C)
+end
+
+function mul_shiftA_Bdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L1,D}, B::Adjoint_Lattice{L2}, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftABdag!, C.A, A.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
@@ -2658,6 +2739,13 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftAdag_Bdag!(C, A, B, shift)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_Bdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagBdag!, C.A, A.data.data.A, B.data.A, Val(NC1),
         Val(NC2), Val(NC3), Val(nw), C.indexer, shift
@@ -2690,6 +2778,14 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(A)
+    mul_shiftAdag_Bdag!(C, A, B, shift, α, β)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_Bdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagBdag!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
@@ -2811,8 +2907,15 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
 
     shift = get_shift(B)
+    mul_Adag_shiftB!(C, A, B.data, shift)
+    #set_halo!(C)
+end
+
+function mul_Adag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L1}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AdagshiftB!, C.A, A.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
+        prod(C.PN), kernel_Dmatrix_mul_AdagshiftB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
 end
@@ -2839,8 +2942,16 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     shift = get_shift(B)
+    mul_Adag_shiftB!(C, A, B.data, shift, α, β)
+    #set_halo!(C)
+end
+
+function mul_Adag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L1}, B::L, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AdagshiftB!, C.A, A.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_AdagshiftB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
     #set_halo!(C)
 end
@@ -2867,8 +2978,15 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(B)
+    mul_A_shiftBdag!(C, A, B.data.data, shift)
+    #set_halo!(C)
+end
+
+function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
+        prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
 end
@@ -2903,8 +3021,16 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(B)
+    mul_A_shiftBdag!(C, A, B.data.data, shift, α, β)
+    #set_halo!(C)
+end
+
+function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
     #set_halo!(C)
 end
@@ -3036,8 +3162,15 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(B)
+    mul_Adag_shiftBdag!(C, A, B.data.data, shift)
+    #set_halo!(C)
+end
+
+function mul_Adag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L1}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AdagshiftBdag!, C.A, A.data.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
+        prod(C.PN), kernel_Dmatrix_mul_AdagshiftBdag!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
 end
@@ -3064,8 +3197,16 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(B)
+    mul_Adag_shiftBdag!(C, A, B.data.data, shift, α, β)
+    #set_halo!(C)
+end
+
+function mul_Adag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L1}, B::L, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_AdagshiftBdag!, C.A, A.data.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_AdagshiftBdag!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
     #set_halo!(C)
 end
@@ -3094,8 +3235,15 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftA_shiftB!(C, A, B.data, shiftA, shiftB)
+    #set_halo!(C)
+end
+
+function mul_shiftA_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L1,D}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftB!, C.A, A.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
+        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
     #set_halo!(C)
 end
@@ -3125,8 +3273,16 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftA_shiftB!(C, A, B.data, shiftA, shiftB, α, β)
+    #set_halo!(C)
+end
+
+function mul_shiftA_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L1,D}, B::L, shiftA, shiftB,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftB!, C.A, A.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
     )
     #set_halo!(C)
 end
@@ -3247,8 +3403,16 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftAdag_shiftB!(C, A, B.data, shiftA, shiftB)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftB!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
+        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftB!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
     #set_halo!(C)
 end
@@ -3346,8 +3510,17 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftAdag_shiftB!(C, A, B.data, shiftA, shiftB, α, β)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftB!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftB!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
     )
     #set_halo!(C)
 end
@@ -3519,8 +3692,16 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftA_shiftBdag!(C, A, B.data.data, shiftA, shiftB)
+    #set_halo!(C)
+end
+
+function mul_shiftA_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L1,D}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftBdag!, C.A, A.data.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
+        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftBdag!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
     #set_halo!(C)
 end
@@ -3553,8 +3734,17 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     shiftA = get_shift(A)
     shiftB = get_shift(B)
     #println((shiftA, shiftB))
+    mul_shiftA_shiftBdag!(C, A, B.data.data, shiftA, shiftB, α, β)
+    #set_halo!(C)
+end
+
+function mul_shiftA_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L1,D}, B::L, shiftA, shiftB,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftBdag!, C.A, A.data.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_shiftAshiftBdag!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
     )
     #set_halo!(C)
 end
@@ -3675,8 +3865,17 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftAdag_shiftBdag!(C, A, B.data.data, shiftA, shiftB)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftBdag!, C.A, A.data.data.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
+        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftBdag!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
     #set_halo!(C)
 end
@@ -3708,8 +3907,18 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
+    mul_shiftAdag_shiftBdag!(C, A, B.data.data, shiftA, shiftB, α, β)
+    #set_halo!(C)
+end
+
+function mul_shiftAdag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    B::L, shiftA, shiftB,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
+    AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     JACC.parallel_for(
-        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftBdag!, C.A, A.data.data.A, B.data.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
+        prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftBdag!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB, α::S, β::S
     )
     #set_halo!(C)
 end

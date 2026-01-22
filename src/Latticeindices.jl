@@ -192,7 +192,10 @@ end
 
 
 @inline function shiftindices(indices, shift)
-    return ntuple(i -> indices[i] + shift[i], length(indices))
+    d = length(indices)
+    s = length(shift)
+    s > d && throw(BoundsError(shift, d))
+    return ntuple(i -> indices[i] + (i <= s ? shift[i] : 0), d)
 end
 export shiftindices
 

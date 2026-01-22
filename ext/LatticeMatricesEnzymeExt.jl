@@ -3,7 +3,7 @@ using LinearAlgebra
 using LatticeMatrices
 using Enzyme
 using JACC
-import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg
+import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!
 
 include("./AD/AD.jl")
 
@@ -25,6 +25,7 @@ function Wiltinger_derivative!(
     temp=nothing,
     dtemp=nothing
 )
+    println("Wilttinger_derivative in LatticeMatrices.jl")
     # Primary variable: always differentiated
     annU = Enzyme.Duplicated(U, dfdU)
 
@@ -46,7 +47,8 @@ function Wiltinger_derivative!(
             Enzyme.Const(func),
             Active,
             annU,
-            ann_args..., DuplicatedNoNeed(temp, dtemp)
+            ann_args..., Duplicated(temp, dtemp)
+            #ann_args..., DuplicatedNoNeed(temp, dtemp)
         )
     end
 
@@ -56,6 +58,71 @@ function Wiltinger_derivative!(
     # Gradients of Active scalar arguments are returned by Enzyme
     return result
 end
+
+Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, temp, dtemp, args...) =
+    Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, args...; temp=temp, dtemp=dtemp)
+
+
+function Enzyme_derivative!(
+    func,
+    U1,
+    U2,
+    U3,
+    U4,
+    dfdU1,
+    dfdU2,
+    dfdU3,
+    dfdU4, args...;
+    temp=nothing,
+    dtemp=nothing
+)
+    println("Enzyme_derivative! in LatticeMatrices.jl")
+    Enzyme.API.strictAliasing!(false)
+    # Primary variables: always differentiated
+    annU1 = Enzyme.Duplicated(U1, dfdU1)
+    annU2 = Enzyme.Duplicated(U2, dfdU2)
+    annU3 = Enzyme.Duplicated(U3, dfdU3)
+    annU4 = Enzyme.Duplicated(U4, dfdU4)
+
+    # Convert additional arguments
+    ann_args = map(toann, args)
+
+    # Call Enzyme
+    if temp === nothing
+        result = Enzyme.autodiff(
+            Reverse,
+            Enzyme.Const(func),     # function object is always treated as read-only
+            Active,          # return value is a real scalar
+            annU1,
+            annU2,
+            annU3,
+            annU4,
+            ann_args...
+        )
+    else
+        result = Enzyme.autodiff(
+            Reverse,
+            Enzyme.Const(func),
+            Active,
+            annU1,
+            annU2,
+            annU3,
+            annU4,
+            ann_args..., Duplicated(temp, dtemp)
+            #ann_args..., DuplicatedNoNeed(temp, dtemp)
+        )
+    end
+
+    # Halo values are constrained to core values; fold halo gradients back to core.
+    fold_halo_to_core_grad!(dfdU1)
+    fold_halo_to_core_grad!(dfdU2)
+    fold_halo_to_core_grad!(dfdU3)
+    fold_halo_to_core_grad!(dfdU4)
+
+    # Gradients of Active scalar arguments are returned by Enzyme
+    return result
+end
+export Enzyme_derivative
 #=
 function Wiltinger_derivative!(func, U, dfdU, temp=nothing, dtemp=nothing; params...)
     if length(params) > 1

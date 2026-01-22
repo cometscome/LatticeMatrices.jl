@@ -19,7 +19,7 @@ struct Shifted_Lattice{D,Dim} <: AbstractLattice
     data::D
     shift::NTuple{Dim,Int64}
 
-    function Shifted_Lattice(data, shift, ::Val{Dim}) where {Dim}
+    Base.@noinline function Shifted_Lattice(data, shift, ::Val{Dim}) where {Dim}
         return new{typeof(data),Dim}(data, shift)
     end
 
@@ -28,6 +28,7 @@ end
 
 
 export Shifted_Lattice
+export shift_L
 
 struct Adjoint_Lattice{D} <: AbstractLattice
     data::D
@@ -78,11 +79,13 @@ end
     if shift_in isa NTuple{D,Int}
         return shift_in
     elseif shift_in isa AbstractVector{<:Integer}
-        @assert length(shift_in) == D "shift length must be $D"
-        return ntuple(i -> Int(shift_in[i]), D)
+        len = length(shift_in)
+        len > D && throw(ArgumentError("shift length must be <= $D"))
+        return ntuple(i -> i <= len ? Int(shift_in[i]) : 0, D)
     elseif shift_in isa Tuple
-        @assert length(shift_in) == D "shift length must be $D"
-        return ntuple(i -> Int(shift_in[i]), D)
+        len = length(shift_in)
+        len > D && throw(ArgumentError("shift length must be <= $D"))
+        return ntuple(i -> i <= len ? Int(shift_in[i]) : 0, D)
     else
         error("Unsupported shift type: $(typeof(shift_in)). Provide NTuple{$D,Int} or Vector{Int}.")
     end
@@ -91,7 +94,7 @@ end
 @inline make_step(i, r, ::Val{D}) where {D} =
     ntuple(j -> ifelse(j == i, r, 0), D)
 
-function Shifted_Lattice(data::TL, shift_in::TS) where {
+Base.@noinline function Shifted_Lattice(data::TL, shift_in::TS) where {
     D,T,AT,NC1,NC2,nw,DI,
     TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TS
 }
@@ -164,6 +167,16 @@ function Shifted_Lattice(data::TL, shift_in::TS) where {
 
     zeroshift = ntuple(_ -> 0, D)
     return Shifted_Lattice(sl0, zeroshift, Val(D))
+end
+
+#Base.@noinline function shift_L(A::LatticeMatrix, shift)
+#    return Shifted_Lattice(A, shift)
+#end
+
+Base.@noinline function shift_L(B, sh::NTuple{Dim,Int}) where {Dim}
+    #println("shift_L: Dim=$(Dim) length(sh)=$(length(sh)) sh=$(sh) typeof(B)=$(typeof(B))")
+    return Shifted_Lattice(B, sh)
+    #return Shifted_Lattice{typeof(B),Dim}(B, sh)
 end
 
 #=
@@ -381,6 +394,9 @@ function realtrace end
 export realtrace
 function Wiltinger_derivative! end
 export Wiltinger_derivative!
+function Enzyme_derivative! end
+export Enzyme_derivative!
+function fold_halo_to_core_grad! end
 
 struct DiffArg{T}
     x::T

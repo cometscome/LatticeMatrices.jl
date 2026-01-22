@@ -535,7 +535,7 @@ end
 
 # add_matrix_Adag! (C += α * A†)
 function ER.augmented_primal(cfg::ER.RevConfig,
-    ::ER.Const{typeof(add_matrix_Adag!)} ,
+    ::ER.Const{typeof(add_matrix_Adag!)},
     ::Type{RT},
     C::ER.Annotation{<:LatticeMatrix},
     A::ER.Annotation{<:LatticeMatrix},
@@ -547,7 +547,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
 end
 
 function ER.reverse(cfg::ER.RevConfig,
-    ::ER.Const{typeof(add_matrix_Adag!)} ,
+    ::ER.Const{typeof(add_matrix_Adag!)},
     dCout, _tape,
     C::ER.Annotation{<:LatticeMatrix},
     A::ER.Annotation{<:LatticeMatrix},
@@ -615,6 +615,7 @@ function ER.reverse(cfg::ER.RevConfig,
     return (nothing, nothing, nothing)
 end
 
+#=
 # add_matrix! (C += α * A†)
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(add_matrix!)},
@@ -655,6 +656,7 @@ function ER.reverse(cfg::ER.RevConfig,
 
     return (nothing, nothing, nothing)
 end
+=#
 
 # dA[ic,kc] += sum_j dC[ic,j] * conj(B[kc,j])   (with shift on B indices)
 @inline function kernel_Dmatrix_mul_dA_from_dC_Bdag_shift!(
@@ -673,21 +675,6 @@ end
         end
     end
     return nothing
-end
-
-
-struct Adjoint_Lattice_Ann{A} <: AbstractLattice
-    data::A  # Enzyme annotation (Duplicated/MixedDuplicated/Const)
-end
-
-# Normal (non-AD) wrapper
-Base.@noinline adj_L(B::LatticeMatrix) = Adjoint_Lattice(B)
-
-# AD-time wrapper
-Base.@noinline adj_L(B::ER.Annotation) = Adjoint_Lattice_Ann(B)
-
-Base.@noinline function Base.adjoint(data::ER.Annotation)
-    return Adjoint_Lattice_Ann(data)
 end
 
 
@@ -906,99 +893,6 @@ end
 end
 
 
-function ER.augmented_primal(cfg::ER.RevConfig,
-    ::ER.Const{typeof(LinearAlgebra.mul!)},
-    ::Type{RT},
-    C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:LatticeMatrix},
-    Badj::ER.Annotation{<:Adjoint_Lattice_Ann},
-) where {RT}
-
-    # Forward computation (primal)
-    LinearAlgebra.mul!(C.val, A.val, Badj.val)
-
-    # Tape A
-    tapeA_obj, itA = get_block(A.val.temps)
-    tapeA_obj .= A.val.A
-    tapeA = (tapeA_obj, itA)
-
-    # Tape parent(B) primal, accessible through annotation
-    parentB = Badj.val.data
-    tapeB_obj, itB = get_block(parentB.val.temps)
-    tapeB_obj .= parentB.val.A
-    tapeB = (tapeB_obj, itB)
-
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
-end
-
-function ER.reverse(::RevConfig,
-    ::ER.Const{typeof(LinearAlgebra.mul!)},
-    dCout, tape,
-    C::ER.Annotation{<:LatticeMatrix},
-    A::ER.Annotation{<:LatticeMatrix},
-    Badj::ER.Annotation{<:Adjoint_Lattice_Ann},
-)
-
-    # Fetch dC (output adjoint)
-    dC_struct = _getshadow_out(dCout, C)
-    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, nothing)
-    dCval = dC_struct.A
-
-    # Fetch dA buffer
-    dA_struct = _getshadow(A.dval)
-    dAval = (dA_struct === nothing) ? nothing : dA_struct.A
-
-    # Fetch dB buffer (IMPORTANT: accumulate into parent B, not into Badj)
-    parentB = Badj.val.data                    # Annotation
-    dB_struct = _getshadow(parentB.dval)
-    dBval = (dB_struct === nothing) ? nothing : dB_struct.A
-
-    # Unpack tapes
-    tapeA, tapeB = tape
-    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
-    Bval = (tapeB === nothing) ? parentB.val.A : tapeB[1]
-
-    # Context
-    NC1 = Val(C.val.NC1)
-    NC2 = Val(C.val.NC2)
-    NC3 = Val(A.val.NC2)   # A is NC1×NC3, B is NC2×NC3, C is NC1×NC2
-    nw = Val(C.val.nw)
-    idxr = C.val.indexer
-    Nsites = prod(C.val.PN)
-
-    # (1) dA += dC * B
-    if dAval isa AbstractArray
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mulACadd!,   # new kernel
-            dAval, dCval, Bval,
-            NC1, NC2, NC3, nw, idxr
-        )
-    end
-
-    # (2) dB += (dC)† * A
-    if dBval isa AbstractArray
-        JACC.parallel_for(
-            Nsites,
-            kernel_Dmatrix_mulCdagAadd!,  # new kernel
-            dBval, dCval, Aval,
-            NC2, NC1, NC3, nw, idxr       # note dims: dB is NC2×NC3
-        )
-    end
-
-    # Release tapes
-    if tapeA !== nothing
-        unused!(A.val.temps, tapeA[2])
-    end
-    if tapeB !== nothing
-        unused!(parentB.val.temps, tapeB[2])
-    end
-
-    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
-    return (nothing, nothing, nothing)
-end
-
 @inline function kernel_Dmatrix_mulACadd!(i, dA, dC, B,
     ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer
 ) where {NC1,NC2,NC3,nw}
@@ -1026,22 +920,6 @@ end
             dB[jc, kc, indices...] += acc
         end
     end
-end
-
-function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},
-    Badj::Adjoint_Lattice_Ann,
-) where {D,T1,T2,AT1,AT2,NC1,NC2,NC3,nw,DI}
-
-    parentB = Badj.data.val  # unwrap primal from annotation
-
-    JACC.parallel_for(
-        prod(C.PN),
-        kernel_Dmatrix_mul_ABdag!,
-        C.A, A.A, parentB.A,
-        Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer
-    )
-    return C
 end
 
 

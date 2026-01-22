@@ -675,8 +675,8 @@ function main()
         U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
 
-    fs_exp_ta(U1, U2, U3, U4, temp) = calc_action_loss_exp_traceless_antihermitian(U1, U2, U3, U4, β, NC, texp, temp)
-    run_case_all("calc_action_loss_exp_traceless_antihermitian", fs_exp_ta, fs_exp_ta,
+    fs_exp_tan(U1, U2, U3, U4, temp) = calc_action_loss_exp_traceless_antihermitian(U1, U2, U3, U4, β, NC, texp, temp)
+    run_case_all("calc_action_loss_exp_traceless_antihermitian", fs_exp_tan, fs_exp_tan,
         U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
 

@@ -227,6 +227,10 @@ mul!(M1, M2s, M3)                # M1 = (M2 shifted) * M3
 
 The shift is applied with periodic wrapping across the global lattice size.
 
+---
+
+
+
 ### 3) Multiplication with conjugate-transposed matrices
 
 ```julia
@@ -238,6 +242,27 @@ mul!(M1, M2', M3')               # M1 = adjoint(M2) * adjoint(M3)
 All combinations of shifted and adjoint operands are supported and tested in `test/runtests.jl`.
 
 ---
+
+## Automatic differentiation (Enzyme)
+
+We provide Enzyme-based AD extensions and test cases. See `test/adtest/ad.jl` for a concrete comparison between
+automatic differentiation and numerical differentiation using `calc_action_loopfn`. The loop body is factored
+into a small helper function (`_calc_action_step!`), which makes Enzyme AD more reliable for loop-heavy code.
+
+Example (runs the AD vs numerical comparison with `calc_action_loopfn`):
+
+```julia
+using Enzyme
+using LatticeMatrices, MPI, JACC
+JACC.@init_backend
+MPI.Init()
+
+include("test/adtest/ad.jl") # runs main() in the script
+```
+
+Note: the AD result here follows Enzyme's complex differentiation convention. For a complex variable
+`U = X + iY`, the gradient reported by Enzyme is
+`dS/dUij = dS/dXij + i dS/dYij`.
 
 
 ---

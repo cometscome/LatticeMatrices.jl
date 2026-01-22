@@ -43,17 +43,17 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     mul_AshiftB!(C.val, A.val, B.val, shift.val)
 
     # Always tape A and parent(B) primals to survive workspace reuse.
-    # tapeA_obj, itA = get_block(A.val.temps)
-    # tapeA_obj .= A.val.A
-    # tapeA = (tapeA_obj, itA)
-    tapeA_obj = deepcopy(A.val.A)
-    tapeA = (tapeA_obj, nothing)
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+    #tapeA_obj = deepcopy(A.val.A)
+    #tapeA = (tapeA_obj, nothing)
 
-    # tapeB_obj, itB = get_block(B.val.temps)
-    # tapeB_obj .= B.val.A
-    # tapeB = (tapeB_obj, itB)
-    tapeB_obj = deepcopy(B.val.A)
-    tapeB = (tapeB_obj, nothing)
+    tapeB_obj, itB = get_block(B.val.temps)
+    tapeB_obj .= B.val.A
+    tapeB = (tapeB_obj, itB)
+    #tapeB_obj = deepcopy(B.val.A)
+    #tapeB = (tapeB_obj, nothing)
 
     tape_shift = shift.val
     if get(ENV, "LM_DEBUG_MULASHIFTB", "") == "1"
@@ -188,10 +188,10 @@ function _rev_mul_AshiftB!(
 
     # Release tape blocks（早期 return があっても必ずやりたいなら try/finally 化推奨）
     if tapeA !== nothing
-        # unused!(A.val.temps, tapeA[2])
+        unused!(A.val.temps, tapeA[2])
     end
     if tapeB !== nothing
-        # unused!(B.val.temps, tapeB[2])
+        unused!(B.val.temps, tapeB[2])
     end
 
     if _should_zero_dC(dCout)

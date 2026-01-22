@@ -4565,7 +4565,13 @@ end
 
 #C = C+ α*Adag
 function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{L}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
-    JACC.parallel_for(prod(C.PN), kernel_add_4D_dag!, C.A, A.data.A, C.indexer, Val(NC1), Val(NC2), α, Val(nw))
+    add_matrix_Adag!(C, A.data, α)
+    #set_halo!(C)
+end
+
+function add_matrix_Adag!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+    JACC.parallel_for(prod(C.PN), kernel_add_4D_dag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, Val(nw))
     #set_halo!(C)
 end
 

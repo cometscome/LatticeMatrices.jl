@@ -1,5 +1,5 @@
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn, needs_primal, needs_shadow
-import LatticeMatrices: add_matrix!, add_matrix_shiftedA!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
+import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
     mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, substitute!, AbstractLattice
 using PreallocatedArrays
@@ -474,6 +474,47 @@ end
             u[ic, jc, indices_p...] += α * v[ic, jc, indices...]
         end
     end
+end
+
+# add_matrix_Adag! (C += α * A†)
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix_Adag!)} ,
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    α::S,
+) where {RT,S}
+    αval = hasproperty(α, :val) ? α.val : α
+    add_matrix_Adag!(C.val, A.val, αval)
+    return ER.AugmentedReturn(nothing, nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(add_matrix_Adag!)} ,
+    dCout, _tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    α::S,
+) where {S}
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = _getshadow(A.dval)
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+    if dAval !== nothing
+        αval = hasproperty(α, :val) ? α.val : α
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_add_4D_dag!,
+            dAval, dCval, C.val.indexer,
+            Val(C.val.NC2), Val(C.val.NC1),
+            conj(αval), Val(C.val.nw)
+        )
+    end
+
+    return (nothing, nothing, nothing)
 end
 
 # add_matrix! (C += α * A)

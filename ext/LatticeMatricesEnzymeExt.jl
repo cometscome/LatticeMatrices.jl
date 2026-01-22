@@ -86,7 +86,7 @@ function Enzyme_derivative!(
     temp=nothing,
     dtemp=nothing
 )
-    println("Enzyme_derivative! in LatticeMatrices.jl")
+    #println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
     annU1 = Enzyme.Duplicated(U1, dfdU1)

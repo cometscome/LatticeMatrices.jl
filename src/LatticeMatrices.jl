@@ -25,6 +25,10 @@ struct Shifted_Lattice{D,Dim} <: AbstractLattice
 
 end
 
+struct Traceless_AntiHermitian{D} <: AbstractLattice
+    data::D
+end
+export Traceless_AntiHermitian
 
 
 export Shifted_Lattice

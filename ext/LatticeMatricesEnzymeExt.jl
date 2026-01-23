@@ -15,49 +15,7 @@ include("./AD/AD.jl")
 toann(a::DiffArg) = Enzyme.Active(a.x)
 toann(a::NoDiffArg) = Enzyme.Const(a.x)
 
-Wiltinger_derivative!(func, U, dfdU, temp, dtemp, args...) =
-    Wiltinger_derivative!(func, U, dfdU, args...; temp=temp, dtemp=dtemp)
 
-function Wiltinger_derivative!(
-    func,
-    U,
-    dfdU, args...;
-    temp=nothing,
-    dtemp=nothing
-)
-    println("Wilttinger_derivative in LatticeMatrices.jl")
-    # Primary variable: always differentiated
-    annU = Enzyme.Duplicated(U, dfdU)
-
-    # Convert additional arguments
-    ann_args = map(toann, args)
-
-    # Call Enzyme
-    if temp === nothing
-        result = Enzyme.autodiff(
-            Reverse,
-            Enzyme.Const(func),     # function object is always treated as read-only
-            Active,          # return value is a real scalar
-            annU,
-            ann_args...
-        )
-    else
-        result = Enzyme.autodiff(
-            Reverse,
-            Enzyme.Const(func),
-            Active,
-            annU,
-            ann_args..., Duplicated(temp, dtemp)
-            #ann_args..., DuplicatedNoNeed(temp, dtemp)
-        )
-    end
-
-    # Convert real/imaginary gradients to Wirtinger derivatives
-    Wiltinger!.(dfdU)
-
-    # Gradients of Active scalar arguments are returned by Enzyme
-    return result
-end
 
 Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, temp, dtemp, args...) =
     Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, args...; temp=temp, dtemp=dtemp)

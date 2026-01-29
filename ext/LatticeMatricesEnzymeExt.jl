@@ -3,7 +3,7 @@ using LinearAlgebra
 using LatticeMatrices
 using Enzyme
 using JACC
-import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!
+import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU
 
 include("./AD/AD.jl")
 
@@ -19,6 +19,9 @@ toann(a::NoDiffArg) = Enzyme.Const(a.x)
 
 Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, temp, dtemp, args...) =
     Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, args...; temp=temp, dtemp=dtemp)
+
+Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, temp, dtemp, phitemp, dphitemp, args...) =
+    Enzyme_derivative!(func, U1, U2, U3, U4, dfdU1, dfdU2, dfdU3, dfdU4, args...; temp=temp, dtemp=dtemp, phitemp=phitemp, dphitemp=dphitemp)
 
 function Enzyme_derivative!(
     func,
@@ -42,7 +45,9 @@ function Enzyme_derivative!(
     dfdU3,
     dfdU4, args...;
     temp=nothing,
-    dtemp=nothing
+    dtemp=nothing,
+    phitemp=nothing,
+    dphitemp=nothing
 )
     #println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
@@ -55,8 +60,12 @@ function Enzyme_derivative!(
     # Convert additional arguments
     ann_args = map(toann, args)
 
+    if phitemp !== nothing && dphitemp === nothing
+        error("phitemp is set but dphitemp is nothing")
+    end
+
     # Call Enzyme
-    if temp === nothing
+    if temp === nothing && phitemp === nothing
         result = Enzyme.autodiff(
             Reverse,
             Enzyme.Const(func),     # function object is always treated as read-only
@@ -68,6 +77,13 @@ function Enzyme_derivative!(
             ann_args...
         )
     else
+        extra_args = Any[]
+        if phitemp !== nothing
+            push!(extra_args, Duplicated(phitemp, dphitemp))
+        end
+        if temp !== nothing
+            push!(extra_args, Duplicated(temp, dtemp))
+        end
         result = Enzyme.autodiff(
             Reverse,
             Enzyme.Const(func),
@@ -76,7 +92,8 @@ function Enzyme_derivative!(
             annU2,
             annU3,
             annU4,
-            ann_args..., Duplicated(temp, dtemp)
+            ann_args...,
+            extra_args...
             #ann_args..., DuplicatedNoNeed(temp, dtemp)
         )
     end
@@ -262,5 +279,71 @@ function Wiltinger_derivative!(func, U, dfdU, temp=nothing, dtemp=nothing; param
 end
 =#
 
+function g(χ, U1, U2, U3, U4, η, p, apply, phitemp, temp)
+    phitemp1 = phitemp[end]
+    apply(phitemp1, U1, U2, U3, U4, η, p, phitemp, temp)
+    #Dmul!(phitemp1, U1, U2, U3, U4, D, η)
+    s = -2 * real(dot(χ, phitemp1))
+    return s
+end
+
+function dSFdU(dfdU, D::T, φ; numtemp=5) where {T<:DiracOp}
+    U = D.U
+    U1 = U[1]
+    U2 = U[2]
+    U3 = U[3]
+    U4 = U[4]
+
+    #dfdU, itdfdUtemp = get_block(D.temps, 4)
+    dfdU1 = dfdU[1]
+    dfdU2 = dfdU[2]
+    dfdU3 = dfdU[3]
+    dfdU4 = dfdU[4]
+
+    DdagD = DdagDOp(D)
+    phitemp1, itphitemp1 = get_block(D.phitemps)
+    η = phitemp1
+
+    solve!(η, DdagD, φ) #η = (DdagD)^-1 φ
+    println("solved")
+    set_halo!(η)
+    phitemp2, itphitemp2 = get_block(D.phitemps)
+    χ = phitemp2
+    mul!(χ, D, η)
+
+    #phitemp1, itphitemp1 = get_block(D.phitemps)
+    func(U1, U2, U3, U4, χ, η, apply, phitemp, temp) = g(χ, U1, U2, U3, U4, η, D.p, apply, phitemp, temp)
+
+    temp, ittemp = get_block(D.temps, numtemp)
+    phitemp, itphitemp = get_block(D.phitemps, numtemp)
+    dtemp, itdtemp = get_block(D.temps, numtemp)
+    dphitemp, itdphitemp = get_block(D.phitemps, numtemp)
+
+    Enzyme_derivative!(
+        func,
+        U1,
+        U2,
+        U3,
+        U4,
+        dfdU1,
+        dfdU2,
+        dfdU3,
+        dfdU4,
+        nodiff(χ), nodiff(η), nodiff(D.apply); temp=temp, dtemp=dtemp, phitemp=phitemp, dphitemp=dphitemp)
+
+    #for μ = 1:4
+    #    mul!(dfdU[μ], -2)
+    #end
+
+    unused!(D.temps, ittemp)
+    unused!(D.temps, itdtemp)
+    unused!(D.phitemps, itphitemp)
+    unused!(D.phitemps, itdphitemp)
+    unused!(D.phitemps, itphitemp1)
+    unused!(D.phitemps, itphitemp2)
+
+
+
+end
 
 end # module

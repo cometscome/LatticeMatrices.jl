@@ -102,6 +102,13 @@ Base.@noinline function Shifted_Lattice(data::TL, shift_in::TS) where {
     D,T,AT,NC1,NC2,nw,DI,
     TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TS
 }
+    return Shifted_Lattice_construct(data, shift_in)
+end
+
+Base.@noinline function Shifted_Lattice_construct(data::TL, shift_in::TS) where {
+    D,T,AT,NC1,NC2,nw,DI,
+    TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TS
+}
     shift = _as_shift_tuple(shift_in, Val(D))
 
     @inbounds begin
@@ -415,7 +422,8 @@ export diff, nodiff
 function toann end
 export toann
 
-
+export mul_AshiftB!
+export mul_shiftAshiftB!
 
 include("Operators/Operators.jl")
 include("Operators/DiracOperators.jl")

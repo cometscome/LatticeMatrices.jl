@@ -1425,6 +1425,67 @@ export mulT!
     end
 end
 
+@inline function kernel_Dmatrix_mulT_shiftAdagshiftB!(i, C, A, B, ::Val{2}, ::Val{2}, ::Val{2}, ::Val{nw}, dindexer, shiftA, shiftB) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds begin
+        indices_A = shiftindices(indices, shiftA)
+        indices_B = shiftindices(indices, shiftB)
+
+        a11 = A[1, 1, indices_A...]'
+        a21 = A[2, 1, indices_A...]'
+        a12 = A[1, 2, indices_A...]'
+        a22 = A[2, 2, indices_A...]'
+
+        b11 = B[1, 1, indices_B...]
+        b21 = B[2, 1, indices_B...]
+        b12 = B[1, 2, indices_B...]
+        b22 = B[2, 2, indices_B...]
+
+        C[1, 1, indices...] = a11 * b11 + a21 * b21
+        C[2, 1, indices...] = a11 * b12 + a21 * b22
+        C[1, 2, indices...] = a12 * b11 + a22 * b21
+        C[2, 2, indices...] = a12 * b12 + a22 * b22
+    end
+end
+
+@inline function kernel_Dmatrix_mulT_shiftAdagshiftB!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer, shiftA, shiftB) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds begin
+        indices_A = shiftindices(indices, shiftA)
+        indices_B = shiftindices(indices, shiftB)
+
+        a11 = A[1, 1, indices_A...]'
+        a21 = A[2, 1, indices_A...]'
+        a31 = A[3, 1, indices_A...]'
+        a12 = A[1, 2, indices_A...]'
+        a22 = A[2, 2, indices_A...]'
+        a32 = A[3, 2, indices_A...]'
+        a13 = A[1, 3, indices_A...]'
+        a23 = A[2, 3, indices_A...]'
+        a33 = A[3, 3, indices_A...]'
+
+        b11 = B[1, 1, indices_B...]
+        b21 = B[2, 1, indices_B...]
+        b31 = B[3, 1, indices_B...]
+        b12 = B[1, 2, indices_B...]
+        b22 = B[2, 2, indices_B...]
+        b32 = B[3, 2, indices_B...]
+        b13 = B[1, 3, indices_B...]
+        b23 = B[2, 3, indices_B...]
+        b33 = B[3, 3, indices_B...]
+
+        C[1, 1, indices...] = a11 * b11 + a21 * b21 + a31 * b31
+        C[2, 1, indices...] = a11 * b12 + a21 * b22 + a31 * b32
+        C[3, 1, indices...] = a11 * b13 + a21 * b23 + a31 * b33
+        C[1, 2, indices...] = a12 * b11 + a22 * b21 + a32 * b31
+        C[2, 2, indices...] = a12 * b12 + a22 * b22 + a32 * b32
+        C[3, 2, indices...] = a12 * b13 + a22 * b23 + a32 * b33
+        C[1, 3, indices...] = a13 * b11 + a23 * b21 + a33 * b31
+        C[2, 3, indices...] = a13 * b12 + a23 * b22 + a33 * b32
+        C[3, 3, indices...] = a13 * b13 + a23 * b23 + a33 * b33
+    end
+end
+
 
 #C = shiftA'*B'
 #C[i,j] = A[k,j]'*B[i,k]
@@ -1458,6 +1519,64 @@ export mulT!
     end
 end
 
+@inline function kernel_Dmatrix_mulT_shiftAdagBdag!(i, C, A, B, ::Val{2}, ::Val{2}, ::Val{2}, ::Val{nw}, dindexer, shiftA) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds begin
+        indices_A = shiftindices(indices, shiftA)
+
+        a11 = A[1, 1, indices_A...]'
+        a21 = A[2, 1, indices_A...]'
+        a12 = A[1, 2, indices_A...]'
+        a22 = A[2, 2, indices_A...]'
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[1, 2, indices...]'
+        b21 = B[2, 1, indices...]'
+        b22 = B[2, 2, indices...]'
+
+        C[1, 1, indices...] = a11 * b11 + a21 * b12
+        C[2, 1, indices...] = a11 * b21 + a21 * b22
+        C[1, 2, indices...] = a12 * b11 + a22 * b12
+        C[2, 2, indices...] = a12 * b21 + a22 * b22
+    end
+end
+
+@inline function kernel_Dmatrix_mulT_shiftAdagBdag!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer, shiftA) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds begin
+        indices_A = shiftindices(indices, shiftA)
+
+        a11 = A[1, 1, indices_A...]'
+        a21 = A[2, 1, indices_A...]'
+        a31 = A[3, 1, indices_A...]'
+        a12 = A[1, 2, indices_A...]'
+        a22 = A[2, 2, indices_A...]'
+        a32 = A[3, 2, indices_A...]'
+        a13 = A[1, 3, indices_A...]'
+        a23 = A[2, 3, indices_A...]'
+        a33 = A[3, 3, indices_A...]'
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[1, 2, indices...]'
+        b13 = B[1, 3, indices...]'
+        b21 = B[2, 1, indices...]'
+        b22 = B[2, 2, indices...]'
+        b23 = B[2, 3, indices...]'
+        b31 = B[3, 1, indices...]'
+        b32 = B[3, 2, indices...]'
+        b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = a11 * b11 + a21 * b12 + a31 * b13
+        C[2, 1, indices...] = a11 * b21 + a21 * b22 + a31 * b23
+        C[3, 1, indices...] = a11 * b31 + a21 * b32 + a31 * b33
+        C[1, 2, indices...] = a12 * b11 + a22 * b12 + a32 * b13
+        C[2, 2, indices...] = a12 * b21 + a22 * b22 + a32 * b23
+        C[3, 2, indices...] = a12 * b31 + a22 * b32 + a32 * b33
+        C[1, 3, indices...] = a13 * b11 + a23 * b12 + a33 * b13
+        C[2, 3, indices...] = a13 * b21 + a23 * b22 + a33 * b23
+        C[3, 3, indices...] = a13 * b31 + a23 * b32 + a33 * b33
+    end
+end
 
 function LinearAlgebra.tr(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}) where {D,T1,AT1,NC1,NC2,nw,DI}
     @assert NC1 == NC2 "Trace is only defined for square matrices"

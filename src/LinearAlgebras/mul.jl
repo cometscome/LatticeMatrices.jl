@@ -566,6 +566,8 @@ end
 end
 
 
+
+
 @inline function kernel_Dmatrix_mul_AdagB!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer, α::S, β::S) where {nw,S<:Number}
     indices = delinearize(dindexer, i, nw)
     #    ix += nw
@@ -649,6 +651,21 @@ function mul_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     )
 
     #set_halo!(C)
+end
+
+function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Shifted_Lattice{L,D}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    shift = get_shift(B)
+    mul_simple_AshiftB!(C, A, B.data, shift)
+end
+
+function mul_simple_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    @inbounds for i in 1:prod(C.PN)
+        kernel_Dmatrix_mul_AshiftB!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift)
+    end
 end
 
 
@@ -802,6 +819,25 @@ function mul_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
         prod(C.PN), kernel_Dmatrix_mul_AshiftB!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, αin, βin
     )
     #set_halo!(C)
+end
+
+function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Shifted_Lattice{L,D},
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    shift = get_shift(B)
+    mul_simple_AshiftB!(C, A, B.data, shift, α, β)
+end
+
+function mul_simple_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    αin = T1(α)
+    βin = T1(β)
+    @inbounds for i in 1:prod(C.PN)
+        kernel_Dmatrix_mul_AshiftB!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, αin, βin)
+    end
 end
 
 
@@ -1620,13 +1656,29 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     #set_halo!(C)
 end
 
+function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    shift = get_shift(B)
+    mul_simple_A_shiftBdag!(C, A, B.data.data, shift)
+end
+
 function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+
     JACC.parallel_for(
         prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
+end
+
+function mul_simple_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    @inbounds for i in 1:prod(C.PN)
+        kernel_Dmatrix_mul_AshiftBdag!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift)
+    end
 end
 
 
@@ -1652,6 +1704,50 @@ end
     end
 end
 
+@inline function kernel_Dmatrix_mul_AshiftBdag!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer, shift) where {nw}
+    indices = delinearize(dindexer, i, nw)
+
+    @inbounds begin
+        indices_p = shiftindices(indices, shift)
+
+        a11 = A[1, 1, indices...]
+        a21 = A[2, 1, indices...]
+        a31 = A[3, 1, indices...]
+        a12 = A[1, 2, indices...]
+        a22 = A[2, 2, indices...]
+        a32 = A[3, 2, indices...]
+        a13 = A[1, 3, indices...]
+        a23 = A[2, 3, indices...]
+        a33 = A[3, 3, indices...]
+
+        b11 = B[1, 1, indices_p...]'
+        b21 = B[1, 2, indices_p...]'
+        b31 = B[1, 3, indices_p...]'
+        C[1, 1, indices...] = a11 * b11 + a12 * b21 + a13 * b31
+        C[2, 1, indices...] = a21 * b11 + a22 * b21 + a23 * b31
+        C[3, 1, indices...] = a31 * b11 + a32 * b21 + a33 * b31
+
+        # ----  j=2 ----
+        b12 = B[2, 1, indices_p...]'
+        b22 = B[2, 2, indices_p...]'
+        b32 = B[2, 3, indices_p...]'
+        C[1, 2, indices...] = a11 * b12 + a12 * b22 + a13 * b32
+        C[2, 2, indices...] = a21 * b12 + a22 * b22 + a23 * b32
+        C[3, 2, indices...] = a31 * b12 + a32 * b22 + a33 * b32
+
+        # ----  j=3 ----
+        b13 = B[3, 1, indices_p...]'
+        b23 = B[3, 2, indices_p...]'
+        b33 = B[3, 3, indices_p...]'
+        C[1, 3, indices...] = a11 * b13 + a12 * b23 + a13 * b33
+        C[2, 3, indices...] = a21 * b13 + a22 * b23 + a23 * b33
+        C[3, 3, indices...] = a31 * b13 + a32 * b23 + a33 * b33
+
+    end
+end
+
+
+
 #C = α*A*shiftedB'+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}},
@@ -1671,6 +1767,25 @@ function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
         prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
     #set_halo!(C)
+end
+
+function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}},
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    shift = get_shift(B)
+    mul_simple_A_shiftBdag!(C, A, B.data.data, shift, α, β)
+end
+
+function mul_simple_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    αin = T1(α)
+    βin = T1(β)
+    @inbounds for i in 1:prod(C.PN)
+        kernel_Dmatrix_mul_AshiftBdag!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, αin, βin)
+    end
 end
 
 
@@ -2660,5 +2775,504 @@ function kernel_Dmatrix_mulB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::
                 C[ic, jc, indices...] += A[ic, kc, indices...] * b
             end
         end
+    end
+end
+
+
+#C = A*B'
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{L}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+
+    #println("Using Dmatrix mul ABdag")
+    #display(A.A[:,:,2,2,2,2])
+    #display(B.data.A[:,:,2,2,2,2])
+
+    mul_ABdag!(C, A, B.data)
+    #set_halo!(C)
+end
+
+
+function mul_ABdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_ABdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer
+    )
+    #set_halo!(C)
+end
+
+function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{L}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    mul_simple_ABdag!(C, A, B.data)
+end
+
+function mul_simple_ABdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    @inbounds for i in 1:prod(C.PN)
+        kernel_Dmatrix_mul_ABdag!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer)
+    end
+end
+
+function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{L},
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    mul_simple_ABdag!(C, A, B.data, α, β)
+end
+
+function mul_simple_ABdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    αin = T1(α)
+    βin = T1(β)
+    @inbounds for i in 1:prod(C.PN)
+        kernel_Dmatrix_mul_ABdag!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, αin, βin)
+    end
+end
+
+
+@inline function kernel_Dmatrix_mul_ABdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = 0
+            for kc = 1:NC3
+                C[ic, jc, indices...] += A[ic, kc, indices...] * B[jc, kc, indices...]'
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_ABdag!(i, C, A, B, ::Val{2}, ::Val{2}, ::Val{2}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = A[1, 1, indices...]
+        a21 = A[2, 1, indices...]
+        #a31 = α * A[3, 1, indices...]
+        a12 = A[1, 2, indices...]
+        a22 = A[2, 2, indices...]
+        #a32 = α * A[3, 2, indices...]
+        #a13 = α * A[1, 3, indices...]
+        #a23 = α * A[2, 3, indices...]
+        #a33 = α * A[3, 3, indices...]
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        #b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        #b23 = B[3, 2, indices...]'
+        #b31 = B[1, 3, indices...]'
+        #b32 = B[2, 3, indices...]'
+        #b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = a11 * b11 + a12 * b21 #+ a13 * b31
+        C[2, 1, indices...] = a21 * b11 + a22 * b21 #+ a23 * b31
+        #C[3, 1, indices...] = β * C[3, 1, indices...] + a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = a11 * b12 + a12 * b22 #+ a13 * b32
+        C[2, 2, indices...] = a21 * b12 + a22 * b22 #+ a23 * b32
+        #C[3, 2, indices...] = β * C[3, 2, indices...] + a31 * b12 + a32 * b22 + a33 * b32
+        #C[1, 3, indices...] = β * C[1, 3, indices...] + a11 * b13 + a12 * b23 + a13 * b33
+        #C[2, 3, indices...] = β * C[2, 3, indices...] + a21 * b13 + a22 * b23 + a23 * b33
+        #C[3, 3, indices...] = β * C[3, 3, indices...] + a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+@inline function kernel_Dmatrix_mul_ABdag!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = A[1, 1, indices...]
+        a21 = A[2, 1, indices...]
+        a31 = A[3, 1, indices...]
+        a12 = A[1, 2, indices...]
+        a22 = A[2, 2, indices...]
+        a32 = A[3, 2, indices...]
+        a13 = A[1, 3, indices...]
+        a23 = A[2, 3, indices...]
+        a33 = A[3, 3, indices...]
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        b23 = B[3, 2, indices...]'
+        b31 = B[1, 3, indices...]'
+        b32 = B[2, 3, indices...]'
+        b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = a11 * b11 + a12 * b21 + a13 * b31
+        C[2, 1, indices...] = a21 * b11 + a22 * b21 + a23 * b31
+        C[3, 1, indices...] = a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = a11 * b12 + a12 * b22 + a13 * b32
+        C[2, 2, indices...] = a21 * b12 + a22 * b22 + a23 * b32
+        C[3, 2, indices...] = a31 * b12 + a32 * b22 + a33 * b32
+        C[1, 3, indices...] = a11 * b13 + a12 * b23 + a13 * b33
+        C[2, 3, indices...] = a21 * b13 + a22 * b23 + a23 * b33
+        C[3, 3, indices...] = a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+
+#C = α* A*B' + β*C
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{L},
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+
+    mul_ABdag!(C, A, B.data, α, β)
+    #set_halo!(C)
+end
+
+
+function mul_ABdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_ABdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, α::S, β::S
+    )
+    #set_halo!(C)
+end
+
+
+@inline function kernel_Dmatrix_mul_ABdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, α::S, β::S) where {NC1,NC2,NC3,nw,S<:Number}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = β * C[ic, jc, indices...]
+        end
+
+        for kc = 1:NC3
+            b = conj(B[jc, kc, indices...])
+            @simd for ic = 1:NC1
+                C[ic, jc, indices...] += α * A[ic, kc, indices...] * b#B[jc, kc, indices...]'
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_ABdag!(i, C, A, B, ::Val{2}, ::Val{2}, ::Val{2}, ::Val{nw}, dindexer, α::S, β::S) where {nw,S<:Number}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = α * A[1, 1, indices...]
+        a21 = α * A[2, 1, indices...]
+        #a31 = α * A[3, 1, indices...]
+        a12 = α * A[1, 2, indices...]
+        a22 = α * A[2, 2, indices...]
+        #a32 = α * A[3, 2, indices...]
+        #a13 = α * A[1, 3, indices...]
+        #a23 = α * A[2, 3, indices...]
+        #a33 = α * A[3, 3, indices...]
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        #b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        #b23 = B[3, 2, indices...]'
+        #b31 = B[1, 3, indices...]'
+        #b32 = B[2, 3, indices...]'
+        #b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = β * C[1, 1, indices...] + a11 * b11 + a12 * b21 #+ a13 * b31
+        C[2, 1, indices...] = β * C[2, 1, indices...] + a21 * b11 + a22 * b21 #+ a23 * b31
+        #C[3, 1, indices...] = β * C[3, 1, indices...] + a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = β * C[1, 2, indices...] + a11 * b12 + a12 * b22 #+ a13 * b32
+        C[2, 2, indices...] = β * C[2, 2, indices...] + a21 * b12 + a22 * b22 #+ a23 * b32
+        #C[3, 2, indices...] = β * C[3, 2, indices...] + a31 * b12 + a32 * b22 + a33 * b32
+        #C[1, 3, indices...] = β * C[1, 3, indices...] + a11 * b13 + a12 * b23 + a13 * b33
+        #C[2, 3, indices...] = β * C[2, 3, indices...] + a21 * b13 + a22 * b23 + a23 * b33
+        #C[3, 3, indices...] = β * C[3, 3, indices...] + a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+@inline function kernel_Dmatrix_mul_ABdag!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer, α::S, β::S) where {nw,S<:Number}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = α * A[1, 1, indices...]
+        a21 = α * A[2, 1, indices...]
+        a31 = α * A[3, 1, indices...]
+        a12 = α * A[1, 2, indices...]
+        a22 = α * A[2, 2, indices...]
+        a32 = α * A[3, 2, indices...]
+        a13 = α * A[1, 3, indices...]
+        a23 = α * A[2, 3, indices...]
+        a33 = α * A[3, 3, indices...]
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        b23 = B[3, 2, indices...]'
+        b31 = B[1, 3, indices...]'
+        b32 = B[2, 3, indices...]'
+        b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = β * C[1, 1, indices...] + a11 * b11 + a12 * b21 + a13 * b31
+        C[2, 1, indices...] = β * C[2, 1, indices...] + a21 * b11 + a22 * b21 + a23 * b31
+        C[3, 1, indices...] = β * C[3, 1, indices...] + a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = β * C[1, 2, indices...] + a11 * b12 + a12 * b22 + a13 * b32
+        C[2, 2, indices...] = β * C[2, 2, indices...] + a21 * b12 + a22 * b22 + a23 * b32
+        C[3, 2, indices...] = β * C[3, 2, indices...] + a31 * b12 + a32 * b22 + a33 * b32
+        C[1, 3, indices...] = β * C[1, 3, indices...] + a11 * b13 + a12 * b23 + a13 * b33
+        C[2, 3, indices...] = β * C[2, 3, indices...] + a21 * b13 + a22 * b23 + a23 * b33
+        C[3, 3, indices...] = β * C[3, 3, indices...] + a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+#C = A'*B'
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L1}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    mul_AdagBdag!(C, A.data, B.data)
+    #set_halo!(C)
+end
+
+
+function mul_AdagBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::L1, B::L2) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_AdagBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer
+    )
+    #set_halo!(C)
+end
+
+
+@inline function kernel_Dmatrix_mul_AdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = 0
+            for kc = 1:NC3
+                C[ic, jc, indices...] += A[kc, ic, indices...]' * B[jc, kc, indices...]'
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_AdagBdag!(i, C, A, B, ::Val{2}, ::Val{2}, ::Val{2}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = A[1, 1, indices...]'
+        a12 = A[2, 1, indices...]'
+        #a13 = A[3, 1, indices...]'
+        a21 = A[1, 2, indices...]'
+        a22 = A[2, 2, indices...]'
+        #a23 = A[3, 2, indices...]'
+        #a31 = A[1, 3, indices...]'
+        #a32 = A[2, 3, indices...]'
+        #a33 = A[3, 3, indices...]'
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        #b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        #b23 = B[3, 2, indices...]'
+        #b31 = B[1, 3, indices...]'
+        #b32 = B[2, 3, indices...]'
+        #b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = a11 * b11 + a12 * b21 #+ a13 * b31
+        C[2, 1, indices...] = a21 * b11 + a22 * b21 #+ a23 * b31
+        #C[3, 1, indices...] = a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = a11 * b12 + a12 * b22 #+ a13 * b32
+        C[2, 2, indices...] = a21 * b12 + a22 * b22 #+ a23 * b32
+        #C[3, 2, indices...] = a31 * b12 + a32 * b22 + a33 * b32
+        #C[1, 3, indices...] = a11 * b13 + a12 * b23 + a13 * b33
+        #C[2, 3, indices...] = a21 * b13 + a22 * b23 + a23 * b33
+        #C[3, 3, indices...] = a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+
+@inline function kernel_Dmatrix_mul_AdagBdag!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = A[1, 1, indices...]'
+        a12 = A[2, 1, indices...]'
+        a13 = A[3, 1, indices...]'
+        a21 = A[1, 2, indices...]'
+        a22 = A[2, 2, indices...]'
+        a23 = A[3, 2, indices...]'
+        a31 = A[1, 3, indices...]'
+        a32 = A[2, 3, indices...]'
+        a33 = A[3, 3, indices...]'
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        b23 = B[3, 2, indices...]'
+        b31 = B[1, 3, indices...]'
+        b32 = B[2, 3, indices...]'
+        b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = a11 * b11 + a12 * b21 + a13 * b31
+        C[2, 1, indices...] = a21 * b11 + a22 * b21 + a23 * b31
+        C[3, 1, indices...] = a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = a11 * b12 + a12 * b22 + a13 * b32
+        C[2, 2, indices...] = a21 * b12 + a22 * b22 + a23 * b32
+        C[3, 2, indices...] = a31 * b12 + a32 * b22 + a33 * b32
+        C[1, 3, indices...] = a11 * b13 + a12 * b23 + a13 * b33
+        C[2, 3, indices...] = a21 * b13 + a22 * b23 + a23 * b33
+        C[3, 3, indices...] = a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+#C =  α* A'*B' + β*C
+function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L1}, B::Adjoint_Lattice{L2},
+    α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    mul_AdagBdag!(C, A.data, B.data, α, β)
+    #set_halo!(C)
+end
+
+
+function mul_AdagBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    A::L1, B::L2, α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
+    L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    JACC.parallel_for(
+        prod(C.PN), kernel_Dmatrix_mul_AdagBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, α::S, β::S
+    )
+    #set_halo!(C)
+end
+
+
+@inline function kernel_Dmatrix_mul_AdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, α::S, β::S) where {NC1,NC2,NC3,nw,S<:Number}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            C[ic, jc, indices...] = β * C[ic, jc, indices...]
+            for kc = 1:NC3
+                C[ic, jc, indices...] += α * A[kc, ic, indices...]' * B[jc, kc, indices...]'
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mul_AdagBdag!(i, C, A, B, ::Val{2}, ::Val{2}, ::Val{2}, ::Val{nw}, dindexer, α::S, β::S) where {nw,S<:Number}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = α * A[1, 1, indices...]'
+        a12 = α * A[2, 1, indices...]'
+        #a13 = α * A[3, 1, indices...]'
+        a21 = α * A[1, 2, indices...]'
+        a22 = α * A[2, 2, indices...]'
+        #a23 = α * A[3, 2, indices...]'
+        #a31 = α * A[1, 3, indices...]'
+        #a32 = α * A[2, 3, indices...]'
+        #a33 = α * A[3, 3, indices...]'
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        #b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        #b23 = B[3, 2, indices...]'
+        #b31 = B[1, 3, indices...]'
+        #b32 = B[2, 3, indices...]'
+        #b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = β * C[1, 1, indices...] + a11 * b11 + a12 * b21 #+ a13 * b31
+        C[2, 1, indices...] = β * C[2, 1, indices...] + a21 * b11 + a22 * b21 #+ a23 * b31
+        #C[3, 1, indices...] = β * C[3, 1, indices...] + a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = β * C[1, 2, indices...] + a11 * b12 + a12 * b22 #+ a13 * b32
+        C[2, 2, indices...] = β * C[2, 2, indices...] + a21 * b12 + a22 * b22 #+ a23 * b32
+        #C[3, 2, indices...] = β * C[3, 2, indices...] + a31 * b12 + a32 * b22 + a33 * b32
+        #C[1, 3, indices...] = β * C[1, 3, indices...] + a11 * b13 + a12 * b23 + a13 * b33
+        #C[2, 3, indices...] = β * C[2, 3, indices...] + a21 * b13 + a22 * b23 + a23 * b33
+        #C[3, 3, indices...] = β * C[3, 3, indices...] + a31 * b13 + a32 * b23 + a33 * b33
+    end
+end
+
+
+@inline function kernel_Dmatrix_mul_AdagBdag!(i, C, A, B, ::Val{3}, ::Val{3}, ::Val{3}, ::Val{nw}, dindexer, α::S, β::S) where {nw,S<:Number}
+    indices = delinearize(dindexer, i, nw)
+    #    ix += nw
+    #    iy += nw
+    #    iz += nw
+    #    it += nw
+
+    @inbounds begin
+        a11 = α * A[1, 1, indices...]'
+        a12 = α * A[2, 1, indices...]'
+        a13 = α * A[3, 1, indices...]'
+        a21 = α * A[1, 2, indices...]'
+        a22 = α * A[2, 2, indices...]'
+        a23 = α * A[3, 2, indices...]'
+        a31 = α * A[1, 3, indices...]'
+        a32 = α * A[2, 3, indices...]'
+        a33 = α * A[3, 3, indices...]'
+
+
+        b11 = B[1, 1, indices...]'
+        b12 = B[2, 1, indices...]'
+        b13 = B[3, 1, indices...]'
+        b21 = B[1, 2, indices...]'
+        b22 = B[2, 2, indices...]'
+        b23 = B[3, 2, indices...]'
+        b31 = B[1, 3, indices...]'
+        b32 = B[2, 3, indices...]'
+        b33 = B[3, 3, indices...]'
+
+        C[1, 1, indices...] = β * C[1, 1, indices...] + a11 * b11 + a12 * b21 + a13 * b31
+        C[2, 1, indices...] = β * C[2, 1, indices...] + a21 * b11 + a22 * b21 + a23 * b31
+        C[3, 1, indices...] = β * C[3, 1, indices...] + a31 * b11 + a32 * b21 + a33 * b31
+        C[1, 2, indices...] = β * C[1, 2, indices...] + a11 * b12 + a12 * b22 + a13 * b32
+        C[2, 2, indices...] = β * C[2, 2, indices...] + a21 * b12 + a22 * b22 + a23 * b32
+        C[3, 2, indices...] = β * C[3, 2, indices...] + a31 * b12 + a32 * b22 + a33 * b32
+        C[1, 3, indices...] = β * C[1, 3, indices...] + a11 * b13 + a12 * b23 + a13 * b33
+        C[2, 3, indices...] = β * C[2, 3, indices...] + a21 * b13 + a22 * b23 + a23 * b33
+        C[3, 3, indices...] = β * C[3, 3, indices...] + a31 * b13 + a32 * b23 + a33 * b33
     end
 end

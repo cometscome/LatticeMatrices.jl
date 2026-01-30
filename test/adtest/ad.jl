@@ -82,6 +82,48 @@ function run_case_all(label, f, f_num, U1, U2, U3, U4, dU1, dU2, dU3, dU4, temp,
     end
 end
 
+function run_case_all_phi(label, f, f_num, U1, U2, U3, U4, dU1, dU2, dU3, dU4,
+    phi, phitemp, dphitemp, temp, dtemp, indices_mid, indices_halo; tol=1e-4)
+    println("=== ", label, " ===")
+
+    dU = [dU1, dU2, dU3, dU4]
+    U = [U1, U2, U3, U4]
+
+    clear_matrix!.(dU)
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+    clear_matrix!.(phitemp)
+    clear_matrix!.(dphitemp)
+
+    Enzyme_derivative!(
+        f,
+        U1,
+        U2,
+        U3,
+        U4,
+        dU1,
+        dU2,
+        dU3,
+        dU4,
+        nodiff(phi); temp=temp, dtemp=dtemp, phitemp=phitemp, dphitemp=dphitemp)
+
+    clear_matrix!.(temp)
+    clear_matrix!.(phitemp)
+    f_num_1(Uvec) = f_num(Uvec[1], Uvec[2], Uvec[3], Uvec[4], phi, phitemp, temp)
+    dUn_mid = Numerical_derivative_Enzyme(f_num_1, indices_mid, U)
+    for k in 1:length(U)
+        _report_diff("U$k mid", dU[k], dUn_mid[k], indices_mid; tol)
+    end
+
+    indices_halo_core = _halo_to_core_indices(indices_halo, U[1].PN, U[1].nw)
+    clear_matrix!.(temp)
+    clear_matrix!.(phitemp)
+    dUn_halo = Numerical_derivative_Enzyme(f_num_1, indices_halo_core, U)
+    for k in 1:length(U)
+        _report_diff("U$k halo", dU[k], dUn_halo[k], indices_halo_core; tol)
+    end
+end
+
 function run_case_all_vector(label, f, f_num, U, dU, temp, dtemp, indices_mid, indices_halo; tol=1e-4)
     println("=== ", label, " ===")
 
@@ -148,6 +190,23 @@ function loss_add_matrix_shifted_adj_test(U1, U2, U3, U4, shift1, temp)
     Ashift = shift_L(U1, shift1)
     add_matrix!(C, Ashift', 0.4)
     return realtrace(C)
+end
+
+function loss_substitute_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    substitute!(C, U1)
+    return realtrace(C)
+end
+
+function loss_substitute_shifted_test(U1, U2, U3, U4, shift1, temp)
+    C = temp[1]
+    U2_p1 = shift_L(U2, shift1)
+    substitute!(C, U2_p1)
+    return realtrace(C)
+end
+
+function loss_real_of_dot_test(U1, U2, U3, U4, temp)
+    return real(LinearAlgebra.dot(U1, U2))
 end
 
 function loss_mulABtest_loop(U1, U2, U3, U4, temp)
@@ -233,6 +292,44 @@ function loss_expt_TA(U1, U2, U3, U4, t, temp)
     return realtrace(C)
 end
 
+function run_expt_ta_t_grad_test(U1, U2, U3, U4, dU, temp, dtemp, t; tol=1e-6, eps=1e-6)
+    println("=== expt_TA t grad ===")
+
+    clear_matrix!.(dU)
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    f(U1, U2, U3, U4, tt, temp) = loss_expt_TA(U1, U2, U3, U4, tt, temp)
+    result = Enzyme.autodiff(
+        Reverse,
+        Enzyme.Const(f),
+        Active,
+        Duplicated(U1, dU[1]),
+        Duplicated(U2, dU[2]),
+        Duplicated(U3, dU[3]),
+        Duplicated(U4, dU[4]),
+        Active(t),
+        Duplicated(temp, dtemp)
+    )
+    if result isa Tuple && length(result) == 1
+        result = result[1]
+    end
+    dt_ad = result isa Tuple ? result[5] : result
+
+    f_num(tt) = begin
+        clear_matrix!.(temp)
+        f(U1, U2, U3, U4, tt, temp)
+    end
+    dt_num = (f_num(t + eps) - f_num(t - eps)) / (2 * eps)
+
+    diff = abs(dt_ad - dt_num)
+    println("t grad AD = ", dt_ad, " numeric = ", dt_num, " diff = ", diff)
+    if diff > tol
+        println("WARNING: expt_TA t grad diff > tol (", tol, ")")
+    end
+    return nothing
+end
+
 function calc_action_loss_expt_traceless_antihermitian(U1, U2, U3, U4, β, NC, t, temp)
     U = (U1, U2, U3, U4)
     ndir = length(U)
@@ -274,7 +371,7 @@ function calc_action_loss_exp_traceless_antihermitian(U1, U2, U3, U4, β, NC, t,
                 continue
             end
             shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
-            _calc_action_step_add_exp_traceless_antihermitian!(Uout, t, C, D, Uμ, Uν, shift_μ, shift_ν)
+            _calc_action_step_add_exp_traceless_antihermitian!(Uout, t, C, D, U[μ], U[ν], shift_μ, shift_ν)
             S += realtrace(Uout)
         end
     end
@@ -645,6 +742,7 @@ function calc_action_loopfn_add(U1, U2, U3, U4, β, NC, temp)
     Uout = temp[1]
     C = temp[2]
     D = temp[3]
+
     S = 0.0
 
     for μ = 1:ndir
@@ -662,14 +760,35 @@ function calc_action_loopfn_add(U1, U2, U3, U4, β, NC, temp)
     return -S * β / NC
 end
 
+function _calc_action_step_addsum!(Uout, C, D, Uμ, Uν, shift_μ, shift_ν)
+    Uμ_pν = shift_L(Uμ, shift_ν)
+    Uν_pμ = shift_L(Uν, shift_μ)
 
-function calc_action_loopfn(U, β, NC, temp)
+    mul!(C, Uμ, Uν_pμ)
+    mul!(D, C, Uμ_pν')
+    mul!(C, D, Uν')
+    add_matrix!(Uout, C)
+    #add_matrix!(Uout, C)
+    #S = realtrace(E)
+
+    mul!(C, Uν, Uμ_pν)
+    mul!(D, C, Uν_pμ')
+    mul!(C, D, Uμ')
+    add_matrix!(Uout, C)
+    #S += realtrace(E)
+
+    #return S
+end
+
+
+function calc_action_loopfn_addsum(U1, U2, U3, U4, β, NC, temp)
+    U = (U1, U2, U3, U4)
     ndir = length(U)
-    dim = length(U[1].PN)
-    C = temp[1]
-    D = temp[2]
-    E = temp[3]
-    S = 0.0
+    dim = length(U1.PN)
+    Uout = temp[1]
+    C = temp[2]
+    D = temp[3]
+    clear_matrix!(Uout)
 
     for μ = 1:ndir
         shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
@@ -678,11 +797,74 @@ function calc_action_loopfn(U, β, NC, temp)
                 continue
             end
             shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
-            S += _calc_action_step!(C, D, E, U[μ], U[ν], shift_μ, shift_ν)
+            _calc_action_step_addsum!(Uout, C, D, U[μ], U[ν], shift_μ, shift_ν)
+            #S += realtrace(Uout)
         end
+    end
+    S = realtrace(Uout)
+
+    return -S * β / NC
+end
+
+function make_fatU(Uout, C, D, E, μ, U, shift_μ, dim, t)
+    make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
+end
+
+function make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
+    clear_matrix!(E)
+    for ν = μ:dim
+        if ν == μ
+            continue
+        end
+        shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+        _calc_action_step_addsum!(E, C, D, U[μ], U[ν], shift_μ, shift_ν)
+        #S += realtrace(Uout)
+    end
+    UTA = Traceless_AntiHermitian(E)
+    expt!(Uout, UTA, t)
+
+
+end
+
+function stoutsmearing_test(U1, U2, U3, U4, β, NC, temp, t)
+    U = (U1, U2, U3, U4)
+    ndir = length(U)
+    dim = length(U1.PN)
+    Uout = temp[1]
+    C = temp[2]
+    D = temp[3]
+    clear_matrix!(Uout)
+    S = 0.0
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    Ufat3 = temp[6]
+    Ufat4 = temp[7]
+    E = temp[8]
+    Ufat = (Ufat1, Ufat2, Ufat3, Ufat4)
+
+    for μ = 1:ndir
+        clear_matrix!(E)
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
+        mul!(Ufat[μ], Uout, U[μ])
+        S += realtrace(Ufat[μ])
     end
 
     return -S * β / NC
+end
+
+
+
+function fermiontest(U1, U2, U3, U4, phi, phitemp, temp)
+    C = temp[1]
+    U = (U1, U2, U3, U4)
+    phiC = phitemp[1]
+    shift = (1, 0, 0, 0)
+    #phi_p1 = Shifted_Lattice(phi, shift)
+    phi_p1 = shift_L(phi, shift)
+    mul!(phiC, U[1], phi_p1)
+    #mul_AshiftB!(phiC, U[1], phi, shift)
+    return real(dot(phi, phiC))
 end
 
 function main()
@@ -693,6 +875,7 @@ function main()
     gsize = (4, 4, 4, 4)
     nw = 1
     PEs = (1, 1, 1, 1)
+    NG = 4
 
     UA = randn(ComplexF64, NC, NC, gsize...)
     U1 = LatticeMatrix(UA, dim, PEs; nw, numtemps=4)
@@ -703,17 +886,51 @@ function main()
     U = [U1, U2, U3, U4]
 
 
+    phiA = randn(ComplexF64, NC, NG, gsize...)
+    phi = LatticeMatrix(phiA, dim, PEs; nw, numtemps=4)
+    set_halo!(phi)
+    println(dot(phi, phi))
+
+
     shift1 = (1, 0, 0, 0)
     dU = [similar(U1), similar(U1), similar(U1), similar(U1)]
     clear_matrix!.(dU)
-    temp = [similar(U1), similar(U1), similar(U1), similar(U1)]
-    dtemp = [similar(U1), similar(U1), similar(U1), similar(U1)]
+    temp = typeof(U1)[]
+    dtemp = typeof(U1)[]
+    phitemp = typeof(phi)[]
+    dphitemp = typeof(phi)[]
+    for i = 1:9
+        push!(temp, similar(U1))
+        push!(dtemp, similar(U1))
+        push!(phitemp, similar(phi))
+        push!(dphitemp, similar(phi))
+    end
+
+    #temp = [similar(U1), similar(U1), similar(U1), similar(U1)]
+    #dtemp = [similar(U1), similar(U1), similar(U1), similar(U1)]
 
     indices_mid = (3, 3, 3, 3)
     indices_halo = (2, 3, 3, 3)
 
     β = 3.0
     texp = 0.3
+
+    run_case_all("real_of_dot", loss_real_of_dot_test, loss_real_of_dot_test, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+    fermitest(U1, U2, U3, U4, phi, phitemp, temp) = fermiontest(U1, U2, U3, U4, phi, phitemp, temp)
+    run_case_all_phi("fermitest", fermitest, fermitest, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], phi, phitemp, dphitemp, temp, dtemp, indices_mid, indices_halo)
+
+
+
+    run_case_all("substitute", loss_substitute_test, loss_substitute_test,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    fs_sub_shift(U1, U2, U3, U4, temp) = loss_substitute_shifted_test(U1, U2, U3, U4, shift1, temp)
+    run_case_all("substitute_shifted", fs_sub_shift, fs_sub_shift,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    run_expt_ta_t_grad_test(U1, U2, U3, U4, dU, temp, dtemp, texp)
 
     S = realtrace(U[1])
     println(S)
@@ -725,6 +942,17 @@ function main()
     UTA = Traceless_AntiHermitian(U[1])
     expt!(temp[1], UTA, t)
     display(temp[1].A[:, :, 2, 2, 2, 2])
+
+
+
+    fstout(U1, U2, U3, U4, temp) = stoutsmearing_test(U1, U2, U3, U4, β, NC, temp, t)
+    run_case_all("stoutsmearing_test", fstout, fstout, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+    return
+    fs4l_addsum(U1, U2, U3, U4, temp) = calc_action_loopfn_addsum(U1, U2, U3, U4, β, NC, temp)
+    run_case_all("calc_action_loopfn_addsum", fs4l_addsum, fs4l_addsum, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
 
 
     fs_expt_ta(U1, U2, U3, U4, temp) = loss_expt_TA(U1, U2, U3, U4, texp, temp)

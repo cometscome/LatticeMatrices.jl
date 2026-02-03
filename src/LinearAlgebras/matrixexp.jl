@@ -127,7 +127,7 @@ end
 
 # ---- exp(t*A) via Pade(13) + scaling & squaring (Complex-ready) ----
 @inline function exp3x3_pade(
-    a11::T, a12, a13, a21, a22, a23, a31, a32, a33, t::S=one(S)) where {T<:Number,S<:Number}
+    a11::T, a12, a13, a21, a22, a23, a31, a32, a33, t=1) where {T<:Number,S}
     a = Mat3(a11, a12, a13, a21, a22, a23, a31, a32, a33)
     c = exp3x3_pade(a, t)
     c11 = c.a11
@@ -143,7 +143,7 @@ end
 end
 
 # ---- exp(t*A) via Pade(13) + scaling & squaring (Complex-ready) ----
-@inline function exp3x3_pade(A::Mat3{T}, t::S=one(S)) where {T<:Number,S<:Number}
+@inline function exp3x3_pade(A::Mat3{T}, t=1) where {T<:Number}
     # Scale: use real base type for thresholds and ldexp
     RT = typeof(real(zero(T)))
 

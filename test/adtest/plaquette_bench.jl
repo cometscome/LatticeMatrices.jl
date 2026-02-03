@@ -247,7 +247,6 @@ function plaquette_bench(; NC=3, dim=4, NX=20, nw=1, warmup=3, nrepeat=10)
         println("JACC")
         @time plaq_t = calculate_Plaquette(U, temp1, temp2) * factor
         println(plaq_t)
-
         println("CPU ")
         @time plaq_t = calculate_Plaquette(Ucpu, temp1cpu, temp2cpu) * factor
         println(plaq_t)
@@ -262,7 +261,7 @@ function plaquette_bench(; NC=3, dim=4, NX=20, nw=1, warmup=3, nrepeat=10)
 
     #@code_warntype plaquette_mul_simple!(U1, U2, U3, U4, temp)
 
-    return
+    # return
 
 
     s_mul = plaquette_mul!(U1, U2, U3, U4, temp)

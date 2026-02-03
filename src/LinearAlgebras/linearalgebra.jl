@@ -3,7 +3,7 @@ function LinearAlgebra.mul!(C::Lattice, A::Lattice, B::Lattice)
     error("Matrix multiplication is not implemented for Lattice types $(typeof(A)) $(typeof(B)) $(typeof(C)).")
 end
 
-function expt!(C::Lattice, A::Lattice, t::S=one(S)) where {S<:Number}
+function expt!(C::Lattice, A::Lattice, t)
     error("Matrix exponentiation is not implemented for Lattice types $(typeof(A)).")
 end
 

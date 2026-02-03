@@ -822,8 +822,6 @@ function make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
     end
     UTA = Traceless_AntiHermitian(E)
     expt!(Uout, UTA, t)
-
-
 end
 
 function stoutsmearing_test(U1, U2, U3, U4, β, NC, temp, t)

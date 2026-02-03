@@ -144,16 +144,16 @@ end
 
 
 
-function expt!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Traceless_AntiHermitian{L}, t::S=one(S)) where {
-    D,T,AT,NC1,NC2,S<:Number,T1,AT1,nw,DI,L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+function expt!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Traceless_AntiHermitian{L}, t=1) where {
+    D,T,AT,NC1,NC2,T1,AT1,nw,DI,L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
 
     expt_TA!(C, A.data, t)
     return
     #set_halo!(C)
 end
 
-function expt_TA!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, t::S=one(S)) where {
-    D,T,AT,NC1,NC2,S<:Number,nw,DI}
+function expt_TA!(C::TC, A::TA, t::S=one(S)) where {
+    D,T,AT,NC1,NC2,S<:Number,nw,DI,TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TA<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     traceless_antihermitian!(C, A)
 
     JACC.parallel_for(
@@ -453,7 +453,7 @@ end
     #C[:, :, indices...] = expm_pade13(A[:, :, indices...], t)
 end
 
-function expt!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, t::S=one(S)) where {D,T,AT,NC1,NC2,S<:Number,T1,AT1,nw,DI}
+function expt!(C::TC, A::TA, t=1) where {D,T,AT,NC1,NC2,T1,AT1,nw,DI,TA<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     @assert NC1 == NC2 "Matrix exponentiation requires square matrices, but got $(NC1) x $(NC2)."
 
     JACC.parallel_for(

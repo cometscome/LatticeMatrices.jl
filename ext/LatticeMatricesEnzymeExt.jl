@@ -3,7 +3,8 @@ using LinearAlgebra
 using LatticeMatrices
 using Enzyme
 using JACC
-import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU
+import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU,
+    zero_halo_region!, zero_halo_dim!, fold_halo_dim_to_core_grad!
 
 
 include("./AD/AD.jl")
@@ -15,6 +16,14 @@ include("./AD/AD.jl")
 
 toann(a::DiffArg) = Enzyme.Active(a.x)
 toann(a::NoDiffArg) = Enzyme.Const(a.x)
+
+function _fold_and_zero!(ls::LatticeMatrix)
+    for d in length(ls.PN):-1:1
+        fold_halo_dim_to_core_grad!(ls, d)
+    end
+    zero_halo_region!(ls)
+    return nothing
+end
 
 
 
@@ -100,10 +109,10 @@ function Enzyme_derivative!(
     end
 
     # Halo values are constrained to core values; fold halo gradients back to core.
-    fold_halo_to_core_grad!(dfdU1)
-    fold_halo_to_core_grad!(dfdU2)
-    fold_halo_to_core_grad!(dfdU3)
-    fold_halo_to_core_grad!(dfdU4)
+    _fold_and_zero!(dfdU1)
+    _fold_and_zero!(dfdU2)
+    _fold_and_zero!(dfdU3)
+    _fold_and_zero!(dfdU4)
 
     # Gradients of Active scalar arguments are returned by Enzyme
     return result
@@ -155,9 +164,9 @@ function Enzyme_derivative!(
     end
 
     # Halo values are constrained to core values; fold halo gradients back to core.
-    fold_halo_to_core_grad!(dfdU1)
-    fold_halo_to_core_grad!(dfdU2)
-    fold_halo_to_core_grad!(dfdU3)
+    _fold_and_zero!(dfdU1)
+    _fold_and_zero!(dfdU2)
+    _fold_and_zero!(dfdU3)
 
     # Gradients of Active scalar arguments are returned by Enzyme
     return result
@@ -204,8 +213,8 @@ function Enzyme_derivative!(
     end
 
     # Halo values are constrained to core values; fold halo gradients back to core.
-    fold_halo_to_core_grad!(dfdU1)
-    fold_halo_to_core_grad!(dfdU2)
+    _fold_and_zero!(dfdU1)
+    _fold_and_zero!(dfdU2)
 
     # Gradients of Active scalar arguments are returned by Enzyme
     return result
@@ -247,7 +256,7 @@ function Enzyme_derivative!(
     end
 
     # Halo values are constrained to core values; fold halo gradients back to core.
-    fold_halo_to_core_grad!(dfdU1)
+    _fold_and_zero!(dfdU1)
     # Gradients of Active scalar arguments are returned by Enzyme
     return result
 end

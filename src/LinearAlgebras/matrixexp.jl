@@ -127,7 +127,7 @@ end
 
 # ---- exp(t*A) via Pade(13) + scaling & squaring (Complex-ready) ----
 @inline function exp3x3_pade(
-    a11::T, a12, a13, a21, a22, a23, a31, a32, a33, t=1) where {T<:Number,S}
+    a11::T, a12, a13, a21, a22, a23, a31, a32, a33, t=1) where {T<:Number}
     a = Mat3(a11, a12, a13, a21, a22, a23, a31, a32, a33)
     c = exp3x3_pade(a, t)
     c11 = c.a11

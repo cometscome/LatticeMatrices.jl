@@ -138,19 +138,19 @@ function Wiltinger_numerical_derivative(f, indices, U;
             # --- Re part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += ϵ
-            set_halo!(Up[k])
+            set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= ϵ
-            set_halo!(Um[k])
+            set_halo!.(Um)
             dRe = (callf(Up) - callf(Um)) / (2ϵ)
 
             # --- Im part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += im * ϵ
-            set_halo!(Up[k])
+            set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= im * ϵ
-            set_halo!(Um[k])
+            set_halo!.(Um)
             dIm = (callf(Up) - callf(Um)) / (2ϵ)
 
             # your convention: df/dx + i df/dy
@@ -221,19 +221,19 @@ function Numerical_derivative_Enzyme(f, indices, U1, U2, U3, U4;
             # --- Re part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += ϵ
-            set_halo!(Up[k])
+            set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= ϵ
-            set_halo!(Um[k])
+            set_halo!.(Um)
             dRe = (callf(Up...) - callf(Um...)) / (2ϵ)
 
             # --- Im part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += im * ϵ
-            set_halo!(Up[k])
+            set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= im * ϵ
-            set_halo!(Um[k])
+            set_halo!.(Um)
             dIm = (callf(Up...) - callf(Um...)) / (2ϵ)
 
             # your convention: df/dx + i df/dy
@@ -303,19 +303,19 @@ function Numerical_derivative_Enzyme(f, indices, U;
             # --- Re part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += ϵ
-            set_halo!(Up[k])
+            set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= ϵ
-            set_halo!(Um[k])
+            set_halo!.(Um)
             dRe = (callf(Up) - callf(Um)) / (2ϵ)
 
             # --- Im part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += im * ϵ
-            set_halo!(Up[k])
+            set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= im * ϵ
-            set_halo!(Um[k])
+            set_halo!.(Um)
             dIm = (callf(Up) - callf(Um)) / (2ϵ)
 
             # your convention: df/dx + i df/dy

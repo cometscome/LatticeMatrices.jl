@@ -162,6 +162,7 @@ function expt_TA!(C::TC, A::TA, t::S=one(S)) where {
     return
     #set_halo!(C)
 end
+export expt_TA!
 
 
 @inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{3}) where nw

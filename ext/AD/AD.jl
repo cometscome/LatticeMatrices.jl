@@ -1,7 +1,8 @@
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn, needs_primal, needs_shadow
 import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add_matrix_shiftedAdag!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
-    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt_TA!, clear_matrix!, set_halo!
+    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt_TA!, clear_matrix!, set_halo!,
+    fold_halo_dim_to_core_grad!
 using PreallocatedArrays
 using MPI
 
@@ -110,6 +111,182 @@ function ER.reverse(cfg::ER.RevConfig,
     return _rev_mul_AshiftB!(cfg, dCout, tape, C, A, B, shift; do_dB=do_dB)
 end
 
+# C = A * shift(B) where B is a Shifted_Lattice wrapper.
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Shifted_Lattice},
+) where {RT}
+    shift = get_shift(B.val)
+    mul_AshiftB!(C.val, A.val, B.val.data, shift)
+
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, shift))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Shifted_Lattice},
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = hasproperty(B, :dval) ? _getshadow_data(B.dval) : nothing
+    dBval = (dB_struct isa LatticeMatrix) ? dB_struct.A : nothing
+    if get(ENV, "LM_DEBUG_SHIFT_MUL", "") == "1"
+        println("mul! reverse (Shifted_Lattice): B.val=", typeof(B.val),
+            " dval=", hasproperty(B, :dval) ? typeof(B.dval) : "no dval",
+            " dB_struct=", typeof(dB_struct),
+            " dC max=", maximum(abs, dCval),
+            " dB max(before)=", dBval === nothing ? "none" : maximum(abs, dBval))
+    end
+
+    tapeA, tapeB, tape_shift = tape
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+    sh = tape_shift
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mul_dA_from_dC_Bdag_shift!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, sh
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulAdagBadd_scatter_shift!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, sh
+        )
+    end
+    if get(ENV, "LM_DEBUG_SHIFT_MUL", "") == "1"
+        println("mul! reverse (Shifted_Lattice): dB max(after)=", dBval === nothing ? "none" : maximum(abs, dBval))
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    if _should_zero_dC(dCout)
+        _zero_shadow!(dC_struct)
+    end
+    return (nothing, nothing, nothing)
+end
+
+# C = A * (shifted B)'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}},
+) where {RT}
+    shift = get_shift(B.val)
+    mul_A_shiftBdag!(C.val, A.val, B.val.data.data, shift)
+
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.data.temps)
+    tapeB_obj .= B.val.data.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, shift))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}},
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = hasproperty(B, :dval) ? _getshadow_data(B.dval) : nothing
+    dBval = (dB_struct isa LatticeMatrix) ? dB_struct.A : nothing
+
+    tapeA, tapeB, tape_shift = tape
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+    sh = tape_shift
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulACadd_shift!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, sh
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdagAadd_scatter_shift!,
+            dBval, dCval, Aval,
+            NC2, NC1, NC3, nw, idxr, sh
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.data.temps, tapeB[2])
+    end
+
+    if _should_zero_dC(dCout)
+        _zero_shadow!(dC_struct)
+    end
+    return (nothing, nothing, nothing)
+end
+
 # 共通の本体（Bのwrapper型で do_dB を切り替える）
 function _rev_mul_AshiftB!(
     cfg::ER.RevConfig,
@@ -184,7 +361,6 @@ function _rev_mul_AshiftB!(
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, sh
         )
-        fold_halo_to_core_grad!(dB_struct)
     end
 
     # Release tape blocks（早期 return があっても必ずやりたいなら try/finally 化推奨）
@@ -363,7 +539,6 @@ function _rev_mul_shiftAshiftB!(
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
-        fold_halo_to_core_grad!(dB_struct)
     end
 
     if tapeA !== nothing
@@ -416,7 +591,6 @@ function _rev_mul_shiftAdagshiftB!(
             dAval, dCval, Bval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
-        fold_halo_to_core_grad!(dA_struct)
     end
 
     if dBval !== nothing
@@ -426,7 +600,6 @@ function _rev_mul_shiftAdagshiftB!(
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
-        fold_halo_to_core_grad!(dB_struct)
     end
 
     if tapeA !== nothing
@@ -644,7 +817,6 @@ function _rev_mul_A_shiftBdag!(
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr, sh
         )
-        fold_halo_to_core_grad!(dB_struct)
     end
 
     if tapeA !== nothing
@@ -685,6 +857,10 @@ function ER.reverse(cfg::ER.RevConfig,
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing, nothing)
     dCval = dC_struct.A
+    if get(ENV, "LM_DEBUG_ADD_SHIFT", "") == "1"
+        println("add_matrix_shiftedA! reverse: shift=", hasproperty(shift, :val) ? shift.val : shift,
+            " dC max=", maximum(abs, Array(dCval)))
+    end
 
     dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
     dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
@@ -698,7 +874,14 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC1), Val(C.val.NC2),
             conj(αval), shiftval, Val(C.val.nw)
         )
-        fold_halo_to_core_grad!(dA_struct)
+        for d in 1:length(dA_struct.PN)
+            if shiftval[d] != 0
+                fold_halo_dim_to_core_grad!(dA_struct, d)
+            end
+        end
+        if get(ENV, "LM_DEBUG_ADD_SHIFT", "") == "1"
+            println("add_matrix_shiftedA! reverse: dA max=", maximum(abs, Array(dAval)))
+        end
     end
 
     return (nothing, nothing, nothing, nothing)
@@ -755,7 +938,6 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC2), Val(C.val.NC1),
             conj(αval), shiftval, Val(C.val.nw)
         )
-        fold_halo_to_core_grad!(dA_struct)
     end
 
     return (nothing, nothing, nothing, nothing)
@@ -893,11 +1075,65 @@ function ER.reverse(cfg::ER.RevConfig,
     dCout, _tape,
     C::ER.Annotation{<:LatticeMatrix},
 )
+
+    if get(ENV, "LM_DEBUG_SET_HALO", "") == "1"
+        println("set_halo! reverse called; dCout=", typeof(dCout))
+    end
+    if get(ENV, "LM_DEBUG_SET_HALO", "") == "1"
+        println("set_halo! reverse: C.val=", typeof(C.val),
+            " dval=", hasproperty(C, :dval) ? typeof(C.dval) : "no dval",
+            " shadow=", typeof(_getshadow(C.dval)))
+    end
+
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing,)
 
-    fold_halo_to_core_grad!(dC_struct)
+    dbg_idx = get(ENV, "LM_DEBUG_SET_HALO_IDX", "")
+    if !isempty(dbg_idx)
+        parts = split(dbg_idx, ",")
+        if length(parts) == length(dC_struct.PN)
+            idx = ntuple(i -> parse(Int, strip(parts[i])), length(parts))
+            idx_ghost_plus = (dC_struct.PN[1] + 2 * dC_struct.nw, idx[2:end]...)
+            println("set_halo! reverse dbg nbr=", dC_struct.nbr, " myrank=", dC_struct.myrank, " phases=", dC_struct.phases)
+            println("set_halo! reverse dbg core(before)=", dC_struct.A[:, :, idx...])
+            println("set_halo! reverse dbg ghost_plus(before)=", dC_struct.A[:, :, idx_ghost_plus...])
+        end
+    end
+
+    if get(ENV, "LM_DEBUG_SET_HALO", "") == "1"
+        println("set_halo! reverse dC max(before)=", maximum(abs, dC_struct.A))
+    end
+    for d in length(dC_struct.PN):-1:1
+        fold_halo_dim_to_core_grad_phase!(dC_struct, d, C.val.phases[d])
+    end
+    zero_halo_region!(dC_struct)
+    if get(ENV, "LM_DEBUG_SET_HALO", "") == "1"
+        println("set_halo! reverse dC max(after)=", maximum(abs, dC_struct.A))
+    end
+    if !isempty(dbg_idx)
+        parts = split(dbg_idx, ",")
+        if length(parts) == length(dC_struct.PN)
+            idx = ntuple(i -> parse(Int, strip(parts[i])), length(parts))
+            idx_ghost_plus = (dC_struct.PN[1] + 2 * dC_struct.nw, idx[2:end]...)
+            println("set_halo! reverse dbg core(after)=", dC_struct.A[:, :, idx...])
+            println("set_halo! reverse dbg ghost_plus(after)=", dC_struct.A[:, :, idx_ghost_plus...])
+        end
+    end
+    #=
+        if get(ENV, "LM_DEBUG_SET_HALO", "") == "1"
+            println("set_halo! reverse called; dCout=", typeof(dCout))
+        end
+        dC_struct = _getshadow_out(dCout, C)
+        dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+        if get(ENV, "LM_DEBUG_SET_HALO", "") == "1"
+            println("set_halo! reverse dC_struct=", typeof(dC_struct))
+        end
+        dC_struct === nothing && return (nothing,)
+
+        fold_halo_to_core_grad!(dC_struct)
+        zero_halo_region!(dC_struct)
+        =#
     return (nothing,)
 end
 
@@ -926,6 +1162,10 @@ function ER.reverse(cfg::ER.RevConfig,
     dA_struct = _getshadow(A.dval)
     dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
     if dAval !== nothing
+        if get(ENV, "LM_DEBUG_SUBSTITUTE", "") == "1"
+            println("substitute! reverse: dC max=", maximum(abs, dCval),
+                " dA max(before)=", maximum(abs, dAval))
+        end
         α = one(eltype(dCval))
         JACC.parallel_for(
             prod(C.val.PN),
@@ -934,6 +1174,9 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC1), Val(C.val.NC2),
             α, Val(C.val.nw)
         )
+        if get(ENV, "LM_DEBUG_SUBSTITUTE", "") == "1"
+            println("substitute! reverse: dA max(after)=", maximum(abs, dAval))
+        end
     end
 
     _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
@@ -974,7 +1217,6 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC1), Val(C.val.NC2),
             α, shiftval, Val(C.val.nw)
         )
-        fold_halo_to_core_grad!(dA_struct)
     end
 
     _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
@@ -1054,7 +1296,6 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC2), Val(C.val.NC1),
             α, shiftval, Val(C.val.nw)
         )
-        fold_halo_to_core_grad!(dA_struct)
     end
 
     _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
@@ -1734,12 +1975,47 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     return ER.AugmentedReturn(primal, shadow, nothing)
 end
 
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.shift_L)},
+    ::Type{RT},
+    B::ER.Annotation{<:LatticeMatrix},
+    sh::NTuple{Dim,Int},
+) where {RT,Dim}
+    if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
+        println("shift_L augmented_primal (Annotation): B.val=", typeof(B.val),
+            " dval=", hasproperty(B, :dval) ? typeof(B.dval) : "no dval",
+            " sh=", sh)
+    end
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.shift_L(B.val, sh) : nothing
+    shadow = if ER.needs_shadow(cfg)
+        dB = _getshadow(B.dval)
+        dB isa LatticeMatrix ? LatticeMatrices.shift_L(dB, sh) : nothing
+    else
+        nothing
+    end
+    return ER.AugmentedReturn(primal, shadow, nothing)
+end
+
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.shift_L)},
     _dout, _tape,
     B::ER.Const{<:LatticeMatrix},
     sh::NTuple{Dim,Int},
 ) where {Dim}
+    return (nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.shift_L)},
+    _dout, _tape,
+    B::ER.Annotation{<:LatticeMatrix},
+    sh::NTuple{Dim,Int},
+) where {Dim}
+    if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
+        println("shift_L reverse (Annotation): B.val=", typeof(B.val),
+            " dval=", hasproperty(B, :dval) ? typeof(B.dval) : "no dval",
+            " sh=", sh)
+    end
     return (nothing, nothing)
 end
 
@@ -1754,10 +2030,42 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     return ER.AugmentedReturn(primal, nothing, nothing)
 end
 
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
+    ::Type{RT},
+    data::ER.Annotation{<:LatticeMatrix},
+    shift::NTuple{Dim,Int},
+    ::Val{Dim},
+) where {RT,Dim}
+    if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
+        println("Shifted_Lattice augmented_primal (Annotation, Val): data.val=", typeof(data.val),
+            " dval=", hasproperty(data, :dval) ? typeof(data.dval) : "no dval",
+            " shift=", shift)
+    end
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift, Val(Dim)) : nothing
+    shadow = if ER.needs_shadow(cfg)
+        ddata = _getshadow(data.dval)
+        ddata isa LatticeMatrix ? LatticeMatrices.Shifted_Lattice(ddata, shift, Val(Dim)) : nothing
+    else
+        nothing
+    end
+    return ER.AugmentedReturn(primal, shadow, nothing)
+end
+
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     _dout, _tape,
     data::ER.Const{<:LatticeMatrix},
+    shift::NTuple{Dim,Int},
+    ::Val{Dim},
+) where {Dim}
+    return (nothing, nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
+    _dout, _tape,
+    data::ER.Annotation{<:LatticeMatrix},
     shift::NTuple{Dim,Int},
     ::Val{Dim},
 ) where {Dim}
@@ -1774,10 +2082,40 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     return ER.AugmentedReturn(primal, nothing, nothing)
 end
 
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
+    ::Type{RT},
+    data::ER.Annotation{<:LatticeMatrix},
+    shift_in,
+) where {RT}
+    if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
+        println("Shifted_Lattice augmented_primal (Annotation): data.val=", typeof(data.val),
+            " dval=", hasproperty(data, :dval) ? typeof(data.dval) : "no dval",
+            " shift_in=", shift_in)
+    end
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift_in) : nothing
+    shadow = if ER.needs_shadow(cfg)
+        ddata = _getshadow(data.dval)
+        ddata isa LatticeMatrix ? LatticeMatrices.Shifted_Lattice(ddata, shift_in) : nothing
+    else
+        nothing
+    end
+    return ER.AugmentedReturn(primal, shadow, nothing)
+end
+
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     _dout, _tape,
     data::ER.Const{<:LatticeMatrix},
+    shift_in,
+)
+    return (nothing, nothing)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
+    _dout, _tape,
+    data::ER.Annotation{<:LatticeMatrix},
     shift_in,
 )
     return (nothing, nothing)
@@ -2288,25 +2626,168 @@ end
     end
 end
 
+@inline function kernel_add_slab!(i, face, buf, dindexer, ::Val{NC1}, ::Val{NC2}, phase) where {NC1,NC2}
+    indices = delinearize(dindexer, i)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            face[ic, jc, indices...] += phase * buf[ic, jc, indices...]
+        end
+    end
+    return nothing
+end
+
 function fold_halo_to_core_grad!(ls::LatticeMatrix)
     (ls.A === nothing || !(ls.A isa AbstractArray)) && return nothing
     PN = ls.PN
-    Nsites = prod(PN)
     N1 = Val(ls.NC1)
     N2 = Val(ls.NC2)
     nwv = Val(ls.nw)
     idx = ls.indexer
 
     for d in 1:length(PN)
-        rankM, rankP = ls.nbr[d]
-        if rankM == ls.myrank && rankP == ls.myrank
-            JACC.parallel_for(
-                Nsites, kernel_fold_halo_dim_to_core!, ls.A, idx, N1, N2, nwv, PN[d], Val(d), ls.phases[d]
-            )
+        fold_halo_dim_to_core_grad!(ls, d)
+    end
+    return nothing
+end
+
+function fold_halo_dim_to_core_grad!(ls::LatticeMatrix, d::Int)
+    (ls.A === nothing || !(ls.A isa AbstractArray)) && return nothing
+    PN = ls.PN
+    N1 = Val(ls.NC1)
+    N2 = Val(ls.NC2)
+    nwv = Val(ls.nw)
+    idx = ls.indexer
+
+    rankM, rankP = ls.nbr[d]
+    if rankM == ls.myrank && rankP == ls.myrank
+        dims_s = ntuple(i -> (i == d ? ls.nw : PN[i] + 2 * ls.nw), length(PN))
+        slab_indexer = LatticeMatrices.DIndexer(dims_s)
+        nsites = prod(dims_s)
+        phase_conj = conj(ls.phases[d])
+
+        face_minus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :minus)
+        ghost_plus = LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus)
+        JACC.parallel_for(nsites, kernel_add_slab!, face_minus, ghost_plus, slab_indexer, N1, N2, phase_conj)
+
+        face_plus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :plus)
+        ghost_minus = LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus)
+        JACC.parallel_for(nsites, kernel_add_slab!, face_plus, ghost_minus, slab_indexer, N1, N2, phase_conj)
+        return nothing
+    end
+
+    # MPI reverse: send ghost grads back, receive face grads, then accumulate.
+    iSM, iRM = 4d - 3, 4d - 2
+    iSP, iRP = 4d - 1, 4d
+    bufSM, bufRM = ls.buf[iSM], ls.buf[iRM]
+    bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]
+
+    copy!(bufSM, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus))
+    copy!(bufSP, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus))
+
+    reqs = MPI.Request[]
+    push!(reqs, MPI.Isend(bufSM, rankM, d, ls.cart))
+    push!(reqs, MPI.Isend(bufSP, rankP, d + length(PN), ls.cart))
+    push!(reqs, MPI.Irecv!(bufRM, rankM, d + length(PN), ls.cart))
+    push!(reqs, MPI.Irecv!(bufRP, rankP, d, ls.cart))
+    MPI.Waitall!(reqs)
+
+    dims_s = ntuple(i -> (i == d ? ls.nw : PN[i] + 2 * ls.nw), length(PN))
+    slab_indexer = LatticeMatrices.DIndexer(dims_s)
+    nsites = prod(dims_s)
+
+    phase_minus = (ls.coords[d] == 0) ? conj(ls.phases[d]) : one(eltype(ls.A))
+    face_minus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :minus)
+    JACC.parallel_for(nsites, kernel_add_slab!, face_minus, bufRM, slab_indexer, N1, N2, phase_minus)
+
+    phase_plus = (ls.coords[d] == ls.dims[d] - 1) ? conj(ls.phases[d]) : one(eltype(ls.A))
+    face_plus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :plus)
+    JACC.parallel_for(nsites, kernel_add_slab!, face_plus, bufRP, slab_indexer, N1, N2, phase_plus)
+    return nothing
+end
+
+function fold_halo_dim_to_core_grad_phase!(ls::LatticeMatrix, d::Int, phase)
+    (ls.A === nothing || !(ls.A isa AbstractArray)) && return nothing
+    PN = ls.PN
+    N1 = Val(ls.NC1)
+    N2 = Val(ls.NC2)
+    nwv = Val(ls.nw)
+    idx = ls.indexer
+
+    rankM, rankP = ls.nbr[d]
+    if rankM == ls.myrank && rankP == ls.myrank
+        dims_s = ntuple(i -> (i == d ? ls.nw : PN[i] + 2 * ls.nw), length(PN))
+        slab_indexer = LatticeMatrices.DIndexer(dims_s)
+        nsites = prod(dims_s)
+        phase_conj = conj(phase)
+
+        face_minus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :minus)
+        ghost_plus = LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus)
+        JACC.parallel_for(nsites, kernel_add_slab!, face_minus, ghost_plus, slab_indexer, N1, N2, phase_conj)
+
+        face_plus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :plus)
+        ghost_minus = LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus)
+        JACC.parallel_for(nsites, kernel_add_slab!, face_plus, ghost_minus, slab_indexer, N1, N2, phase_conj)
+        return nothing
+    end
+
+    iSM, iRM = 4d - 3, 4d - 2
+    iSP, iRP = 4d - 1, 4d
+    bufSM, bufRM = ls.buf[iSM], ls.buf[iRM]
+    bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]
+
+    copy!(bufSM, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus))
+    copy!(bufSP, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus))
+
+    # NOTE: reverse of exchange_dim! (gradient) with phase from primal
+    MPI.Waitall([
+        MPI.Irecv!(bufRM, ls.nbr[d][1], iRP, ls.comm),
+        MPI.Irecv!(bufRP, ls.nbr[d][2], iRM, ls.comm),
+        MPI.Isend(bufSM, ls.nbr[d][1], iSM, ls.comm),
+        MPI.Isend(bufSP, ls.nbr[d][2], iSP, ls.comm),
+    ])
+
+    phase_conj = conj(phase)
+    face_minus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :minus)
+    face_plus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :plus)
+    @inbounds face_minus .+= phase_conj .* bufRM
+    @inbounds face_plus .+= phase_conj .* bufRP
+    return nothing
+end
+
+@inline function kernel_zero_ghost_slab!(i, slab, dindexer, ::Val{NC1}, ::Val{NC2}) where {NC1,NC2}
+    indices = delinearize(dindexer, i)
+    @inbounds for jc = 1:NC2
+        for ic = 1:NC1
+            slab[ic, jc, indices...] = zero(eltype(slab))
         end
     end
     return nothing
 end
+
+function zero_halo_region!(ls::LatticeMatrix)
+    (ls.A === nothing || !(ls.A isa AbstractArray)) && return nothing
+    D = length(ls.PN)
+    for d in 1:D
+        zero_halo_dim!(ls, d)
+    end
+    return nothing
+end
+
+function zero_halo_dim!(ls::LatticeMatrix, d::Int)
+    (ls.A === nothing || !(ls.A isa AbstractArray)) && return nothing
+    D = length(ls.PN)
+    dims_s = ntuple(i -> (i == d ? ls.nw : ls.PN[i] + 2 * ls.nw), D)
+    slab_indexer = LatticeMatrices.DIndexer(dims_s)
+    nsites = prod(dims_s)
+
+    slab = LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus)
+    JACC.parallel_for(nsites, kernel_zero_ghost_slab!, slab, slab_indexer, Val(ls.NC1), Val(ls.NC2))
+
+    slab = LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus)
+    JACC.parallel_for(nsites, kernel_zero_ghost_slab!, slab, slab_indexer, Val(ls.NC1), Val(ls.NC2))
+    return nothing
+end
+export zero_halo_region!
 
 
 @inline function kernel_Dmatrix_mulABdagadd_shift!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, shift) where {NC1,NC2,NC3,nw}

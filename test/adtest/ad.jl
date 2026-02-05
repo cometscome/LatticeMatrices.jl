@@ -5,7 +5,7 @@ using LinearAlgebra
 using Enzyme
 import JACC
 JACC.@init_backend
-import LatticeMatrices: mul_AshiftB!
+import LatticeMatrices: mul_AshiftB!, expt_TA
 import Enzyme: autodiff, Duplicated, Const
 import Enzyme.EnzymeRules: forward, augmented_primal, reverse, FwdConfig, RevConfigWidth,
     Active, needs_primal, needs_shadow, AugmentedReturn,
@@ -14,6 +14,7 @@ import Enzyme.EnzymeRules: forward, augmented_primal, reverse, FwdConfig, RevCon
 import Enzyme: Duplicated, Const, Active
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn
 using InteractiveUtils
+
 
 function _report_diff(label, dU, dUn, indices; tol=1e-6)
     diffs = dU.A[:, :, indices...] .- dUn
@@ -44,6 +45,202 @@ function _halo_to_core_indices(indices, PN, nw)
                 idx
             end
         end, length(indices))
+end
+
+function _dot_all(A::LatticeMatrix, B::LatticeMatrix)
+    a = Array(A.A)
+    b = Array(B.A)
+    return sum(conj.(a) .* b)
+end
+
+function _report_max_grad(label, dU::LatticeMatrix)
+    absvals = abs.(dU.A)
+    maxval = maximum(absvals)
+    idx = argmax(absvals)
+    inds = Tuple(CartesianIndices(size(dU.A))[idx])
+    println(label, " max |grad| = ", maxval, " idx = ", inds)
+    return nothing
+end
+
+function _max_grad_indices(dU::LatticeMatrix)
+    absvals = abs.(dU.A)
+    idx = argmax(absvals)
+    return Tuple(CartesianIndices(size(dU.A))[idx])
+end
+
+function _report_grad_at(label, dU::LatticeMatrix, indices)
+    block = dU.A[:, :, indices...]
+    println(label, " |grad| max = ", maximum(abs, block), " idx = ", indices)
+    display(block)
+    return nothing
+end
+
+function _shift_delta_probe!(label, U::LatticeMatrix, shift, idx)
+    B = similar(U)
+    clear_matrix!(B)
+    B.A[1, 1, idx...] = 1.0
+    set_halo!(B)
+    Bs = shift_L(B, shift)
+    C = similar(U)
+    substitute!(C, Bs)
+    maxval = maximum(abs, C.A)
+    pos = Tuple(CartesianIndices(size(C.A))[argmax(abs.(C.A))])
+    println(label, " idx=", idx, " shift=", shift, " max=", maxval, " pos=", pos)
+    return nothing
+end
+
+function check_set_halo_adjoint!(X::LatticeMatrix, Y::LatticeMatrix; tol=1e-10)
+    X.A .= randn(eltype(X.A), size(X.A))
+    Y.A .= randn(eltype(Y.A), size(Y.A))
+
+    Xh = deepcopy(X)
+    set_halo!(Xh)
+    lhs = _dot_all(Xh, Y)
+
+    Yh = deepcopy(Y)
+    for d in length(Yh.PN):-1:1
+        LatticeMatrices.fold_halo_dim_to_core_grad!(Yh, d)
+        LatticeMatrices.zero_halo_dim!(Yh, d)
+    end
+    rhs = _dot_all(X, Yh)
+
+    diff = abs(lhs - rhs)
+    rel = diff / (abs(lhs) + abs(rhs) + eps(Float64))
+    println("set_halo adjoint check: |lhs-rhs|=", diff, " rel=", rel)
+    if rel > tol
+        println("set_halo adjoint check failed: rel=", rel, " tol=", tol)
+    end
+    return rel
+end
+
+function check_mul_AshiftB_adjoint!(Ain::LatticeMatrix, Bin::LatticeMatrix; shift=(1, 0, 0, 0), tol=1e-10)
+    A = deepcopy(Ain)
+    B = deepcopy(Bin)
+    A.A .= randn(eltype(A.A), size(A.A))
+    B.A .= randn(eltype(B.A), size(B.A))
+    set_halo!(A)
+    set_halo!(B)
+
+    Cref = similar(A)
+    Y = similar(A)
+    Y.A .= randn(eltype(Y.A), size(Y.A))
+    set_halo!(Y)
+
+    temp = [similar(A)]
+    dtemp = [similar(A)]
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    dA = similar(A)
+    dB = similar(B)
+    dU3 = similar(A)
+    dU4 = similar(A)
+    clear_matrix!.((dA, dB, dU3, dU4))
+
+    function f_mul_shift(U1, U2, U3, U4, temp)
+        C = temp[1]
+        mul_AshiftB!(C, U1, U2, shift)
+        return real(_dot_all(C, Y))
+    end
+
+    fval = f_mul_shift(A, B, A, A, temp)
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    Enzyme_derivative!(
+        f_mul_shift,
+        A,
+        B,
+        A,
+        A,
+        dA,
+        dB,
+        dU3,
+        dU4; temp=temp, dtemp=dtemp)
+
+    rhsA = real(_dot_all(dA, A))
+    rhsB = real(_dot_all(dB, B))
+    relA = abs(fval - rhsA) / (abs(fval) + abs(rhsA) + eps(Float64))
+    relB = abs(fval - rhsB) / (abs(fval) + abs(rhsB) + eps(Float64))
+    println("mul_AshiftB adjoint check (A): |lhs-rhs|=", abs(fval - rhsA), " rel=", relA)
+    println("mul_AshiftB adjoint check (B): |lhs-rhs|=", abs(fval - rhsB), " rel=", relB)
+    if relA > tol || relB > tol
+        println("mul_AshiftB adjoint check failed: relA=", relA, " relB=", relB, " tol=", tol)
+    end
+    return max(relA, relB)
+end
+
+function check_fold_halo_dim_to_core!(X::LatticeMatrix; dim=1)
+    C = deepcopy(X)
+    clear_matrix!(C)
+    nw = C.nw
+    pn = C.PN
+    D = length(pn)
+    @assert nw == 1 "check_fold_halo_dim_to_core! assumes nw=1"
+    @assert pn[dim] >= 2 "check_fold_halo_dim_to_core! needs pn[dim] >= 2"
+
+    idx_face = ntuple(i -> (i == dim ? 2 : 2), D)
+    idx_ghost = ntuple(i -> (i == dim ? pn[i] + 2 * nw : 2), D)
+
+    C.A[:, :, idx_ghost...] .= 1 + 0im
+    LatticeMatrices.fold_halo_dim_to_core_grad!(C, dim)
+    LatticeMatrices.zero_halo_dim!(C, dim)
+
+    face_val = C.A[1, 1, idx_face...]
+    ghost_val = C.A[1, 1, idx_ghost...]
+    println("fold_halo_dim_to_core check dim=$dim face=", face_val, " ghost=", ghost_val)
+    return face_val, ghost_val
+end
+
+function check_add_matrix_shiftedA_adjoint!(Ain::LatticeMatrix; shift=(1, 0, 0, 0), tol=1e-10)
+    A = deepcopy(Ain)
+    A.A .= randn(eltype(A.A), size(A.A))
+    set_halo!(A)
+
+    Y = similar(A)
+    Y.A .= randn(eltype(Y.A), size(Y.A))
+    set_halo!(Y)
+
+    temp = [similar(A)]
+    dtemp = [similar(A)]
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    dA = similar(A)
+    dU2 = similar(A)
+    dU3 = similar(A)
+    dU4 = similar(A)
+    clear_matrix!.((dA, dU2, dU3, dU4))
+
+    function f_add_shift(U1, U2, U3, U4, temp)
+        C = temp[1]
+        clear_matrix!(C)
+        LatticeMatrices.add_matrix_shiftedA!(C, U1, shift)
+        return real(_dot_all(C, Y))
+    end
+
+    fval = f_add_shift(A, A, A, A, temp)
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    Enzyme_derivative!(
+        f_add_shift,
+        A,
+        A,
+        A,
+        A,
+        dA,
+        dU2,
+        dU3,
+        dU4; temp=temp, dtemp=dtemp)
+
+    rhs = real(_dot_all(dA, A))
+    rel = abs(fval - rhs) / (abs(fval) + abs(rhs) + eps(Float64))
+    println("add_matrix_shiftedA adjoint check: |lhs-rhs|=", abs(fval - rhs), " rel=", rel)
+    if rel > tol
+        println("add_matrix_shiftedA adjoint check failed: rel=", rel, " tol=", tol)
+    end
+    return rel
 end
 
 function run_case_all(label, f, f_num, U1, U2, U3, U4, dU1, dU2, dU3, dU4, temp, dtemp, indices_mid, indices_halo; tol=1e-4)
@@ -153,6 +350,36 @@ function run_case_all_vector(label, f, f_num, U, dU, temp, dtemp, indices_mid, i
     end
 end
 
+function run_case_set_halo(label, f, f_num, U1, U2, U3, U4, dU1, dU2, dU3, dU4, temp, dtemp, indices_halo; tol=1e-4)
+    println("=== ", label, " ===")
+
+    dU = [dU1, dU2, dU3, dU4]
+    U = [U1, U2, U3, U4]
+
+    clear_matrix!.(dU)
+    clear_matrix!.(temp)
+    clear_matrix!.(dtemp)
+
+    Enzyme_derivative!(
+        f,
+        U1,
+        U2,
+        U3,
+        U4,
+        dU1,
+        dU2,
+        dU3,
+        dU4; temp=temp, dtemp=dtemp)
+
+    clear_matrix!.(temp)
+    f_num_1(Uvec) = f_num(Uvec[1], Uvec[2], Uvec[3], Uvec[4], temp)
+    indices_halo_core = _halo_to_core_indices(indices_halo, U1.PN, U1.nw)
+    dUn_halo = Numerical_derivative_Enzyme(f_num_1, indices_halo_core, U)
+    for k in 1:length(U)
+        _report_diff("U$k halo", dU[k], dUn_halo[k], indices_halo_core; tol)
+    end
+end
+
 
 function loss_mulABtest(U1, U2, U3, U4, temp)
     C = temp[1]
@@ -198,6 +425,280 @@ function loss_substitute_test(U1, U2, U3, U4, temp)
     return realtrace(C)
 end
 
+function loss_set_halo_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    mul!(C, U1, U2)
+    set_halo!(C)
+    #set_halo!(U1)
+    idx = (1, 3, 3, 3)
+    s = zero(eltype(U1.A))
+    s = realtrace(C)
+    #@inbounds for ic = 1:U1.NC1
+    #    s += C.A[ic, ic, idx...]
+    #end
+    return real(s)
+end
+
+function loss_shift_mul_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    shift1 = (1, 0, 0, 0)
+    mul!(C, U1, shift_L(U2, shift1))
+    return realtrace(C)
+end
+
+function loss_shift_muladj_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    shift1 = (1, 0, 0, 0)
+    mul!(C, U1, shift_L(U2, shift1)')
+    return realtrace(C)
+end
+
+function loss_calc_action_step_matrixadd_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    clear_matrix!(E)
+    shift_μ = (1, 0, 0, 0)
+    shift_ν = (0, 1, 0, 0)
+    _calc_action_step_matrixadd!(C, D, E, U1, U2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+
+function loss_calc_action_step_matrixadd_sethalo_test(U1, U2, U3, U4, temp)
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    clear_matrix!(E)
+    mul!(Ufat1, U1, U2)
+    set_halo!(Ufat1)
+    mul!(Ufat2, U3, U4)
+    set_halo!(Ufat2)
+    shift_μ = (1, 0, 0, 0)
+    shift_ν = (0, 1, 0, 0)
+    _calc_action_step_matrixadd!(C, D, E, Ufat1, Ufat2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+
+function loss_calc_action_step_matrixadd_sethalo_alloc_test(U1, U2, U3, U4, temp)
+    Ufat1 = similar(U1)
+    Ufat2 = similar(U1)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    clear_matrix!(E)
+    mul!(Ufat1, U1, U2)
+    set_halo!(Ufat1)
+    mul!(Ufat2, U3, U4)
+    set_halo!(Ufat2)
+    shift_μ = (1, 0, 0, 0)
+    shift_ν = (0, 1, 0, 0)
+    _calc_action_step_matrixadd!(C, D, E, Ufat1, Ufat2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+
+function loss_calc_action_step_matrixadd_sethalo_copy_test(U1, U2, U3, U4, temp)
+    Ufat1 = similar(U1)
+    Ufat2 = similar(U1)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    clear_matrix!(E)
+    substitute!(Ufat1, U1)
+    set_halo!(Ufat1)
+    substitute!(Ufat2, U3)
+    set_halo!(Ufat2)
+    shift_μ = (1, 0, 0, 0)
+    shift_ν = (0, 1, 0, 0)
+    _calc_action_step_matrixadd!(C, D, E, Ufat1, Ufat2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+
+function loss_shift_sethalo_mul_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    B = temp[2]
+    substitute!(B, U3)
+    set_halo!(B)
+    shift1 = (1, 0, 0, 0)
+    mul!(C, U1, shift_L(B, shift1))
+    return realtrace(C)
+end
+
+function loss_shift_sethalo_mul_identity_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    B = temp[2]
+    substitute!(B, U3)
+    set_halo!(B)
+    shift1 = (1, 0, 0, 0)
+    I = temp[3]
+    clear_matrix!(I)
+    idx = (U1.nw + 1, 3, 3, 3)
+    for ic = 1:U1.NC1
+        I.A[ic, ic, idx...] = 1.0
+    end
+    set_halo!(I)
+    mul!(C, I, shift_L(B, shift1))
+    return realtrace(C)
+end
+
+function loss_shift_sethalo_mul_point_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    B = temp[2]
+    substitute!(B, U3)
+    set_halo!(B)
+    shift1 = (1, 0, 0, 0)
+    mul!(C, U1, shift_L(B, shift1))
+    idx = (2, 3, 3, 3)
+    s = zero(eltype(C.A))
+    @inbounds for ic = 1:U1.NC1
+        s += C.A[ic, ic, idx...]
+    end
+    return real(s)
+end
+
+function loss_shift_sethalo_muladj_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    B = temp[2]
+    substitute!(B, U3)
+    set_halo!(B)
+    shift1 = (1, 0, 0, 0)
+    mul!(C, U1, shift_L(B, shift1)')
+    return realtrace(C)
+end
+
+function loss_sethalo_adjmul_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    B = temp[2]
+    substitute!(B, U3)
+    set_halo!(B)
+    mul!(C, U1, B')
+    return realtrace(C)
+end
+
+function loss_calc_action_step_matrixadd_noshift_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    D = temp[2]
+    E = temp[3]
+    clear_matrix!(E)
+    shift_μ = (1, 0, 0, 0)
+    shift_ν = (0, 1, 0, 0)
+    _calc_action_step_matrixadd_noshift!(C, D, E, U1, U2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+function loss_expt_TA_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    t = 0.3
+    expt_TA!(C, U1, t)
+    return realtrace(C)
+end
+
+function loss_expt_TA_wrapper_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    t = 0.3
+    UTA = Traceless_AntiHermitian(U1)
+    expt!(C, UTA, t)
+    return realtrace(C)
+end
+
+function loss_sethalo_shift_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    Cshift = temp[2]
+    shift1 = (-1, 0, 0, 0)
+    mul!(C, U1, U2)
+    set_halo!(C)
+    clear_matrix!(Cshift)
+    add_matrix_shiftedA!(Cshift, C, shift1)
+    return realtrace(Cshift)
+end
+
+function loss_sethalo_shift_pos_test(U1, U2, U3, U4, temp)
+    C = temp[1]
+    Cshift = temp[2]
+    shift1 = (1, 0, 0, 0)
+    mul!(C, U1, U2)
+    set_halo!(C)
+    clear_matrix!(Cshift)
+    LatticeMatrices.add_matrix_shiftedA!(Cshift, C, shift1)
+    return realtrace(Cshift)
+end
+
+function loss_stout_core_test(U1, U2, U3, U4, temp)
+    dim = 4
+    U = (U1, U2, U3, U4)
+    C = temp[1]
+    D = temp[2]
+    Uout = temp[3]
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    Ufat3 = temp[6]
+    Ufat4 = temp[7]
+    E = temp[8]
+    clear_matrix!(E)
+
+    μ = 1
+    ν = 2
+    shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+    shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+
+    make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, 0.3)
+    mul!(Ufat1, Uout, U1)
+    set_halo!(Ufat1)
+
+    clear_matrix!(E)
+    _calc_action_step_matrixadd!(C, D, E, Ufat1, Ufat2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+
+function loss_stout_core_nohalo_test(U1, U2, U3, U4, temp)
+    dim = 4
+    U = (U1, U2, U3, U4)
+    C = temp[1]
+    D = temp[2]
+    Uout = temp[3]
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    E = temp[8]
+    clear_matrix!(E)
+
+    μ = 1
+    ν = 2
+    shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+    shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+
+    make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, 0.3)
+    mul!(Ufat1, Uout, U1)
+    # no set_halo! on Ufat1 here
+
+    clear_matrix!(E)
+    _calc_action_step_matrixadd!(C, D, E, Ufat1, Ufat2, shift_μ, shift_ν)
+    return realtrace(E)
+end
+
+function loss_stout_core_onlyhalo_test(U1, U2, U3, U4, temp)
+    dim = 4
+    U = (U1, U2, U3, U4)
+    C = temp[1]
+    D = temp[2]
+    Uout = temp[3]
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    E = temp[8]
+    clear_matrix!(E)
+
+    μ = 1
+    ν = 2
+    shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+    shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+
+    make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, 0.3)
+    mul!(Ufat1, Uout, U1)
+    set_halo!(Ufat1)
+
+    clear_matrix!(E)
+    _calc_action_step_matrixadd!(C, D, E, Ufat1, Ufat2, shift_μ, shift_ν)
+    return realtrace(E)
+end
 function loss_substitute_shifted_test(U1, U2, U3, U4, shift1, temp)
     C = temp[1]
     U2_p1 = shift_L(U2, shift1)
@@ -780,6 +1281,38 @@ function _calc_action_step_addsum!(Uout, C, D, Uμ, Uν, shift_μ, shift_ν)
     #return S
 end
 
+function _calc_action_step_matrixadd!(C, D, E, Uμ, Uν, shift_μ, shift_ν)
+    #clear_U!(E)
+    Uμ_pν = shift_L(Uμ, shift_ν)
+    Uν_pμ = shift_L(Uν, shift_μ)
+
+    mul!(C, Uμ, Uν_pμ)
+    mul!(D, C, Uμ_pν')
+    mul!(C, D, Uν')
+    add_matrix!(E, C)
+    #S = realtrace(E)
+
+    mul!(C, Uν, Uμ_pν)
+    mul!(D, C, Uν_pμ')
+    mul!(C, D, Uμ')
+    add_matrix!(E, C)
+    #S += realtrace(E)
+    return
+end
+
+function _calc_action_step_matrixadd_noshift!(C, D, E, Uμ, Uν, shift_μ, shift_ν)
+    mul_AshiftB!(C, Uμ, Uν, shift_μ)
+    mul_A_shiftBdag!(D, C, Uμ, shift_ν)
+    mul!(C, D, Uν')
+    add_matrix!(E, C)
+
+    mul_AshiftB!(C, Uν, Uμ, shift_ν)
+    mul_A_shiftBdag!(D, C, Uν, shift_μ)
+    mul!(C, D, Uμ')
+    add_matrix!(E, C)
+    return
+end
+
 
 function calc_action_loopfn_addsum(U1, U2, U3, U4, β, NC, temp)
     U = (U1, U2, U3, U4)
@@ -851,6 +1384,143 @@ function stoutsmearing_test(U1, U2, U3, U4, β, NC, temp, t)
     return -S * β / NC
 end
 
+function stoutsmearing_action(U1, U2, U3, U4, β, NC, temp, t)
+    U = (U1, U2, U3, U4)
+    ndir = length(U)
+    dim = length(U1.PN)
+    Uout = temp[1]
+    C = temp[2]
+    D = temp[3]
+    clear_matrix!(Uout)
+    S = 0.0
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    Ufat3 = temp[6]
+    Ufat4 = temp[7]
+    E = temp[8]
+    Ufat = (Ufat1, Ufat2, Ufat3, Ufat4)
+
+    for μ = 1:ndir
+        clear_matrix!(E)
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
+        mul!(Ufat[μ], Uout, U[μ])        #S += realtrace(Ufat[μ])
+        set_halo!(Ufat)
+    end
+
+    S = 0.0
+
+    for μ = 1:ndir
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:ndir
+            if ν == μ
+                continue
+            end
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            _calc_action_step_add!(Uout, C, D, Ufat[μ], Ufat[ν], shift_μ, shift_ν)
+            S += realtrace(Uout)
+        end
+    end
+
+
+    return -S * β / NC
+end
+
+
+function calc_action_stout(U1, U2, U3, U4, β, NC, t, temp)
+    dim = 4
+    U = (U1, U2, U3, U4)
+    for μ = 1:dim
+        set_halo!(U[μ])
+    end
+    C = temp[1]
+    D = temp[2]
+    Uout = temp[3]
+    S = 0.0
+
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    Ufat3 = temp[6]
+    Ufat4 = temp[7]
+    E = temp[8]
+    clear_matrix!(E)
+
+    Ufat = (Ufat1, Ufat2, Ufat3, Ufat4)
+    for μ = 1:dim
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
+        mul!(Ufat[μ], Uout, U[μ])
+
+    end
+    for μ = 1:dim
+        set_halo!(Ufat[μ])
+    end
+
+
+    for μ = 1:dim
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:dim
+            if ν == μ
+                continue
+            end
+            clear_matrix!(E)
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            _calc_action_step_matrixadd!(C, D, E, Ufat[μ], Ufat[ν], shift_μ, shift_ν)
+            S += realtrace(E)
+        end
+    end
+
+
+    return -S * β / NC
+end
+
+function calc_action_stout_tmpfix(U1, U2, U3, U4, β, NC, t, temp)
+    dim = 4
+    U = (U1, U2, U3, U4)
+    for μ = 1:dim
+        set_halo!(U[μ])
+    end
+    S = 0.0
+
+    Ufat1 = temp[4]
+    Ufat2 = temp[5]
+    Ufat3 = temp[6]
+    Ufat4 = temp[7]
+    Ufat = (Ufat1, Ufat2, Ufat3, Ufat4)
+
+    for μ = 1:dim
+        Uout = similar(U1)
+        C = similar(U1)
+        D = similar(U1)
+        E = similar(U1)
+        clear_matrix!.((Uout, C, D, E))
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        make_μloop(Uout, C, D, E, μ, U, shift_μ, dim, t)
+        mul!(Ufat[μ], Uout, U[μ])
+    end
+    for μ = 1:dim
+        set_halo!(Ufat[μ])
+    end
+
+    for μ = 1:dim
+        shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
+        for ν = μ:dim
+            if ν == μ
+                continue
+            end
+            C = similar(U1)
+            D = similar(U1)
+            E = similar(U1)
+            clear_matrix!.((C, D, E))
+            shift_ν = ntuple(i -> ifelse(i == ν, 1, 0), dim)
+            _calc_action_step_matrixadd!(C, D, E, Ufat[μ], Ufat[ν], shift_μ, shift_ν)
+            S += realtrace(E)
+        end
+    end
+
+    return -S * β / NC
+end
+
 
 
 function fermiontest(U1, U2, U3, U4, phi, phitemp, temp)
@@ -867,7 +1537,13 @@ end
 
 function main()
     MPI.Init()
-
+    ENV["LM_DEBUG_SET_HALO"] = "1"
+    ENV["LM_DEBUG_ADD_SHIFT"] = "1"
+    ENV["LM_DEBUG_SHIFT_L"] = "1"
+    ENV["LM_DEBUG_SHIFT_MUL"] = "1"
+    ENV["LM_DEBUG_SHIFT_L"] = "1"
+    ENV["LM_DEBUG_SHIFT_MUL"] = "1"
+    ENV["LM_DEBUG_SUBSTITUTE"] = "1"
     NC = 2
     dim = 4
     gsize = (4, 4, 4, 4)
@@ -876,7 +1552,7 @@ function main()
     NG = 4
 
     UA = randn(ComplexF64, NC, NC, gsize...)
-    U1 = LatticeMatrix(UA, dim, PEs; nw, numtemps=4)
+    U1 = LatticeMatrix(UA, dim, PEs; nw, numtemps=10)
     set_halo!(U1)
     U2 = deepcopy(U1)
     U3 = deepcopy(U1)
@@ -885,7 +1561,7 @@ function main()
 
 
     phiA = randn(ComplexF64, NC, NG, gsize...)
-    phi = LatticeMatrix(phiA, dim, PEs; nw, numtemps=4)
+    phi = LatticeMatrix(phiA, dim, PEs; nw, numtemps=10)
     set_halo!(phi)
     println(dot(phi, phi))
 
@@ -913,11 +1589,154 @@ function main()
     β = 3.0
     texp = 0.3
 
+    indices_halo_set = (1, 3, 3, 3)
+
+    t = 0.3
+
+    check_set_halo_adjoint!(similar(U1), similar(U1))
+    check_mul_AshiftB_adjoint!(similar(U1), similar(U1))
+    check_fold_halo_dim_to_core!(similar(U1))
+    check_add_matrix_shiftedA_adjoint!(similar(U1))
+
+    fstout_stout(U1, U2, U3, U4, temp) = calc_action_stout(U1, U2, U3, U4, β, NC, t, temp)
+    run_case_all("calc_action_stout", fstout_stout, fstout_stout, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+
+    f_shift_sethalo_mul_id(U1, U2, U3, U4, temp) = loss_shift_sethalo_mul_identity_test(U1, U2, U3, U4, temp)
+    run_case_all("shift_sethalo_mul_id", f_shift_sethalo_mul_id, f_shift_sethalo_mul_id, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_shift_sethalo_mul_point(U1, U2, U3, U4, temp) = loss_shift_sethalo_mul_point_test(U1, U2, U3, U4, temp)
+    run_case_all("shift_sethalo_mul_point", f_shift_sethalo_mul_point, f_shift_sethalo_mul_point, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_shift_sethalo_mul(U1, U2, U3, U4, temp) = loss_shift_sethalo_mul_test(U1, U2, U3, U4, temp)
+    run_case_all("shift_sethalo_mul", f_shift_sethalo_mul, f_shift_sethalo_mul, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    _report_max_grad("shift_sethalo_mul U3", dU[3])
+    idx_core = indices_halo
+    idx_ghost_plus = (U1.PN[1] + 2 * U1.nw, indices_halo[2], indices_halo[3], indices_halo[4])
+    _report_grad_at("shift_sethalo_mul U3 core", dU[3], idx_core)
+    _report_grad_at("shift_sethalo_mul U3 ghost_plus", dU[3], idx_ghost_plus)
+    _shift_delta_probe!("shift_delta_core", U1, shift1, idx_core)
+    _shift_delta_probe!("shift_delta_core_neg", U1, ntuple(i -> -shift1[i], length(shift1)), idx_core)
+
+    idx_max = _max_grad_indices(dU[3])
+    indices_max = idx_max[3:end]
+    clear_matrix!.(temp)
+    f_num_1(Uvec) = f_shift_sethalo_mul(Uvec[1], Uvec[2], Uvec[3], Uvec[4], temp)
+    dUn_max = Numerical_derivative_Enzyme(f_num_1, indices_max, [U1, U2, U3, U4])
+    _report_diff("U3 maxpos", dU[3], dUn_max[3], indices_max; tol=1e-4)
+
+    #return
+
+
+    f_shift_sethalo_muladj(U1, U2, U3, U4, temp) = loss_shift_sethalo_muladj_test(U1, U2, U3, U4, temp)
+    run_case_all("shift_sethalo_muladj", f_shift_sethalo_muladj, f_shift_sethalo_muladj, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+    _report_max_grad("shift_sethalo_muladj U3", dU[3])
+    _report_grad_at("shift_sethalo_muladj U3 core", dU[3], idx_core)
+    _report_grad_at("shift_sethalo_muladj U3 ghost_plus", dU[3], idx_ghost_plus)
+
+    f_matrixadd_sethalo(U1, U2, U3, U4, temp) = loss_calc_action_step_matrixadd_sethalo_test(U1, U2, U3, U4, temp)
+    run_case_all("calc_action_step_matrixadd_sethalo", f_matrixadd_sethalo, f_matrixadd_sethalo, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    #return
+
+
+    f_sethalo_adjmul(U1, U2, U3, U4, temp) = loss_sethalo_adjmul_test(U1, U2, U3, U4, temp)
+    run_case_all("sethalo_adjmul", f_sethalo_adjmul, f_sethalo_adjmul, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+    #return
+
+
+
+
+    #return
+
+
+    f_matrixadd_sethalo_alloc(U1, U2, U3, U4, temp) = loss_calc_action_step_matrixadd_sethalo_alloc_test(U1, U2, U3, U4, temp)
+    run_case_all("calc_action_step_matrixadd_sethalo_alloc", f_matrixadd_sethalo_alloc, f_matrixadd_sethalo_alloc, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_matrixadd_sethalo_copy(U1, U2, U3, U4, temp) = loss_calc_action_step_matrixadd_sethalo_copy_test(U1, U2, U3, U4, temp)
+    run_case_all("calc_action_step_matrixadd_sethalo_copy", f_matrixadd_sethalo_copy, f_matrixadd_sethalo_copy, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+
+    fstout_stout_tmpfix(U1, U2, U3, U4, temp) = calc_action_stout_tmpfix(U1, U2, U3, U4, β, NC, t, temp)
+    run_case_all("calc_action_stout_tmpfix", fstout_stout_tmpfix, fstout_stout_tmpfix, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+    f_sethalo_shift(U1, U2, U3, U4, temp) = loss_sethalo_shift_test(U1, U2, U3, U4, temp)
+    run_case_all("sethalo_shift_neg", f_sethalo_shift, f_sethalo_shift, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    indices_halo_pos = (U1.PN[1] + 1, 3, 3, 3)
+    f_sethalo_shift_pos(U1, U2, U3, U4, temp) = loss_sethalo_shift_pos_test(U1, U2, U3, U4, temp)
+    run_case_all("sethalo_shift_pos", f_sethalo_shift_pos, f_sethalo_shift_pos, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo_pos)
+    # return
+
+
+    ndices_halo_pos = indices_halo
+    f_sethalo_shift_pos(U1, U2, U3, U4, temp) = loss_sethalo_shift_pos_test(U1, U2, U3, U4, temp)
+    run_case_all("sethalo_shift_pos2", f_sethalo_shift_pos, f_sethalo_shift_pos, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo_pos)
+
+    f_matrixadd_noshift(U1, U2, U3, U4, temp) = loss_calc_action_step_matrixadd_noshift_test(U1, U2, U3, U4, temp)
+    run_case_all("calc_action_step_matrixadd_noshift", f_matrixadd_noshift, f_matrixadd_noshift, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_matrixadd(U1, U2, U3, U4, temp) = loss_calc_action_step_matrixadd_test(U1, U2, U3, U4, temp)
+    run_case_all("calc_action_step_matrixadd", f_matrixadd, f_matrixadd, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+    f_stout_core(U1, U2, U3, U4, temp) = loss_stout_core_test(U1, U2, U3, U4, temp)
+    run_case_all("stout_core", f_stout_core, f_stout_core, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_stout_core_nohalo(U1, U2, U3, U4, temp) = loss_stout_core_nohalo_test(U1, U2, U3, U4, temp)
+    run_case_all("stout_core_nohalo", f_stout_core_nohalo, f_stout_core_nohalo, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_stout_core_onlyhalo(U1, U2, U3, U4, temp) = loss_stout_core_onlyhalo_test(U1, U2, U3, U4, temp)
+    run_case_all("stout_core_onlyhalo", f_stout_core_onlyhalo, f_stout_core_onlyhalo, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+
+
+
+
+
+    f_shift_mul(U1, U2, U3, U4, temp) = loss_shift_mul_test(U1, U2, U3, U4, temp)
+    run_case_all("shift_mul", f_shift_mul, f_shift_mul, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_shift_muladj(U1, U2, U3, U4, temp) = loss_shift_muladj_test(U1, U2, U3, U4, temp)
+    run_case_all("shift_muladj", f_shift_muladj, f_shift_muladj, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+    f_expt_ta(U1, U2, U3, U4, temp) = loss_expt_TA_test(U1, U2, U3, U4, temp)
+    run_case_all("expt_TA", f_expt_ta, f_expt_ta, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    f_expt_wrapper(U1, U2, U3, U4, temp) = loss_expt_TA_wrapper_test(U1, U2, U3, U4, temp)
+    run_case_all("expt_TA_wrapper", f_expt_wrapper, f_expt_wrapper, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+
+
+
+
+    #fstout(U1, U2, U3, U4, temp) = stoutsmearing_action(U1, U2, U3, U4, β, NC, temp, t)
+    #run_case_all("stoutsmearing_action", fstout, fstout, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    run_case_set_halo("set_halo", loss_set_halo_test, loss_set_halo_test,
+        U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_halo_set)
+
     run_case_all("real_of_dot", loss_real_of_dot_test, loss_real_of_dot_test, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
 
 
-    fermitest(U1, U2, U3, U4, phi, phitemp, temp) = fermiontest(U1, U2, U3, U4, phi, phitemp, temp)
-    run_case_all_phi("fermitest", fermitest, fermitest, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], phi, phitemp, dphitemp, temp, dtemp, indices_mid, indices_halo)
+
+    return
+
+    #fermitest(U1, U2, U3, U4, phi, phitemp, temp) = fermiontest(U1, U2, U3, U4, phi, phitemp, temp)
+    # run_case_all_phi("fermitest", fermitest, fermitest, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], phi, phitemp, dphitemp, temp, dtemp, indices_mid, indices_halo)
 
 
 
@@ -927,6 +1746,11 @@ function main()
     fs_sub_shift(U1, U2, U3, U4, temp) = loss_substitute_shifted_test(U1, U2, U3, U4, shift1, temp)
     run_case_all("substitute_shifted", fs_sub_shift, fs_sub_shift,
         U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
+    t = 0.3
+    fstout(U1, U2, U3, U4, temp) = stoutsmearing_test(U1, U2, U3, U4, β, NC, temp, t)
+    run_case_all("stoutsmearing_test", fstout, fstout, U1, U2, U3, U4, dU[1], dU[2], dU[3], dU[4], temp, dtemp, indices_mid, indices_halo)
+
 
     run_expt_ta_t_grad_test(U1, U2, U3, U4, dU, temp, dtemp, texp)
 

@@ -33,6 +33,7 @@ export Traceless_AntiHermitian
 
 export Shifted_Lattice
 export shift_L
+export add_matrix_shiftedA!
 
 struct Adjoint_Lattice{D} <: AbstractLattice
     data::D
@@ -77,6 +78,13 @@ end
 #    return Shifted_Lattice{typeof(data),D}(data, shift)
 #end
 
+function zero_halo_region! end
+export zero_halo_region!
+function zero_halo_dim! end
+export zero_halo_dim!
+
+function fold_halo_dim_to_core_grad! end
+export fold_halo_dim_to_core_grad!
 
 
 @inline function _as_shift_tuple(shift_in, ::Val{D}) where {D}
@@ -424,6 +432,7 @@ export toann
 
 export mul_AshiftB!
 export mul_shiftAshiftB!
+export mul_A_shiftBdag!
 
 include("Operators/Operators.jl")
 include("Operators/DiracOperators.jl")

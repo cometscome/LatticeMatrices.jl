@@ -29,6 +29,10 @@ end
 # Extract the shadow lattice matrix from an Annotation (Duplicated/MixedDuplicated).
 @inline _shadow_of(ann::ER.Annotation) = _getshadow(ann.dval)
 
+# Return a zero cotangent for Active scalar arguments; otherwise return nothing.
+@inline _zero_cotangent(::Any) = nothing
+@inline _zero_cotangent(x::ER.Active{T}) where {T} = zero(T)
+
 
 
 
@@ -962,9 +966,14 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     α::S,
 ) where {RT,S}
+    RealRt = eltype(RT)
     αval = hasproperty(α, :val) ? α.val : α
-    add_matrix_Adag!(C.val, A.val, αval)
-    return ER.AugmentedReturn(nothing, nothing, nothing)
+    primal_ret = add_matrix_Adag!(C.val, A.val, αval)
+    primal = ER.needs_primal(cfg) ? convert(RealRt, primal_ret) : nothing
+    shadow = ER.needs_shadow(cfg) ? convert(RealRt, nothing) : nothing
+    cache = nothing::Any
+    RetT = ER.augmented_rule_return_type(cfg, RT, cache)
+    return RetT(primal, shadow, cache)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
@@ -974,9 +983,10 @@ function ER.reverse(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     α::S,
 ) where {S}
+    dα = _zero_cotangent(α)
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, nothing)
+    dC_struct === nothing && return (nothing, nothing, dα)
     dCval = dC_struct.A
 
     dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
@@ -992,7 +1002,7 @@ function ER.reverse(cfg::ER.RevConfig,
         )
     end
 
-    return (nothing, nothing, nothing)
+    return (nothing, nothing, dα)
 end
 
 # add_matrix! (C += α * A)
@@ -1003,9 +1013,14 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     α::S,
 ) where {RT,S}
+    RealRt = eltype(RT)
     αval = hasproperty(α, :val) ? α.val : α
-    add_matrix!(C.val, A.val, αval)
-    return ER.AugmentedReturn(nothing, nothing, nothing)
+    primal_ret = add_matrix!(C.val, A.val, αval)
+    primal = ER.needs_primal(cfg) ? convert(RealRt, primal_ret) : nothing
+    shadow = ER.needs_shadow(cfg) ? convert(RealRt, nothing) : nothing
+    cache = nothing::Any
+    RetT = ER.augmented_rule_return_type(cfg, RT, cache)
+    return RetT(primal, shadow, cache)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
@@ -1015,9 +1030,10 @@ function ER.reverse(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     α::S,
 ) where {S}
+    dα = _zero_cotangent(α)
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, nothing)
+    dC_struct === nothing && return (nothing, nothing, dα)
     dCval = dC_struct.A
 
     dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
@@ -1033,7 +1049,7 @@ function ER.reverse(cfg::ER.RevConfig,
         )
     end
 
-    return (nothing, nothing, nothing)
+    return (nothing, nothing, dα)
 end
 
 

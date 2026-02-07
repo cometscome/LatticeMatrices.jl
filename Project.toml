@@ -1,7 +1,7 @@
 name = "LatticeMatrices"
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
 authors = ["Yuki Nagai <cometscome@gmail.com>"]
-version = "0.3.5"
+version = "0.3.6"
 
 [deps]
 Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"

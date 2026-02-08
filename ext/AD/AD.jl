@@ -1,7 +1,7 @@
 import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn, needs_primal, needs_shadow
 import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add_matrix_shiftedAdag!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
-    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt_TA!, clear_matrix!, set_halo!,
+    mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt!, expt_TA!, clear_matrix!, set_halo!,
     fold_halo_dim_to_core_grad!
 using PreallocatedArrays
 using MPI
@@ -492,6 +492,34 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     tapeB = (tapeB_obj, itB)
 
     return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{T},
+    A::ER.Annotation{T},
+    B::ER.Annotation{T},
+    α::S1,
+    β::S2,
+) where {T<:LatticeMatrix,RT,S1,S2}
+    αval = hasproperty(α, :val) ? α.val : α
+    βval = hasproperty(β, :val) ? β.val : β
+    primal_ret = mul!(C.val, A.val, B.val, αval, βval)
+
+    tapeA_obj, it_tapeA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, it_tapeA)
+
+    tapeB_obj, it_tapeB = get_block(B.val.temps)
+    tapeB_obj .= B.val.A
+    tapeB = (tapeB_obj, it_tapeB)
+
+    tape = (tapeA, tapeB, αval)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    primal = ER.needs_primal(cfg) ? primal_ret : nothing
+    shadow = ER.needs_shadow(cfg) ? nothing : nothing
+    return RetT(primal, shadow, tape)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
@@ -2185,6 +2213,94 @@ const _expt_ta_eps_q = 1e-18
 const fac13 = 1 / 3
 
 function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(expt!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    t::S,
+) where {RT,S}
+    tval = hasproperty(t, :val) ? t.val : t
+    expt!(C.val, A.val, tval)
+
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeC_obj, itC = get_block(C.val.temps)
+    tapeC_obj .= C.val.A
+    tapeC = (tapeC_obj, itC)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeC))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(expt!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    t::S,
+) where {S}
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = _getshadow(A.dval)
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+    dAval === nothing && return (nothing, nothing, nothing)
+
+    tapeA = (tape === nothing) ? nothing : tape[1]
+    tapeC = (tape === nothing) ? nothing : tape[2]
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+    Cval = (tapeC === nothing) ? C.val.A : tapeC[1]
+
+    tval = hasproperty(t, :val) ? t.val : t
+
+    dt = nothing
+    if t isa Active
+        init = zero(real(zero(eltype(dCval))))
+        dt_local = JACC.parallel_reduce(
+            prod(C.val.PN),
+            kernel_expt_TA_dt!,
+            dCval, Cval, Aval,
+            C.val.indexer, Val(C.val.NC1), Val(C.val.nw);
+            init=init, op=+
+        )
+        dt = MPI.Allreduce(dt_local, MPI.SUM, C.val.comm)
+    end
+
+    if C.val.NC1 == 2 && C.val.NC2 == 2
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_expt_TA_rev_su2!,
+            dAval, dCval, Aval,
+            C.val.indexer, Val(C.val.nw),
+            tval, _expt_ta_eps_q
+        )
+    elseif C.val.NC1 == 3 && C.val.NC2 == 3
+        JACC.parallel_for(
+            prod(C.val.PN),
+            kernel_expt_TA_rev_su3!,
+            dAval, dCval, Aval,
+            C.val.indexer, Val(C.val.nw),
+            tval, _expt_ta_eps_q
+        )
+    else
+        error("expt! reverse is only implemented for NC=2 or NC=3.")
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+    if tapeC !== nothing
+        unused!(C.val.temps, tapeC[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, dt)
+end
+
+function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(expt_TA!)},
     ::Type{RT},
     C::ER.Annotation{<:LatticeMatrix},
@@ -3265,6 +3381,64 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     return (nothing, nothing, nothing)
 end
 
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, _tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:LatticeMatrix},
+    α::S1,
+    β::S2,
+) where {S1,S2}
+    dα = _zero_cotangent(α)
+    dβ = _zero_cotangent(β)
+
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing, dα, dβ)
+    dCval = dC_struct.A
+
+    dA_struct = _getshadow(A.dval)
+    dB_struct = _getshadow(B.dval)
+    dAval = (dA_struct === nothing) ? nothing : dA_struct.A
+    dBval = (dB_struct === nothing) ? nothing : dB_struct.A
+
+    tapeA, tapeB, tape_α = _tape
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+    fac = conj(tape_α)
+
+    if dAval isa AbstractArray
+        JACC.parallel_for(
+            Nsites, kernel_Dmatrix_mulABdagadd_scaled!,
+            dAval, dCval, Bval, NC1, NC2, NC3, nw, idxr, fac
+        )
+    end
+
+    if dBval isa AbstractArray
+        JACC.parallel_for(
+            Nsites, kernel_Dmatrix_mulAdagBadd_scaled!,
+            dBval, Aval, dCval, NC1, NC2, NC3, nw, idxr, fac
+        )
+    end
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing, dα, dβ)
+end
+
 function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
     ::Const{typeof(LinearAlgebra.mul!)},
     dCout, _tape,
@@ -3382,6 +3556,18 @@ end
     end
 end
 
+@inline function kernel_Dmatrix_mulABdagadd_scaled!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, fac) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = conj(B[jc, kc, indices...])
+            for ic = 1:NC1
+                C[ic, jc, indices...] += fac * A[ic, kc, indices...] * b
+            end
+        end
+    end
+end
+
 @inline function kernel_Dmatrix_mulACadd_matrix!(i, dA, dC, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
     indices = delinearize(dindexer, i, nw)
     @inbounds for jc = 1:NC2
@@ -3447,6 +3633,18 @@ end
             b = B[kc, jc, indices...]
             for ic = 1:NC1
                 C[ic, jc, indices...] += conj(A[kc, ic, indices...]) * b# B[kc, jc, indices...]
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulAdagBadd_scaled!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, fac) where {NC1,NC2,NC3,nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = B[kc, jc, indices...]
+            for ic = 1:NC1
+                C[ic, jc, indices...] += fac * conj(A[kc, ic, indices...]) * b
             end
         end
     end

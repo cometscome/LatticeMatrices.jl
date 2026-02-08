@@ -2,7 +2,7 @@ import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn
 import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add_matrix_shiftedAdag!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
     mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt_TA!, clear_matrix!, set_halo!,
-    fold_halo_dim_to_core_grad!
+    fold_halo_dim_to_core_grad!, Staggered_Lattice, staggered_eta_halo
 using PreallocatedArrays
 using MPI
 
@@ -14,11 +14,13 @@ const ER = Enzyme.EnzymeRules
         import Enzyme.EnzymeRules: activity
         activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.MixedDuplicated
         activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.MixedDuplicated
+        activity(::Type{Staggered_Lattice{D,μ}}) where {D,μ} = Enzyme.MixedDuplicated
     end
     if isdefined(Enzyme, :activity)
         import Enzyme: activity
         activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.MixedDuplicated
         activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.MixedDuplicated
+        activity(::Type{Staggered_Lattice{D,μ}}) where {D,μ} = Enzyme.MixedDuplicated
     end
 end
 
@@ -28,6 +30,11 @@ end
 
 # Extract the shadow lattice matrix from an Annotation (Duplicated/MixedDuplicated).
 @inline _shadow_of(ann::ER.Annotation) = _getshadow(ann.dval)
+
+@inline function _staggered_eta_halo0(indices, ::Val{μ}, nw) where {μ}
+    μ == 0 && return 1
+    return staggered_eta_halo(indices, μ, nw)
+end
 
 
 
@@ -201,6 +208,1278 @@ function ER.reverse(cfg::ER.RevConfig,
     if _should_zero_dC(dCout)
         _zero_shadow!(dC_struct)
     end
+    return (nothing, nothing, nothing)
+end
+
+# C = stA * B
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice},
+    B::ER.Annotation{<:LatticeMatrix},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.temps)
+    tapeA_obj .= A.val.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.temps)
+    tapeB_obj .= B.val.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Duplicated{<:LatticeMatrix},
+) where {TA,μA}
+    do_dB = false
+    s = _getshadow(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAB!(cfg, dCout, tape, C, A, B, Val(μA); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B,
+) where {TA,μA}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAB!(cfg, dCout, tape, C, A, B, Val(μA); do_dB=do_dB)
+end
+
+function _rev_mul_stAB!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulABdagadd_eta!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, μA
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulAdagBadd_eta!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+# C = A * stB
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Staggered_Lattice},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Duplicated{<:Staggered_Lattice{TB,μB}},
+) where {TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_AstB!(cfg, dCout, tape, C, A, B, Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Staggered_Lattice{TB,μB}},
+) where {TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_AstB!(cfg, dCout, tape, C, A, B, Val(μB); do_dB=do_dB)
+end
+
+function _rev_mul_AstB!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulABdagadd_eta2!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, Val(0), μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulAdagBadd_eta2!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, Val(0), μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+# C = stA * stB
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice},
+    B::ER.Annotation{<:Staggered_Lattice},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.temps)
+    tapeA_obj .= A.val.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Duplicated{<:Staggered_Lattice{TB,μB}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAstB!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Annotation{<:Staggered_Lattice{TB,μB}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAstB!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function _rev_mul_stAstB!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulABdagadd_eta2!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulAdagBadd_eta2!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+# C = stA' * B
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+    B::ER.Annotation{<:LatticeMatrix},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.data.temps)
+    tapeA_obj .= A.val.data.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.temps)
+    tapeB_obj .= B.val.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Duplicated{<:LatticeMatrix},
+) where {TA,μA}
+    do_dB = false
+    s = _getshadow(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAdagB!(cfg, dCout, tape, C, A, B, Val(μA), Val(0); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B,
+) where {TA,μA}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAdagB!(cfg, dCout, tape, C, A, B, Val(μA), Val(0); do_dB=do_dB)
+end
+
+# C = A' * stB
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::ER.Annotation{<:Staggered_Lattice},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.temps)
+    tapeA_obj .= A.val.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::ER.Duplicated{<:Staggered_Lattice{TB,μB}},
+) where {TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_AdagstB!(cfg, dCout, tape, C, A, B, Val(0), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::ER.Annotation{<:Staggered_Lattice{TB,μB}},
+) where {TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_AdagstB!(cfg, dCout, tape, C, A, B, Val(0), Val(μB); do_dB=do_dB)
+end
+
+# C = stA' * stB
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+    B::ER.Annotation{<:Staggered_Lattice},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.data.temps)
+    tapeA_obj .= A.val.data.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Duplicated{<:Staggered_Lattice{TB,μB}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAdagstB!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Annotation{<:Staggered_Lattice{TB,μB}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAdagstB!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function _rev_mul_stAdagB!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(B.val.NC1)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulB_Cdagadd_eta2!,
+            dAval, Bval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulA_Cadd_eta2!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function _rev_mul_AdagstB!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(B.val.data.NC1)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulB_Cdagadd_eta2!,
+            dAval, Bval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulA_Cadd_eta2!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function _rev_mul_stAdagstB!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(B.val.data.NC1)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulB_Cdagadd_eta2!,
+            dAval, Bval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulA_Cadd_eta2!,
+            dBval, Aval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+# C = stA * B'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice},
+    B::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.temps)
+    tapeA_obj .= A.val.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Duplicated{<:Adjoint_Lattice{<:LatticeMatrix}},
+) where {TA,μA}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stABdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(0); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+) where {TA,μA}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stABdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(0); do_dB=do_dB)
+end
+
+# C = A * stB'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.data.temps)
+    tapeB_obj .= B.val.data.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Duplicated{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_AstBdag!(cfg, dCout, tape, C, A, B, Val(0), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_AstBdag!(cfg, dCout, tape, C, A, B, Val(0), Val(μB); do_dB=do_dB)
+end
+
+# C = stA * stB'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.temps)
+    tapeA_obj .= A.val.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.data.temps)
+    tapeB_obj .= B.val.data.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Duplicated{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAstBdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Staggered_Lattice{TA,μA}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAstBdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function _rev_mul_stABdag!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulACadd_eta2!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdagAadd_eta2!,
+            dBval, dCval, Aval,
+            NC2, NC1, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function _rev_mul_AstBdag!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulACadd_eta2!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdagAadd_eta2!,
+            dBval, dCval, Aval,
+            NC2, NC1, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function _rev_mul_stAstBdag!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.NC2)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulACadd_eta2!,
+            dAval, dCval, Bval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdagAadd_eta2!,
+            dBval, dCval, Aval,
+            NC2, NC1, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+# C = stA' * B'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.data.temps)
+    tapeA_obj .= A.val.data.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.temps)
+    tapeB_obj .= B.val.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Duplicated{<:Adjoint_Lattice{<:LatticeMatrix}},
+) where {TA,μA}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAdagBdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(0); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+) where {TA,μA}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAdagBdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(0); do_dB=do_dB)
+end
+
+# C = A' * stB'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.temps)
+    tapeA_obj .= A.val.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.data.temps)
+    tapeB_obj .= B.val.data.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::ER.Duplicated{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_AdagstBdag!(cfg, dCout, tape, C, A, B, Val(0), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:LatticeMatrix}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_AdagstBdag!(cfg, dCout, tape, C, A, B, Val(0), Val(μB); do_dB=do_dB)
+end
+
+# C = stA' * stB'
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice}},
+) where {RT}
+    mul!(C.val, A.val, B.val)
+
+    tapeA_obj, itA = get_block(A.val.data.data.temps)
+    tapeA_obj .= A.val.data.data.A
+    tapeA = (tapeA_obj, itA)
+
+    tapeB_obj, itB = get_block(B.val.data.data.temps)
+    tapeB_obj .= B.val.data.data.A
+    tapeB = (tapeB_obj, itB)
+
+    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Duplicated{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    s = _getshadow_data(B.dval)
+    do_dB = (s isa LatticeMatrix)
+    return _rev_mul_stAdagstBdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function ER.reverse(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    dCout, tape,
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TA,μA}}},
+    B::ER.Annotation{<:Adjoint_Lattice{<:Staggered_Lattice{TB,μB}}},
+) where {TA,μA,TB,μB}
+    do_dB = false
+    if hasproperty(B, :dval)
+        s = _getshadow_data(getproperty(B, :dval))
+        do_dB = (s isa LatticeMatrix)
+    end
+    return _rev_mul_stAdagstBdag!(cfg, dCout, tape, C, A, B, Val(μA), Val(μB); do_dB=do_dB)
+end
+
+function _rev_mul_stAdagBdag!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.data.NC1)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulBdag_Cdagadd_eta2!,
+            dAval, Bval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdag_Adagadd_eta2!,
+            dBval, Aval, dCval,
+            NC2, NC1, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function _rev_mul_AdagstBdag!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.NC1)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulBdag_Cdagadd_eta2!,
+            dAval, Bval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdag_Adagadd_eta2!,
+            dBval, Aval, dCval,
+            NC2, NC1, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
+    return (nothing, nothing, nothing)
+end
+
+function _rev_mul_stAdagstBdag!(
+    cfg::ER.RevConfig,
+    dCout, tape,
+    C, A, B, μA, μB;
+    do_dB::Bool,
+)
+    dC_struct = _getshadow_out(dCout, C)
+    dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
+    dC_struct === nothing && return (nothing, nothing, nothing)
+    dCval = dC_struct.A
+
+    dA_struct = hasproperty(A, :dval) ? _getshadow_data(A.dval) : nothing
+    dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
+
+    dB_struct = do_dB ? _getshadow_data(B.dval) : nothing
+    dBval = (do_dB && (dB_struct isa LatticeMatrix)) ? dB_struct.A : nothing
+
+    tapeA, tapeB = tape
+    Aval = (tapeA === nothing) ? A.val.data.data.A : tapeA[1]
+    Bval = (tapeB === nothing) ? B.val.data.data.A : tapeB[1]
+
+    NC1 = Val(C.val.NC1)
+    NC2 = Val(C.val.NC2)
+    NC3 = Val(A.val.data.data.NC1)
+    nw = Val(C.val.nw)
+    idxr = C.val.indexer
+    Nsites = prod(C.val.PN)
+
+    if dAval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulBdag_Cdagadd_eta2!,
+            dAval, Bval, dCval,
+            NC1, NC2, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if dBval !== nothing
+        JACC.parallel_for(
+            Nsites,
+            kernel_Dmatrix_mulCdag_Adagadd_eta2!,
+            dBval, Aval, dCval,
+            NC2, NC1, NC3, nw, idxr, μA, μB
+        )
+    end
+
+    if tapeA !== nothing
+        unused!(A.val.data.data.temps, tapeA[2])
+    end
+    if tapeB !== nothing
+        unused!(B.val.data.data.temps, tapeB[2])
+    end
+
+    _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
 end
 
@@ -2218,6 +3497,7 @@ _getshadow_data(x) = nothing
 _getshadow_data(x::Base.RefValue) = _getshadow_data(x[])
 _getshadow_data(x::LatticeMatrix) = x
 _getshadow_data(x::Shifted_Lattice) = x.data
+_getshadow_data(x::Staggered_Lattice) = x.data
 _getshadow_data(x::Adjoint_Lattice) = _getshadow_data(x.data)
 
 @inline function _getshadow_out(dCout, C::Annotation{<:LatticeMatrix})
@@ -2487,6 +3767,32 @@ end
     end
 end
 
+@inline function kernel_Dmatrix_mulABdagadd_eta!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μ}) where {NC1,NC2,NC3,nw,μ}
+    indices = delinearize(dindexer, i, nw)
+    η = staggered_eta_halo(indices, μ, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = η * conj(B[jc, kc, indices...])
+            for ic = 1:NC1
+                C[ic, jc, indices...] += A[ic, kc, indices...] * b
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulABdagadd_eta2!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC1,NC2,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = η * conj(B[jc, kc, indices...])
+            for ic = 1:NC1
+                C[ic, jc, indices...] += A[ic, kc, indices...] * b
+            end
+        end
+    end
+end
+
 @inline function kernel_Dmatrix_mulACadd_matrix!(i, dA, dC, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer) where {NC1,NC2,NC3,nw}
     indices = delinearize(dindexer, i, nw)
     @inbounds for jc = 1:NC2
@@ -2553,6 +3859,115 @@ end
             for ic = 1:NC1
                 C[ic, jc, indices...] += conj(A[kc, ic, indices...]) * b# B[kc, jc, indices...]
             end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulAdagBadd_eta!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μ}) where {NC1,NC2,NC3,nw,μ}
+    indices = delinearize(dindexer, i, nw)
+    η = staggered_eta_halo(indices, μ, nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = η * B[kc, jc, indices...]
+            for ic = 1:NC1
+                C[ic, jc, indices...] += conj(A[kc, ic, indices...]) * b
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulAdagBadd_eta2!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC1,NC2,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            b = η * B[kc, jc, indices...]
+            for ic = 1:NC1
+                C[ic, jc, indices...] += conj(A[kc, ic, indices...]) * b
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulACadd_eta2!(i, dA, dC, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC1,NC2,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for kc = 1:NC3
+        for jc = 1:NC2
+            b = η * B[jc, kc, indices...]
+            for ic = 1:NC1
+                dA[ic, kc, indices...] += dC[ic, jc, indices...] * b
+            end
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulCdagAadd_eta2!(i, dB, dC, A, ::Val{NC2}, ::Val{NC1}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC2,NC1,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(dC[ic, jc, indices...]) * A[ic, kc, indices...]
+            end
+            dB[jc, kc, indices...] += η * acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulB_Cdagadd_eta2!(i, dA, B, dC, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC1,NC2,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for ic = 1:NC1
+        for kc = 1:NC3
+            acc = zero(eltype(dA))
+            for jc = 1:NC2
+                acc += B[kc, jc, indices...] * conj(dC[ic, jc, indices...])
+            end
+            dA[kc, ic, indices...] += η * acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulA_Cadd_eta2!(i, dB, A, dC, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC1,NC2,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += A[kc, ic, indices...] * dC[ic, jc, indices...]
+            end
+            dB[kc, jc, indices...] += η * acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulBdag_Cdagadd_eta2!(i, dA, B, dC, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC1,NC2,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for ic = 1:NC1
+        for kc = 1:NC3
+            acc = zero(eltype(dA))
+            for jc = 1:NC2
+                acc += conj(B[jc, kc, indices...]) * conj(dC[ic, jc, indices...])
+            end
+            dA[kc, ic, indices...] += η * acc
+        end
+    end
+end
+
+@inline function kernel_Dmatrix_mulCdag_Adagadd_eta2!(i, dB, A, dC, ::Val{NC2}, ::Val{NC1}, ::Val{NC3}, ::Val{nw}, dindexer, ::Val{μA}, ::Val{μB}) where {NC2,NC1,NC3,nw,μA,μB}
+    indices = delinearize(dindexer, i, nw)
+    η = _staggered_eta_halo0(indices, Val(μA), nw) * _staggered_eta_halo0(indices, Val(μB), nw)
+    @inbounds for jc = 1:NC2
+        for kc = 1:NC3
+            acc = zero(eltype(dB))
+            for ic = 1:NC1
+                acc += conj(dC[ic, jc, indices...]) * conj(A[kc, ic, indices...])
+            end
+            dB[jc, kc, indices...] += η * acc
         end
     end
 end

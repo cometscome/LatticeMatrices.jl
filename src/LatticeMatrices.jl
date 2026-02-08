@@ -62,6 +62,8 @@ include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 #include("AD/AD.jl")
 include("ND.jl")
+include("LinearAlgebras/staggered.jl")
+
 
 function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     return x.shift

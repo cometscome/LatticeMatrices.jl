@@ -8,6 +8,54 @@ using MPI
 
 const ER = Enzyme.EnzymeRules
 
+const _LM_AD_TRACE = get(ENV, "LM_AD_TRACE", "0") == "1"
+@inline _adtrace(msg) = (_LM_AD_TRACE ? println("[LM-AD] " * msg) : nothing)
+const _LM_TRAP_MUL_REVERSE_FALLBACK = get(ENV, "LM_TRAP_MUL_REVERSE_FALLBACK", "0") == "1"
+const _LM_AD_SYNC_DEBUG = get(ENV, "LM_AD_SYNC_DEBUG", "0") == "1"
+const _LM_AD_FOLD_SCATTER = get(ENV, "LM_AD_FOLD_SCATTER", "1") == "1"
+
+@inline function _lm_ad_maybe_sync()
+    _LM_AD_SYNC_DEBUG || return nothing
+    try
+        @eval import CUDA
+        CUDA.synchronize()
+    catch
+    end
+    return nothing
+end
+
+@inline function _lm_ad_maybe_fold_shift_scatter!(dX_struct, shift)
+    _LM_AD_FOLD_SCATTER || return nothing
+    dX_struct isa LatticeMatrix || return nothing
+    for d in 1:length(dX_struct.PN)
+        if shift[d] != 0
+            fold_halo_dim_to_core_grad!(dX_struct, d)
+        end
+    end
+    return nothing
+end
+
+const _LM_TRAP_JACC_AD = get(ENV, "LM_TRAP_JACC_AD", "0") == "1"
+@static if _LM_TRAP_JACC_AD
+    function ER.augmented_primal(
+        cfg::ER.RevConfig,
+        ::ER.Const{typeof(JACC.parallel_for)},
+        ::Type{RT},
+        args...,
+    ) where {RT}
+        error("Enzyme leaked into JACC.parallel_for (augmented_primal). argtypes=$(map(typeof, args))")
+    end
+
+    function ER.reverse(
+        cfg::ER.RevConfig,
+        ::ER.Const{typeof(JACC.parallel_for)},
+        ::Type{RT},
+        args...,
+    ) where {RT}
+        error("Enzyme leaked into JACC.parallel_for (reverse). argtypes=$(map(typeof, args))")
+    end
+end
+
 @inline function _staggered_eta_halo0(indices, ::Val{μ}, nw) where {μ}
     μ == 0 && return 1
     return staggered_eta_halo(indices, μ, nw)
@@ -51,6 +99,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     B::ER.Annotation{<:LatticeMatrix},
     shift::RT2,
 ) where {RT,RT2}
+    _adtrace("augmented_primal: mul_AshiftB!(C,A,B,shift)")
     #println("mul_AshiftB!: augmented_primal")
     # Forward: C = A * shift(B)
     mul_AshiftB!(C.val, A.val, B.val, shift.val)
@@ -73,7 +122,9 @@ function ER.augmented_primal(cfg::ER.RevConfig,
         println("mul_AshiftB! augmented_primal: itA=$(tapeA[2]) itB=$(tapeB[2]) A_id=$(objectid(tapeA_obj)) B_id=$(objectid(tapeB_obj)) shift.val=$(tape_shift)")
     end
 
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, tape_shift))
+    tape = (tapeA, tapeB, tape_shift)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
 end
 
 
@@ -133,6 +184,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     α::S1,
     β::S2,
 ) where {RT,S1,S2}
+    _adtrace("augmented_primal: mul_AshiftB!(C,A,B,shift,alpha,beta)")
     RealRt = eltype(RT)
     shiftval = hasproperty(shift, :val) ? shift.val : shift
     αval = hasproperty(α, :val) ? α.val : α
@@ -208,6 +260,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, sh, fac
         )
+        _lm_ad_maybe_fold_shift_scatter!(s, sh)
     end
 
     if tapeA !== nothing
@@ -278,6 +331,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, sh, fac
         )
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     if tapeA !== nothing
@@ -374,6 +428,8 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, sh, fac
         )
+        _lm_ad_maybe_sync()
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     if tapeA !== nothing
@@ -453,6 +509,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dAval, dCval, Bval,
             NC1, NC2, NC3, nw, idxr, sh
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval !== nothing
@@ -462,6 +519,8 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, sh
         )
+        _lm_ad_maybe_sync()
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
     if get(ENV, "LM_DEBUG_SHIFT_MUL", "") == "1"
         println("mul! reverse (Shifted_Lattice): dB max(after)=", dBval === nothing ? "none" : maximum(abs, dBval))
@@ -748,6 +807,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr, sh
         )
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     if tapeA !== nothing
@@ -845,6 +905,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr, sh, fac
         )
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     if tapeA !== nothing
@@ -865,6 +926,7 @@ function _rev_mul_AshiftB!(
     C, A, B, shift;
     do_dB::Bool,
 )
+    _adtrace("reverse-core: mul_AshiftB! do_dB=$(do_dB)")
 
     if get(ENV, "LM_DEBUG_MULASHIFTB", "") == "1"
         println("mul_AshiftB! reverse: A=$(typeof(A)) B=$(typeof(B)) do_dB=$(do_dB)")
@@ -932,6 +994,8 @@ function _rev_mul_AshiftB!(
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, sh
         )
+        _lm_ad_maybe_sync()
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     # Release tape blocks（早期 return があっても必ずやりたいなら try/finally 化推奨）
@@ -961,6 +1025,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     shiftA::RT2,
     shiftB::RT3,
 ) where {RT,RT2,RT3}
+    _adtrace("augmented_primal: mul_shiftAshiftB!(C,A,B,shiftA,shiftB)")
     shiftA_val = hasproperty(shiftA, :val) ? shiftA.val : shiftA
     shiftB_val = hasproperty(shiftB, :val) ? shiftB.val : shiftB
     mul_shiftAshiftB!(C.val, A.val, B.val, shiftA_val, shiftB_val)
@@ -973,7 +1038,9 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     tapeB_obj .= B.val.A
     tapeB = (tapeB_obj, itB)
 
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, shiftA_val, shiftB_val))
+    tape = (tapeA, tapeB, shiftA_val, shiftB_val)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
 end
 
 function ER.augmented_primal(cfg::ER.RevConfig,
@@ -985,6 +1052,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     shiftA::RT2,
     shiftB::RT3,
 ) where {RT,RT2,RT3}
+    _adtrace("augmented_primal: mul_shiftAshiftB!(C,Adjoint(A),B,shiftA,shiftB)")
     shiftA_val = hasproperty(shiftA, :val) ? shiftA.val : shiftA
     shiftB_val = hasproperty(shiftB, :val) ? shiftB.val : shiftB
     mul_shiftAshiftB!(C.val, A.val, B.val, shiftA_val, shiftB_val)
@@ -997,7 +1065,9 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     tapeB_obj .= B.val.A
     tapeB = (tapeB_obj, itB)
 
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB, shiftA_val, shiftB_val))
+    tape = (tapeA, tapeB, shiftA_val, shiftB_val)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
@@ -1070,6 +1140,7 @@ function _rev_mul_shiftAshiftB!(
     C, A, B, shiftA, shiftB;
     do_dB::Bool,
 )
+    _adtrace("reverse-core: mul_shiftAshiftB! do_dB=$(do_dB)")
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing, nothing, nothing)
@@ -1101,6 +1172,7 @@ function _rev_mul_shiftAshiftB!(
             dAval, dCval, Bval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval !== nothing
@@ -1110,6 +1182,8 @@ function _rev_mul_shiftAshiftB!(
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
+        _lm_ad_maybe_sync()
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, shB)
     end
 
     if tapeA !== nothing
@@ -1131,6 +1205,7 @@ function _rev_mul_shiftAdagshiftB!(
     C, A, B, shiftA, shiftB;
     do_dB::Bool,
 )
+    _adtrace("reverse-core: mul_shiftAdagshiftB! do_dB=$(do_dB)")
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing, nothing, nothing)
@@ -1162,6 +1237,7 @@ function _rev_mul_shiftAdagshiftB!(
             dAval, dCval, Bval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval !== nothing
@@ -1171,6 +1247,8 @@ function _rev_mul_shiftAdagshiftB!(
             dBval, Aval, dCval,
             NC1, NC2, NC3, nw, idxr, shA, shB
         )
+        _lm_ad_maybe_sync()
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, shB)
     end
 
     if tapeA !== nothing
@@ -1194,6 +1272,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     B::ER.Annotation{<:LatticeMatrix},
 ) where {RT}
+    _adtrace("augmented_primal: mul_ABdag!(C,A,B)")
     mul_ABdag!(C.val, A.val, B.val)
 
     tapeA_obj, itA = get_block(A.val.temps)
@@ -1204,7 +1283,9 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     tapeB_obj .= B.val.A
     tapeB = (tapeB_obj, itB)
 
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+    tape = (tapeA, tapeB)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
@@ -1244,6 +1325,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     α::S1,
     β::S2,
 ) where {RT,S1,S2}
+    _adtrace("augmented_primal: mul_ABdag!(C,A,B,alpha,beta)")
     αval = hasproperty(α, :val) ? α.val : α
     βval = hasproperty(β, :val) ? β.val : β
     primal_ret = mul_ABdag!(C.val, A.val, B.val, αval, βval)
@@ -1401,6 +1483,7 @@ function _rev_mul_ABdag!(
     C, A, B;
     do_dB::Bool,
 )
+    _adtrace("reverse-core: mul_ABdag! do_dB=$(do_dB)")
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
@@ -1430,6 +1513,7 @@ function _rev_mul_ABdag!(
             dAval, dCval, Bval,
             NC1, NC2, NC3, nw, idxr
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval !== nothing
@@ -1439,6 +1523,7 @@ function _rev_mul_ABdag!(
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr
         )
+        _lm_ad_maybe_sync()
     end
 
     if tapeA !== nothing
@@ -1461,6 +1546,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     B::ER.Annotation{<:LatticeMatrix},
     shift::RT2,
 ) where {RT,RT2}
+    _adtrace("augmented_primal: mul_A_shiftBdag!(C,A,B,shift)")
     mul_A_shiftBdag!(C.val, A.val, B.val, shift.val)
 
     tapeA_obj, itA = get_block(A.val.temps)
@@ -1515,6 +1601,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     α::S1,
     β::S2,
 ) where {RT,S1,S2}
+    _adtrace("augmented_primal: mul_A_shiftBdag!(C,A,B,shift,alpha,beta)")
     RealRt = eltype(RT)
     shiftval = hasproperty(shift, :val) ? shift.val : shift
     αval = hasproperty(α, :val) ? α.val : α
@@ -1589,6 +1676,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr, sh, fac
         )
+        _lm_ad_maybe_fold_shift_scatter!(s, sh)
     end
 
     if tapeA !== nothing
@@ -1659,6 +1747,7 @@ function ER.reverse(cfg::ER.RevConfig,
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr, sh, fac
         )
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     if tapeA !== nothing
@@ -1678,6 +1767,7 @@ function _rev_mul_A_shiftBdag!(
     C, A, B, shift;
     do_dB::Bool,
 )
+    _adtrace("reverse-core: mul_A_shiftBdag! do_dB=$(do_dB)")
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing, nothing)
@@ -1708,6 +1798,7 @@ function _rev_mul_A_shiftBdag!(
             dAval, dCval, Bval,
             NC1, NC2, NC3, nw, idxr, sh
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval !== nothing
@@ -1717,6 +1808,8 @@ function _rev_mul_A_shiftBdag!(
             dBval, dCval, Aval,
             NC2, NC1, NC3, nw, idxr, sh
         )
+        _lm_ad_maybe_sync()
+        _lm_ad_maybe_fold_shift_scatter!(dB_struct, sh)
     end
 
     if tapeA !== nothing
@@ -3257,6 +3350,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     A::ER.Annotation{T},
     B::ER.Annotation{T},
 ) where {T<:LatticeMatrix,RT}
+    _adtrace("augmented_primal: mul!(C,A,B) [LatticeMatrix]")
 
     # Perform the forward (primal) computation
     mul!(C.val, A.val, B.val)
@@ -3279,7 +3373,9 @@ function ER.augmented_primal(cfg::ER.RevConfig,
 
     # mul! returns nothing → primal must be nothing
     # No shadow needed; gradients flow via C.dval
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+    tape = (tapeA, tapeB)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
 end
 
 function ER.augmented_primal(cfg::ER.RevConfig,
@@ -3289,6 +3385,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     A::ER.Annotation{<:AbstractMatrix},
     B::ER.Annotation{<:LatticeMatrix},
 ) where {RT}
+    _adtrace("augmented_primal: mul!(C,AbstractMatrix,A/B lattice)")
 
     mul!(C.val, A.val, B.val)
 
@@ -3297,7 +3394,9 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     tapeB_obj .= B.val.A
     tapeB = (tapeB_obj, it_tapeB)
 
-    return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
+    tape = (tapeA, tapeB)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
 end
 
 function ER.augmented_primal(cfg::ER.RevConfig,
@@ -3307,6 +3406,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     B::ER.Annotation{<:AbstractMatrix},
 ) where {RT}
+    _adtrace("augmented_primal: mul!(C,LatticeMatrix,AbstractMatrix)")
 
     mul!(C.val, A.val, B.val)
 
@@ -3319,6 +3419,34 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeB))
 end
 
+function ER.augmented_primal(cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul!)},
+    ::Type{RT},
+    C::ER.Annotation{<:LatticeMatrix},
+    A::ER.Annotation{<:LatticeMatrix},
+    B::ER.Annotation{<:LatticeMatrix},
+    α::S1,
+    β::S2,
+) where {RT,S1,S2}
+    _adtrace("augmented_primal: mul!(C,A,B,alpha,beta) [LatticeMatrix]")
+
+    αval = hasproperty(α, :val) ? α.val : α
+    βval = hasproperty(β, :val) ? β.val : β
+    mul!(C.val, A.val, B.val, αval, βval)
+
+    tapeA_obj, it_tapeA = get_block(A.val.temps)
+    tapeA_obj .= A.val.A
+    tapeA = (tapeA_obj, it_tapeA)
+
+    tapeB_obj, it_tapeB = get_block(B.val.temps)
+    tapeB_obj .= B.val.A
+    tapeB = (tapeB_obj, it_tapeB)
+
+    tape = (tapeA, tapeB, αval)
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(nothing, nothing, tape)
+end
+
 
 # Reverse rule for mul!(C, A, B) with LatticeMatrix inputs.
 function Enzyme.EnzymeRules.reverse(::RevConfig,
@@ -3327,6 +3455,7 @@ function Enzyme.EnzymeRules.reverse(::RevConfig,
     C::Annotation{<:LatticeMatrix},
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:LatticeMatrix})
+    _adtrace("reverse: mul!(C,A,B) [LatticeMatrix]")
 
     #println("mul!: reverse")
 
@@ -3397,6 +3526,7 @@ function ER.reverse(cfg::ER.RevConfig,
     α::S1,
     β::S2,
 ) where {S1,S2}
+    _adtrace("reverse: mul!(C,A,B,alpha,beta) [LatticeMatrix]")
     dα = _zero_cotangent(α)
     dβ = _zero_cotangent(β)
 
@@ -3427,6 +3557,7 @@ function ER.reverse(cfg::ER.RevConfig,
             Nsites, kernel_Dmatrix_mulABdagadd_scaled!,
             dAval, dCval, Bval, NC1, NC2, NC3, nw, idxr, fac
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval isa AbstractArray
@@ -3434,6 +3565,7 @@ function ER.reverse(cfg::ER.RevConfig,
             Nsites, kernel_Dmatrix_mulAdagBadd_scaled!,
             dBval, Aval, dCval, NC1, NC2, NC3, nw, idxr, fac
         )
+        _lm_ad_maybe_sync()
     end
     if tapeA !== nothing
         unused!(A.val.temps, tapeA[2])
@@ -3453,6 +3585,7 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
     A::Annotation{<:AbstractMatrix},
     B::Annotation{<:LatticeMatrix},
 )
+    _adtrace("reverse: mul!(C,AbstractMatrix,LatticeMatrix)")
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
@@ -3484,6 +3617,7 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
         JACC.parallel_for(
             Nsites, kernel_Dmatrix_mulAdagBadd_matrix!, dBval, At, dCval, NC1, NC2, NC3, nw, idxr
         )
+        _lm_ad_maybe_sync()
     end
 
     if dAval isa AbstractMatrix && (Bval isa AbstractArray)
@@ -3505,6 +3639,7 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
     A::Annotation{<:LatticeMatrix},
     B::Annotation{<:AbstractMatrix},
 )
+    _adtrace("reverse: mul!(C,LatticeMatrix,AbstractMatrix)")
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
@@ -3536,6 +3671,7 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
         JACC.parallel_for(
             Nsites, kernel_Dmatrix_mulACadd_matrix!, dAval, dCval, Bt, NC1, NC2, NC3, nw, idxr
         )
+        _lm_ad_maybe_sync()
     end
 
     if dBval isa AbstractMatrix && (Aval isa AbstractArray)
@@ -3548,6 +3684,21 @@ function Enzyme.EnzymeRules.reverse(cfg::RevConfig,
 
     _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, nothing)
+end
+
+function Enzyme.EnzymeRules.reverse(
+    cfg::RevConfig,
+    ::Const{typeof(LinearAlgebra.mul!)},
+    dCout, _tape,
+    C::Annotation{<:LatticeMatrix},
+    A,
+    B,
+)
+    _adtrace("reverse: mul! FALLBACK A=$(typeof(A)) B=$(typeof(B))")
+    if _LM_TRAP_MUL_REVERSE_FALLBACK
+        error("LatticeMatrices AD fallback reached for LinearAlgebra.mul! reverse: A=$(typeof(A)) B=$(typeof(B))")
+    end
+    return nothing, nothing, nothing
 end
 
 

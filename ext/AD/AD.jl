@@ -2311,6 +2311,7 @@ end
 
 const _expt_ta_eps_q = 1e-18
 const fac13 = 1 / 3
+#const _LM_DISABLE_EXPT_REVERSE = get(ENV, "LM_DISABLE_EXPT_REVERSE", "0") == "1"
 
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(expt!)},
@@ -2333,6 +2334,7 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     return ER.AugmentedReturn(nothing, nothing, (tapeA, tapeC))
 end
 
+#=
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(expt!)},
     dCout, tape,
@@ -2340,6 +2342,8 @@ function ER.reverse(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     t::S,
 ) where {S}
+
+
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
     dC_struct === nothing && return (nothing, nothing, nothing)
@@ -2399,6 +2403,7 @@ function ER.reverse(cfg::ER.RevConfig,
     _should_zero_dC(dCout) && _zero_shadow!(dC_struct)
     return (nothing, nothing, dt)
 end
+=#
 
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(expt_TA!)},

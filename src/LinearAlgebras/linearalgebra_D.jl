@@ -164,9 +164,36 @@ function expt_TA!(C::TC, A::TA, t::S=one(S)) where {
 end
 export expt_TA!
 
+@inline function _writeback_expt3x3_pade!(
+    C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
+)
+    c11, c12, c13, c21, c22, c23, c31, c32, c33 =
+        exp3x3_pade(a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+    C[1, 1, indices...] = c11
+    C[1, 2, indices...] = c12
+    C[1, 3, indices...] = c13
+    C[2, 1, indices...] = c21
+    C[2, 2, indices...] = c22
+    C[2, 3, indices...] = c23
+    C[3, 1, indices...] = c31
+    C[3, 2, indices...] = c32
+    C[3, 3, indices...] = c33
+    return
+end
+
 
 @inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{3}) where nw
     indices = delinearize(dindexer, i, nw)
+
+    a11 = C[1, 1, indices...]
+    a12 = C[1, 2, indices...]
+    a13 = C[1, 3, indices...]
+    a21 = C[2, 1, indices...]
+    a22 = C[2, 2, indices...]
+    a23 = C[2, 3, indices...]
+    a31 = C[3, 1, indices...]
+    a32 = C[3, 2, indices...]
+    a33 = C[3, 3, indices...]
 
     v11 = C[1, 1, indices...]
     v22 = C[2, 2, indices...]
@@ -279,9 +306,22 @@ export expt_TA!
         (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * 2.0
     p3 = cofac / 3.0 - trv3^2
     q = trv3 * cofac - det - 2.0 * trv3^3
+    if !(isfinite(p3) && isfinite(q)) || p3 >= -tinyvalue
+        _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+        return
+    end
     x = sqrt(-4.0 * p3) + tinyvalue
-    arg = q / (x * p3)
+    denom = x * p3
+    if !isfinite(denom) || abs(denom) <= tinyvalue
+        _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+        return
+    end
+    arg = q / denom
 
+    if !isfinite(arg)
+        _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+        return
+    end
     arg = min(1, max(-1, arg))
     theta = acos(arg) / 3.0
     e1 = x * cos(theta) + trv3
@@ -300,7 +340,12 @@ export expt_TA!
     w5 = -(v1 - e1) * (v9 - e1) + v3^2 + v4^2
     w6 = 0.0
 
-    coeff = 1.0 / sqrt(w1^2 + w2^2 + w3^2 + w4^2 + w5^2)
+    n1 = w1^2 + w2^2 + w3^2 + w4^2 + w5^2
+    if !(isfinite(n1) && n1 > tinyvalue)
+        _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+        return
+    end
+    coeff = 1.0 / sqrt(n1)
 
 
     w1 = w1 * coeff
@@ -316,7 +361,12 @@ export expt_TA!
     w11 = -(v1 - e2) * (v9 - e2) + v3^2 + v4^2
     w12 = 0.0
 
-    coeff = 1.0 / sqrt(w7^2 + w8^2 + w9^2 + w10^2 + w11^2)
+    n2 = w7^2 + w8^2 + w9^2 + w10^2 + w11^2
+    if !(isfinite(n2) && n2 > tinyvalue)
+        _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+        return
+    end
+    coeff = 1.0 / sqrt(n2)
 
     w7 = w7 * coeff
     w8 = w8 * coeff
@@ -331,7 +381,12 @@ export expt_TA!
     w17 = -(v1 - e3) * (v9 - e3) + v3^2 + v4^2
     w18 = 0.0
 
-    coeff = 1.0 / sqrt(w13^2 + w14^2 + w15^2 + w16^2 + w17^2)
+    n3 = w13^2 + w14^2 + w15^2 + w16^2 + w17^2
+    if !(isfinite(n3) && n3 > tinyvalue)
+        _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
+        return
+    end
+    coeff = 1.0 / sqrt(n3)
     w13 = w13 * coeff
     w14 = w14 * coeff
     w15 = w15 * coeff

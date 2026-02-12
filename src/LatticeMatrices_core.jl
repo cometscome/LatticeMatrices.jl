@@ -252,6 +252,13 @@ end
 
 
 Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
+    # Single-process lattices do not need MPI communication. Keep halo updates local.
+    if MPI.Comm_size(ls.cart) == 1
+        for id = 1:D
+            exchange_dim_local!(ls, id)
+        end
+        return
+    end
     for id = 1:D
         exchange_dim!(ls, id)
     end
@@ -284,6 +291,19 @@ function _faceMatrix(A, nw, d, side::Symbol)
     @views return A[idx...]            # a view, no copy
 end
 
+# 4D-specialized slab view builders to avoid per-call ntuple construction.
+function _faceMatrix(A::AbstractArray{T,6}, nw, d, side::Symbol) where T
+    @views if d == 1
+        return side === :minus ? A[:, :, (nw+1):(2*nw), :, :, :] : A[:, :, (end-2*nw+1):(end-nw), :, :, :]
+    elseif d == 2
+        return side === :minus ? A[:, :, :, (nw+1):(2*nw), :, :] : A[:, :, :, (end-2*nw+1):(end-nw), :, :]
+    elseif d == 3
+        return side === :minus ? A[:, :, :, :, (nw+1):(2*nw), :] : A[:, :, :, :, (end-2*nw+1):(end-nw), :]
+    else
+        return side === :minus ? A[:, :, :, :, :, (nw+1):(2*nw)] : A[:, :, :, :, :, (end-2*nw+1):(end-nw)]
+    end
+end
+
 """
     _ghostMatrix(A, nw, d, side)
 
@@ -300,6 +320,36 @@ function _ghostMatrix(A, nw, d, side::Symbol)
 
     idx = ntuple(i -> i == d + 2 ? ghost_rng : Colon(), ndims(A))
     @views return A[idx...]
+end
+
+function _ghostMatrix(A::AbstractArray{T,6}, nw, d, side::Symbol) where T
+    @views if d == 1
+        return side === :minus ? A[:, :, 1:nw, :, :, :] : A[:, :, (end-nw+1):end, :, :, :]
+    elseif d == 2
+        return side === :minus ? A[:, :, :, 1:nw, :, :] : A[:, :, :, (end-nw+1):end, :, :]
+    elseif d == 3
+        return side === :minus ? A[:, :, :, :, 1:nw, :] : A[:, :, :, :, (end-nw+1):end, :]
+    else
+        return side === :minus ? A[:, :, :, :, :, 1:nw] : A[:, :, :, :, :, (end-nw+1):end]
+    end
+end
+
+function exchange_dim_local!(ls::LatticeMatrix{D}, d::Int) where D
+    gminus = _ghostMatrix(ls.A, ls.nw, d, :minus)
+    gplus = _ghostMatrix(ls.A, ls.nw, d, :plus)
+    fminus = _faceMatrix(ls.A, ls.nw, d, :minus)
+    fplus = _faceMatrix(ls.A, ls.nw, d, :plus)
+
+    # minus ghost <= plus face
+    copy!(gminus, fplus)
+    _mul_phase!(gminus, ls.phases[d])
+
+    # plus ghost <= minus face
+    copy!(gplus, fminus)
+    _mul_phase!(gplus, ls.phases[d])
+
+    compute_interior!(ls)
+    return
 end
 
 
@@ -324,39 +374,32 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
     rankM, rankP = ls.nbr[d]                     # neighbour ranks
     me = ls.myrank
-    reqs = MPI.Request[]
 
     # --- self-neighbor on BOTH sides (happens iff dims[d] == 1) -------------
     if rankM == me && rankP == me
-        # minus ghost <= plus face
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :minus),
-            _faceMatrix(ls.A, ls.nw, d, :plus))
-        _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :minus), ls.phases[d])
-
-        # plus  ghost <= minus face
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :plus),
-            _faceMatrix(ls.A, ls.nw, d, :minus))
-        _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :plus), ls.phases[d])
-
-        # no MPI in the self-case; just compute the interior and return
-        compute_interior!(ls)
+        exchange_dim_local!(ls, d)
         return
     end
 
+    reqs = MPI.Request[]
 
     baseT = MPI.Datatype(eltype(ls.A))           # elementary datatype
     #println("M ", rankM, "\t $me")
     MPI.Barrier(ls.cart)
     #println("P ", rankP, "\t $me")
+    gminus = _ghostMatrix(ls.A, ls.nw, d, :minus)
+    gplus = _ghostMatrix(ls.A, ls.nw, d, :plus)
+    fminus = _faceMatrix(ls.A, ls.nw, d, :minus)
+    fplus = _faceMatrix(ls.A, ls.nw, d, :plus)
+
     # ---------------- minus direction -------------------
     if rankM == me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :minus),
-            _faceMatrix(ls.A, ls.nw, d, :minus))
+        copy!(gminus, fminus)
         if ls.coords[d] == 0                     # wrap ⇒ phase
-            _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :minus), ls.phases[d])
+            _mul_phase!(gminus, ls.phases[d])
         end
     else
-        copy!(bufSM, _faceMatrix(ls.A, ls.nw, d, :minus))
+        copy!(bufSM, fminus)
         if ls.coords[d] == 0
             _mul_phase!(bufSM, ls.phases[d])
         end
@@ -372,13 +415,12 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
     # ---------------- plus direction --------------------
     if rankP == me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :plus),
-            _faceMatrix(ls.A, ls.nw, d, :plus))
+        copy!(gplus, fplus)
         if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(_ghostMatrix(ls.A, ls.nw, d, :plus), ls.phases[d])
+            _mul_phase!(gplus, ls.phases[d])
         end
     else
-        copy!(bufSP, _faceMatrix(ls.A, ls.nw, d, :plus))
+        copy!(bufSP, fplus)
         if ls.coords[d] == ls.dims[d] - 1
             _mul_phase!(bufSP, ls.phases[d])
         end
@@ -397,10 +439,10 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
     # -------- copy received data into ghosts -----------
     if rankM != me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :minus), bufRM)
+        copy!(gminus, bufRM)
     end
     if rankP != me
-        copy!(_ghostMatrix(ls.A, ls.nw, d, :plus), bufRP)
+        copy!(gplus, bufRP)
     end
 end
 
@@ -547,7 +589,7 @@ function gather_and_bcast_matrix(ls::TL;
 end
 export gather_and_bcast_matrix
 
-@inline _mul_phase!(buf, ϕ) =
-    JACC.parallel_for(length(buf)) do i
-        buf[i] *= ϕ
-    end
+@inline function _mul_phase!(buf, ϕ)
+    buf .*= ϕ
+    return
+end

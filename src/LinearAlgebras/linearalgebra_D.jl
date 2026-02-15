@@ -181,6 +181,65 @@ export expt_TA!
     return
 end
 
+@inline function _writeback_expt3x3_taylor4!(
+    C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
+)
+    m11 = t * a11
+    m12 = t * a12
+    m13 = t * a13
+    m21 = t * a21
+    m22 = t * a22
+    m23 = t * a23
+    m31 = t * a31
+    m32 = t * a32
+    m33 = t * a33
+
+    m211 = m11 * m11 + m12 * m21 + m13 * m31
+    m212 = m11 * m12 + m12 * m22 + m13 * m32
+    m213 = m11 * m13 + m12 * m23 + m13 * m33
+    m221 = m21 * m11 + m22 * m21 + m23 * m31
+    m222 = m21 * m12 + m22 * m22 + m23 * m32
+    m223 = m21 * m13 + m22 * m23 + m23 * m33
+    m231 = m31 * m11 + m32 * m21 + m33 * m31
+    m232 = m31 * m12 + m32 * m22 + m33 * m32
+    m233 = m31 * m13 + m32 * m23 + m33 * m33
+
+    m311 = m211 * m11 + m212 * m21 + m213 * m31
+    m312 = m211 * m12 + m212 * m22 + m213 * m32
+    m313 = m211 * m13 + m212 * m23 + m213 * m33
+    m321 = m221 * m11 + m222 * m21 + m223 * m31
+    m322 = m221 * m12 + m222 * m22 + m223 * m32
+    m323 = m221 * m13 + m222 * m23 + m223 * m33
+    m331 = m231 * m11 + m232 * m21 + m233 * m31
+    m332 = m231 * m12 + m232 * m22 + m233 * m32
+    m333 = m231 * m13 + m232 * m23 + m233 * m33
+
+    m411 = m311 * m11 + m312 * m21 + m313 * m31
+    m412 = m311 * m12 + m312 * m22 + m313 * m32
+    m413 = m311 * m13 + m312 * m23 + m313 * m33
+    m421 = m321 * m11 + m322 * m21 + m323 * m31
+    m422 = m321 * m12 + m322 * m22 + m323 * m32
+    m423 = m321 * m13 + m322 * m23 + m323 * m33
+    m431 = m331 * m11 + m332 * m21 + m333 * m31
+    m432 = m331 * m12 + m332 * m22 + m333 * m32
+    m433 = m331 * m13 + m332 * m23 + m333 * m33
+
+    c2 = 0.5
+    c3 = 1.0 / 6.0
+    c4 = 1.0 / 24.0
+
+    C[1, 1, indices...] = one(eltype(C)) + m11 + c2 * m211 + c3 * m311 + c4 * m411
+    C[1, 2, indices...] = m12 + c2 * m212 + c3 * m312 + c4 * m412
+    C[1, 3, indices...] = m13 + c2 * m213 + c3 * m313 + c4 * m413
+    C[2, 1, indices...] = m21 + c2 * m221 + c3 * m321 + c4 * m421
+    C[2, 2, indices...] = one(eltype(C)) + m22 + c2 * m222 + c3 * m322 + c4 * m422
+    C[2, 3, indices...] = m23 + c2 * m223 + c3 * m323 + c4 * m423
+    C[3, 1, indices...] = m31 + c2 * m231 + c3 * m331 + c4 * m431
+    C[3, 2, indices...] = m32 + c2 * m232 + c3 * m332 + c4 * m432
+    C[3, 3, indices...] = one(eltype(C)) + m33 + c2 * m233 + c3 * m333 + c4 * m433
+    return
+end
+
 
 @inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{3}) where nw
     indices = delinearize(dindexer, i, nw)
@@ -226,6 +285,24 @@ end
     y23 = 0.5 * x23
     y31 = 0.5 * x31
     y32 = 0.5 * x32
+
+    # Small-Q branch (cold-start friendly): avoid fragile eigenvalue path.
+    qnorm =
+        abs(t) * sqrt(real(
+            y11 * conj(y11) + y12 * conj(y12) + y13 * conj(y13) +
+            y21 * conj(y21) + y22 * conj(y22) + y23 * conj(y23) +
+            y31 * conj(y31) + y32 * conj(y32) + y33 * conj(y33)
+        ))
+    if qnorm <= 1e-6
+        _writeback_expt3x3_taylor4!(
+            C, indices,
+            y11, y12, y13,
+            y21, y22, y23,
+            y31, y32, y33,
+            t
+        )
+        return
+    end
 
     c1_0 = (imag(y12) + imag(y21))
     c2_0 = (real(y12) - real(y21))
@@ -972,7 +1049,7 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
         C[3, 1, indices...] = c.a31
         C[3, 2, indices...] = c.a32
         C[3, 3, indices...] = c.a33
-
+        return
     end
 
 

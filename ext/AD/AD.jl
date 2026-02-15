@@ -2313,6 +2313,123 @@ const _expt_ta_eps_q = 1e-18
 const fac13 = 1 / 3
 #const _LM_DISABLE_EXPT_REVERSE = get(ENV, "LM_DISABLE_EXPT_REVERSE", "0") == "1"
 
+function _expt_ta_su3_reverse_diag_stats(Aval, dindexer, nsites::Int, nw, t)
+    min_c1 = Inf
+    max_c1 = -Inf
+    min_abs_denom = Inf
+    max_abs_arg_raw = 0.0
+    clamp_count = 0
+    small_c1_count = 0
+
+    @inbounds for i = 1:nsites
+        indices = delinearize(dindexer, i, nw)
+
+        a11 = Aval[1, 1, indices...]
+        a21 = Aval[2, 1, indices...]
+        a31 = Aval[3, 1, indices...]
+        a12 = Aval[1, 2, indices...]
+        a22 = Aval[2, 2, indices...]
+        a32 = Aval[3, 2, indices...]
+        a13 = Aval[1, 3, indices...]
+        a23 = Aval[2, 3, indices...]
+        a33 = Aval[3, 3, indices...]
+
+        tri = fac13 * (imag(a11) + imag(a22) + imag(a33))
+        y11 = (imag(a11) - tri) * im
+        y22 = (imag(a22) - tri) * im
+        y33 = (imag(a33) - tri) * im
+        x12 = a12 - conj(a21)
+        x13 = a13 - conj(a31)
+        x23 = a23 - conj(a32)
+        y12 = 0.5 * x12
+        y13 = 0.5 * x13
+        y21 = -0.5 * conj(x12)
+        y23 = 0.5 * x23
+        y31 = -0.5 * conj(x13)
+        y32 = -0.5 * conj(x23)
+
+        q11 = -im * t * y11
+        q12 = -im * t * y12
+        q13 = -im * t * y13
+        q21 = -im * t * y21
+        q22 = -im * t * y22
+        q23 = -im * t * y23
+        q31 = -im * t * y31
+        q32 = -im * t * y32
+        q33 = -im * t * y33
+
+        q11s = q11 * q11 + q12 * q21 + q13 * q31
+        q12s = q11 * q12 + q12 * q22 + q13 * q32
+        q13s = q11 * q13 + q12 * q23 + q13 * q33
+        q21s = q21 * q11 + q22 * q21 + q23 * q31
+        q22s = q21 * q12 + q22 * q22 + q23 * q32
+        q23s = q21 * q13 + q22 * q23 + q23 * q33
+        q31s = q31 * q11 + q32 * q21 + q33 * q31
+        q32s = q31 * q12 + q32 * q22 + q33 * q32
+        q33s = q31 * q13 + q32 * q23 + q33 * q33
+
+        trQ2 = q11s + q22s + q33s
+        c1 = real(0.5 * trQ2)
+        min_c1 = min(min_c1, c1)
+        max_c1 = max(max_c1, c1)
+
+        if c1 <= _expt_ta_eps_q
+            small_c1_count += 1
+            continue
+        end
+
+        q11c = q11s * q11 + q12s * q21 + q13s * q31
+        q22c = q21s * q12 + q22s * q22 + q23s * q32
+        q33c = q31s * q13 + q32s * q23 + q33s * q33
+        c0 = real((q11c + q22c + q33c) / 3)
+
+        p = c1 / 3
+        sqrtp = sqrt(p)
+        denom = p * sqrtp
+        min_abs_denom = min(min_abs_denom, abs(denom))
+
+        arg_raw = c0 / 2 / denom
+        max_abs_arg_raw = max(max_abs_arg_raw, abs(arg_raw))
+        if abs(arg_raw) > 1
+            clamp_count += 1
+        end
+    end
+
+    return (
+        min_c1=min_c1,
+        max_c1=max_c1,
+        min_abs_denom=min_abs_denom,
+        max_abs_arg_raw=max_abs_arg_raw,
+        clamp_count=clamp_count,
+        small_c1_count=small_c1_count,
+        nsites=nsites,
+    )
+end
+
+const _expt_ta_su3_diag_seq = Ref(0)
+
+@inline function _append_expt_ta_su3_diag_tsv!(filepath::AbstractString, rec)
+    write_header = !isfile(filepath)
+    open(filepath, "a") do io
+        if write_header
+            println(io, "seq\tt\tnsites\tsmall_c1\tclamp\tmin_c1\tmax_c1\tmin_abs_denom\tmax_abs_arg_raw")
+        end
+        println(
+            io,
+            string(rec.seq), '\t',
+            string(rec.t), '\t',
+            string(rec.nsites), '\t',
+            string(rec.small_c1), '\t',
+            string(rec.clamp), '\t',
+            string(rec.min_c1), '\t',
+            string(rec.max_c1), '\t',
+            string(rec.min_abs_denom), '\t',
+            string(rec.max_abs_arg_raw),
+        )
+    end
+    return nothing
+end
+
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(expt!)},
     ::Type{RT},
@@ -2382,6 +2499,52 @@ function ER.reverse(cfg::ER.RevConfig,
             tval, _expt_ta_eps_q
         )
     elseif C.val.NC1 == 3 && C.val.NC2 == 3
+        if get(ENV, "LM_EXPT_TA_SU3_DIAG", "0") == "1"
+            stats_local = _expt_ta_su3_reverse_diag_stats(
+                Aval, C.val.indexer, prod(C.val.PN), C.val.nw, tval
+            )
+            comm = C.val.comm
+            stats = (
+                min_c1=MPI.Allreduce(stats_local.min_c1, MPI.MIN, comm),
+                max_c1=MPI.Allreduce(stats_local.max_c1, MPI.MAX, comm),
+                min_abs_denom=MPI.Allreduce(stats_local.min_abs_denom, MPI.MIN, comm),
+                max_abs_arg_raw=MPI.Allreduce(stats_local.max_abs_arg_raw, MPI.MAX, comm),
+                clamp_count=MPI.Allreduce(stats_local.clamp_count, MPI.SUM, comm),
+                small_c1_count=MPI.Allreduce(stats_local.small_c1_count, MPI.SUM, comm),
+                nsites=MPI.Allreduce(stats_local.nsites, MPI.SUM, comm),
+            )
+            rank = MPI.Comm_rank(comm)
+            if rank == 0
+                _expt_ta_su3_diag_seq[] += 1
+                seq = _expt_ta_su3_diag_seq[]
+                println(
+                    "expt_TA_rev_su3 diag: " *
+                    "seq=$(seq) t=$(tval) " *
+                    "small_c1=$(stats.small_c1_count)/$(stats.nsites) " *
+                    "clamp=$(stats.clamp_count)/$(stats.nsites) " *
+                    "min_c1=$(stats.min_c1) max_c1=$(stats.max_c1) " *
+                    "min_abs_denom=$(stats.min_abs_denom) " *
+                    "max_abs_arg_raw=$(stats.max_abs_arg_raw)"
+                )
+                diag_file = get(ENV, "LM_EXPT_TA_SU3_DIAG_FILE", "")
+                if !isempty(diag_file)
+                    _append_expt_ta_su3_diag_tsv!(
+                        diag_file,
+                        (
+                            seq=seq,
+                            t=tval,
+                            nsites=stats.nsites,
+                            small_c1=stats.small_c1_count,
+                            clamp=stats.clamp_count,
+                            min_c1=stats.min_c1,
+                            max_c1=stats.max_c1,
+                            min_abs_denom=stats.min_abs_denom,
+                            max_abs_arg_raw=stats.max_abs_arg_raw,
+                        ),
+                    )
+                end
+            end
+        end
         JACC.parallel_for(
             prod(C.val.PN),
             kernel_expt_TA_rev_su3!,
@@ -2808,6 +2971,274 @@ end
     return f0, f1, f2, b10, b11, b12, b20, b21, b22
 end
 
+@inline function _su3_forward_pade_fallback_from_y(
+    y11, y12, y13, y21, y22, y23, y31, y32, y33, t
+)
+    sr3i = 1 / sqrt(3.0)
+    sr3i2 = 2 / sqrt(3.0)
+    pi23 = 2 * pi / 3
+    tiny = 1e-100
+
+    c1_0 = imag(y12) + imag(y21)
+    c2_0 = real(y12) - real(y21)
+    c3_0 = imag(y11) - imag(y22)
+    c4_0 = imag(y13) + imag(y31)
+    c5_0 = real(y13) - real(y31)
+    c6_0 = imag(y23) + imag(y32)
+    c7_0 = real(y23) - real(y32)
+    c8_0 = sr3i * (imag(y11) + imag(y22) - 2 * imag(y33))
+
+    c1 = t * c1_0 * 0.5
+    c2 = t * c2_0 * 0.5
+    c3 = t * c3_0 * 0.5
+    c4 = t * c4_0 * 0.5
+    c5 = t * c5_0 * 0.5
+    c6 = t * c6_0 * 0.5
+    c7 = t * c7_0 * 0.5
+    c8 = t * c8_0 * 0.5
+    csum = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8
+    csum == 0 && return true
+
+    v1 = c3 + sr3i * c8
+    v3 = c1
+    v4 = -c2
+    v5 = c4
+    v6 = -c5
+    v9 = -c3 + sr3i * c8
+    v11 = c6
+    v12 = -c7
+    v17 = -sr3i2 * c8
+
+    trv3 = (v1 + v9 + v17) / 3.0
+    cofac =
+        v1 * v9 - v3^2 - v4^2 + v1 * v17 - v5^2 - v6^2 + v9 * v17 - v11^2 -
+        v12^2
+    det =
+        v1 * v9 * v17 - v1 * (v11^2 + v12^2) - v9 * (v5^2 + v6^2) -
+        v17 * (v3^2 + v4^2) +
+        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * 2.0
+    p3 = cofac / 3.0 - trv3^2
+    q = trv3 * cofac - det - 2.0 * trv3^3
+    (!(isfinite(p3) && isfinite(q)) || p3 >= -tiny) && return true
+
+    x = sqrt(-4.0 * p3) + tiny
+    denom = x * p3
+    (!isfinite(denom) || abs(denom) <= tiny) && return true
+
+    arg = q / denom
+    !isfinite(arg) && return true
+    arg = min(1, max(-1, arg))
+    theta = acos(arg) / 3.0
+    e1 = x * cos(theta) + trv3
+    theta = theta + pi23
+    e2 = x * cos(theta) + trv3
+    e3 = 3.0 * trv3 - e1 - e2
+
+    w1 = v5 * (v9 - e1) - v3 * v11 + v4 * v12
+    w2 = -v6 * (v9 - e1) + v4 * v11 + v3 * v12
+    w3 = (v1 - e1) * v11 - v3 * v5 - v4 * v6
+    w4 = -(v1 - e1) * v12 - v4 * v5 + v3 * v6
+    w5 = -(v1 - e1) * (v9 - e1) + v3^2 + v4^2
+    n1 = w1^2 + w2^2 + w3^2 + w4^2 + w5^2
+    (!(isfinite(n1) && n1 > tiny)) && return true
+
+    w7 = v5 * (v9 - e2) - v3 * v11 + v4 * v12
+    w8 = -v6 * (v9 - e2) + v4 * v11 + v3 * v12
+    w9 = (v1 - e2) * v11 - v3 * v5 - v4 * v6
+    w10 = -(v1 - e2) * v12 - v4 * v5 + v3 * v6
+    w11 = -(v1 - e2) * (v9 - e2) + v3^2 + v4^2
+    n2 = w7^2 + w8^2 + w9^2 + w10^2 + w11^2
+    (!(isfinite(n2) && n2 > tiny)) && return true
+
+    w13 = v5 * (v9 - e3) - v3 * v11 + v4 * v12
+    w14 = -v6 * (v9 - e3) + v4 * v11 + v3 * v12
+    w15 = (v1 - e3) * v11 - v3 * v5 - v4 * v6
+    w16 = -(v1 - e3) * v12 - v4 * v5 + v3 * v6
+    w17 = -(v1 - e3) * (v9 - e3) + v3^2 + v4^2
+    n3 = w13^2 + w14^2 + w15^2 + w16^2 + w17^2
+    (!(isfinite(n3) && n3 > tiny)) && return true
+
+    return false
+end
+
+@inline function _exp3x3_pade_from_raw_A(
+    a11, a12, a13, a21, a22, a23, a31, a32, a33, t
+)
+    tri = fac13 * (imag(a11) + imag(a22) + imag(a33))
+    y11 = (imag(a11) - tri) * im
+    y22 = (imag(a22) - tri) * im
+    y33 = (imag(a33) - tri) * im
+    x12 = a12 - conj(a21)
+    x13 = a13 - conj(a31)
+    x23 = a23 - conj(a32)
+    y12 = 0.5 * x12
+    y13 = 0.5 * x13
+    y21 = -0.5 * conj(x12)
+    y23 = 0.5 * x23
+    y31 = -0.5 * conj(x13)
+    y32 = -0.5 * conj(x23)
+
+    return LatticeMatrices.exp3x3_pade(
+        y11, y12, y13,
+        y21, y22, y23,
+        y31, y32, y33,
+        t,
+    )
+end
+
+@inline function _exp3x3_taylor4_from_raw_A(
+    a11, a12, a13, a21, a22, a23, a31, a32, a33, t
+)
+    tri = fac13 * (imag(a11) + imag(a22) + imag(a33))
+    y11 = (imag(a11) - tri) * im
+    y22 = (imag(a22) - tri) * im
+    y33 = (imag(a33) - tri) * im
+    x12 = a12 - conj(a21)
+    x13 = a13 - conj(a31)
+    x23 = a23 - conj(a32)
+    y12 = 0.5 * x12
+    y13 = 0.5 * x13
+    y21 = -0.5 * conj(x12)
+    y23 = 0.5 * x23
+    y31 = -0.5 * conj(x13)
+    y32 = -0.5 * conj(x23)
+
+    m11 = t * y11
+    m12 = t * y12
+    m13 = t * y13
+    m21 = t * y21
+    m22 = t * y22
+    m23 = t * y23
+    m31 = t * y31
+    m32 = t * y32
+    m33 = t * y33
+
+    m211 = m11 * m11 + m12 * m21 + m13 * m31
+    m212 = m11 * m12 + m12 * m22 + m13 * m32
+    m213 = m11 * m13 + m12 * m23 + m13 * m33
+    m221 = m21 * m11 + m22 * m21 + m23 * m31
+    m222 = m21 * m12 + m22 * m22 + m23 * m32
+    m223 = m21 * m13 + m22 * m23 + m23 * m33
+    m231 = m31 * m11 + m32 * m21 + m33 * m31
+    m232 = m31 * m12 + m32 * m22 + m33 * m32
+    m233 = m31 * m13 + m32 * m23 + m33 * m33
+
+    m311 = m211 * m11 + m212 * m21 + m213 * m31
+    m312 = m211 * m12 + m212 * m22 + m213 * m32
+    m313 = m211 * m13 + m212 * m23 + m213 * m33
+    m321 = m221 * m11 + m222 * m21 + m223 * m31
+    m322 = m221 * m12 + m222 * m22 + m223 * m32
+    m323 = m221 * m13 + m222 * m23 + m223 * m33
+    m331 = m231 * m11 + m232 * m21 + m233 * m31
+    m332 = m231 * m12 + m232 * m22 + m233 * m32
+    m333 = m231 * m13 + m232 * m23 + m233 * m33
+
+    m411 = m311 * m11 + m312 * m21 + m313 * m31
+    m412 = m311 * m12 + m312 * m22 + m313 * m32
+    m413 = m311 * m13 + m312 * m23 + m313 * m33
+    m421 = m321 * m11 + m322 * m21 + m323 * m31
+    m422 = m321 * m12 + m322 * m22 + m323 * m32
+    m423 = m321 * m13 + m322 * m23 + m323 * m33
+    m431 = m331 * m11 + m332 * m21 + m333 * m31
+    m432 = m331 * m12 + m332 * m22 + m333 * m32
+    m433 = m331 * m13 + m332 * m23 + m333 * m33
+
+    c2 = 0.5
+    c3 = 1.0 / 6.0
+    c4 = 1.0 / 24.0
+    return (
+        one(a11) + m11 + c2 * m211 + c3 * m311 + c4 * m411,
+        m12 + c2 * m212 + c3 * m312 + c4 * m412,
+        m13 + c2 * m213 + c3 * m313 + c4 * m413,
+        m21 + c2 * m221 + c3 * m321 + c4 * m421,
+        one(a11) + m22 + c2 * m222 + c3 * m322 + c4 * m422,
+        m23 + c2 * m223 + c3 * m323 + c4 * m423,
+        m31 + c2 * m231 + c3 * m331 + c4 * m431,
+        m32 + c2 * m232 + c3 * m332 + c4 * m432,
+        one(a11) + m33 + c2 * m233 + c3 * m333 + c4 * m433,
+    )
+end
+
+@inline function _expt_ta_rev_su3_pade_fd!(
+    dA, dC, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
+)
+    c11 = dC[1, 1, indices...]
+    c12 = dC[1, 2, indices...]
+    c13 = dC[1, 3, indices...]
+    c21 = dC[2, 1, indices...]
+    c22 = dC[2, 2, indices...]
+    c23 = dC[2, 3, indices...]
+    c31 = dC[3, 1, indices...]
+    c32 = dC[3, 2, indices...]
+    c33 = dC[3, 3, indices...]
+
+    basescale = max(
+        abs(a11), abs(a12), abs(a13),
+        abs(a21), abs(a22), abs(a23),
+        abs(a31), abs(a32), abs(a33),
+        abs(t), 1.0,
+    )
+    epsfd = 1e-8 * basescale
+
+    basis = (
+        # diagonal generators
+        (im, 0, 0, 0, -im, 0, 0, 0, 0),
+        (im / sqrt(3.0), 0, 0, 0, im / sqrt(3.0), 0, 0, 0, -2im / sqrt(3.0)),
+        # off-diagonal (12)
+        (0, 1, 0, -1, 0, 0, 0, 0, 0),
+        (0, im, 0, im, 0, 0, 0, 0, 0),
+        # off-diagonal (13)
+        (0, 0, 1, 0, 0, 0, -1, 0, 0),
+        (0, 0, im, 0, 0, 0, im, 0, 0),
+        # off-diagonal (23)
+        (0, 0, 0, 0, 0, 1, 0, -1, 0),
+        (0, 0, 0, 0, 0, im, 0, im, 0),
+    )
+
+    for b in basis
+        bp11, bp12, bp13, bp21, bp22, bp23, bp31, bp32, bp33 = b
+
+        fplus = _exp3x3_taylor4_from_raw_A(
+            a11 + epsfd * bp11, a12 + epsfd * bp12, a13 + epsfd * bp13,
+            a21 + epsfd * bp21, a22 + epsfd * bp22, a23 + epsfd * bp23,
+            a31 + epsfd * bp31, a32 + epsfd * bp32, a33 + epsfd * bp33, t
+        )
+        fminus = _exp3x3_taylor4_from_raw_A(
+            a11 - epsfd * bp11, a12 - epsfd * bp12, a13 - epsfd * bp13,
+            a21 - epsfd * bp21, a22 - epsfd * bp22, a23 - epsfd * bp23,
+            a31 - epsfd * bp31, a32 - epsfd * bp32, a33 - epsfd * bp33, t
+        )
+
+        df11 = (fplus[1] - fminus[1]) / (2 * epsfd)
+        df12 = (fplus[2] - fminus[2]) / (2 * epsfd)
+        df13 = (fplus[3] - fminus[3]) / (2 * epsfd)
+        df21 = (fplus[4] - fminus[4]) / (2 * epsfd)
+        df22 = (fplus[5] - fminus[5]) / (2 * epsfd)
+        df23 = (fplus[6] - fminus[6]) / (2 * epsfd)
+        df31 = (fplus[7] - fminus[7]) / (2 * epsfd)
+        df32 = (fplus[8] - fminus[8]) / (2 * epsfd)
+        df33 = (fplus[9] - fminus[9]) / (2 * epsfd)
+
+        g = real(
+            conj(c11) * df11 + conj(c12) * df12 + conj(c13) * df13 +
+            conj(c21) * df21 + conj(c22) * df22 + conj(c23) * df23 +
+            conj(c31) * df31 + conj(c32) * df32 + conj(c33) * df33
+        )
+
+        dA[1, 1, indices...] -= g * bp11
+        dA[1, 2, indices...] -= g * bp12
+        dA[1, 3, indices...] -= g * bp13
+        dA[2, 1, indices...] -= g * bp21
+        dA[2, 2, indices...] -= g * bp22
+        dA[2, 3, indices...] -= g * bp23
+        dA[3, 1, indices...] -= g * bp31
+        dA[3, 2, indices...] -= g * bp32
+        dA[3, 3, indices...] -= g * bp33
+    end
+
+    return nothing
+end
+
 @inline function kernel_expt_TA_rev_su3!(i, dA, dC, A, dindexer, ::Val{nw}, t, eps_Q) where {nw}
     indices = delinearize(dindexer, i, nw)
 
@@ -2837,6 +3268,19 @@ end
     y23 = 0.5 * x23
     y31 = -0.5 * conj(x13)
     y32 = -0.5 * conj(x23)
+
+    qnorm =
+        abs(t) * sqrt(real(
+            y11 * conj(y11) + y12 * conj(y12) + y13 * conj(y13) +
+            y21 * conj(y21) + y22 * conj(y22) + y23 * conj(y23) +
+            y31 * conj(y31) + y32 * conj(y32) + y33 * conj(y33)
+        ))
+    if qnorm <= 1e-6
+        _expt_ta_rev_su3_pade_fd!(
+            dA, dC, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
+        )
+        return nothing
+    end
 
     q11 = -im * t * y11
     q12 = -im * t * y12
@@ -3814,7 +4258,7 @@ end
 end
 
 @inline function _should_zero_dC(dCout)
-    return dCout !== nothing
+    return true
 end
 
 @inline function _zero_shadow!(C::LatticeMatrix)

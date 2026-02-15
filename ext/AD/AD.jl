@@ -3159,6 +3159,51 @@ end
     )
 end
 
+@inline function _expt_ta_rev_su3_pade_fd_accum_one!(
+    dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+    c11, c12, c13, c21, c22, c23, c31, c32, c33,
+    bp11, bp12, bp13, bp21, bp22, bp23, bp31, bp32, bp33
+)
+    fplus = _exp3x3_taylor4_from_raw_A(
+        a11 + epsfd * bp11, a12 + epsfd * bp12, a13 + epsfd * bp13,
+        a21 + epsfd * bp21, a22 + epsfd * bp22, a23 + epsfd * bp23,
+        a31 + epsfd * bp31, a32 + epsfd * bp32, a33 + epsfd * bp33, t
+    )
+    fminus = _exp3x3_taylor4_from_raw_A(
+        a11 - epsfd * bp11, a12 - epsfd * bp12, a13 - epsfd * bp13,
+        a21 - epsfd * bp21, a22 - epsfd * bp22, a23 - epsfd * bp23,
+        a31 - epsfd * bp31, a32 - epsfd * bp32, a33 - epsfd * bp33, t
+    )
+
+    df11 = (fplus[1] - fminus[1]) / (2 * epsfd)
+    df12 = (fplus[2] - fminus[2]) / (2 * epsfd)
+    df13 = (fplus[3] - fminus[3]) / (2 * epsfd)
+    df21 = (fplus[4] - fminus[4]) / (2 * epsfd)
+    df22 = (fplus[5] - fminus[5]) / (2 * epsfd)
+    df23 = (fplus[6] - fminus[6]) / (2 * epsfd)
+    df31 = (fplus[7] - fminus[7]) / (2 * epsfd)
+    df32 = (fplus[8] - fminus[8]) / (2 * epsfd)
+    df33 = (fplus[9] - fminus[9]) / (2 * epsfd)
+
+    g = real(
+        conj(c11) * df11 + conj(c12) * df12 + conj(c13) * df13 +
+        conj(c21) * df21 + conj(c22) * df22 + conj(c23) * df23 +
+        conj(c31) * df31 + conj(c32) * df32 + conj(c33) * df33
+    )
+
+    dA[1, 1, indices...] -= g * bp11
+    dA[1, 2, indices...] -= g * bp12
+    dA[1, 3, indices...] -= g * bp13
+    dA[2, 1, indices...] -= g * bp21
+    dA[2, 2, indices...] -= g * bp22
+    dA[2, 3, indices...] -= g * bp23
+    dA[3, 1, indices...] -= g * bp31
+    dA[3, 2, indices...] -= g * bp32
+    dA[3, 3, indices...] -= g * bp33
+
+    return nothing
+end
+
 @inline function _expt_ta_rev_su3_pade_fd!(
     dA, dC, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
 )
@@ -3180,61 +3225,51 @@ end
     )
     epsfd = 1e-8 * basescale
 
-    basis = (
-        # diagonal generators
-        (im, 0, 0, 0, -im, 0, 0, 0, 0),
-        (im / sqrt(3.0), 0, 0, 0, im / sqrt(3.0), 0, 0, 0, -2im / sqrt(3.0)),
-        # off-diagonal (12)
-        (0, 1, 0, -1, 0, 0, 0, 0, 0),
-        (0, im, 0, im, 0, 0, 0, 0, 0),
-        # off-diagonal (13)
-        (0, 0, 1, 0, 0, 0, -1, 0, 0),
-        (0, 0, im, 0, 0, 0, im, 0, 0),
-        # off-diagonal (23)
-        (0, 0, 0, 0, 0, 1, 0, -1, 0),
-        (0, 0, 0, 0, 0, im, 0, im, 0),
+    # diagonal generators
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        im, 0, 0, 0, -im, 0, 0, 0, 0
     )
-
-    for b in basis
-        bp11, bp12, bp13, bp21, bp22, bp23, bp31, bp32, bp33 = b
-
-        fplus = _exp3x3_taylor4_from_raw_A(
-            a11 + epsfd * bp11, a12 + epsfd * bp12, a13 + epsfd * bp13,
-            a21 + epsfd * bp21, a22 + epsfd * bp22, a23 + epsfd * bp23,
-            a31 + epsfd * bp31, a32 + epsfd * bp32, a33 + epsfd * bp33, t
-        )
-        fminus = _exp3x3_taylor4_from_raw_A(
-            a11 - epsfd * bp11, a12 - epsfd * bp12, a13 - epsfd * bp13,
-            a21 - epsfd * bp21, a22 - epsfd * bp22, a23 - epsfd * bp23,
-            a31 - epsfd * bp31, a32 - epsfd * bp32, a33 - epsfd * bp33, t
-        )
-
-        df11 = (fplus[1] - fminus[1]) / (2 * epsfd)
-        df12 = (fplus[2] - fminus[2]) / (2 * epsfd)
-        df13 = (fplus[3] - fminus[3]) / (2 * epsfd)
-        df21 = (fplus[4] - fminus[4]) / (2 * epsfd)
-        df22 = (fplus[5] - fminus[5]) / (2 * epsfd)
-        df23 = (fplus[6] - fminus[6]) / (2 * epsfd)
-        df31 = (fplus[7] - fminus[7]) / (2 * epsfd)
-        df32 = (fplus[8] - fminus[8]) / (2 * epsfd)
-        df33 = (fplus[9] - fminus[9]) / (2 * epsfd)
-
-        g = real(
-            conj(c11) * df11 + conj(c12) * df12 + conj(c13) * df13 +
-            conj(c21) * df21 + conj(c22) * df22 + conj(c23) * df23 +
-            conj(c31) * df31 + conj(c32) * df32 + conj(c33) * df33
-        )
-
-        dA[1, 1, indices...] -= g * bp11
-        dA[1, 2, indices...] -= g * bp12
-        dA[1, 3, indices...] -= g * bp13
-        dA[2, 1, indices...] -= g * bp21
-        dA[2, 2, indices...] -= g * bp22
-        dA[2, 3, indices...] -= g * bp23
-        dA[3, 1, indices...] -= g * bp31
-        dA[3, 2, indices...] -= g * bp32
-        dA[3, 3, indices...] -= g * bp33
-    end
+    s3 = sqrt(3.0)
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        im / s3, 0, 0, 0, im / s3, 0, 0, 0, -2im / s3
+    )
+    # off-diagonal (12)
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        0, 1, 0, -1, 0, 0, 0, 0, 0
+    )
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        0, im, 0, im, 0, 0, 0, 0, 0
+    )
+    # off-diagonal (13)
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        0, 0, 1, 0, 0, 0, -1, 0, 0
+    )
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        0, 0, im, 0, 0, 0, im, 0, 0
+    )
+    # off-diagonal (23)
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        0, 0, 0, 0, 0, 1, 0, -1, 0
+    )
+    _expt_ta_rev_su3_pade_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        0, 0, 0, 0, 0, im, 0, im, 0
+    )
 
     return nothing
 end

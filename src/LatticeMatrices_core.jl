@@ -34,6 +34,8 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
 
     A::AT                           # main array (NC first)
     buf::Vector{AT}                   # 2D work buffers (minus/plus)
+    buf_host::Vector{Array{T}}      # Host array on CPUs to send and to receive 
+
     myrank::Int
     PN::NTuple{D,Int}
     comm::MPI.Comm
@@ -59,6 +61,7 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         ls.nbr,
         tA,
         ls.buf,
+        ls.buf_host,
         ls.myrank,
         ls.PN,
         ls.comm,
@@ -107,12 +110,18 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
 
     # contiguous buffers for each face
     buf = Vector{typeof(A)}(undef, 4D)
+    buf_host = Vector{Array{elementtype}}(undef, 4D)
     for d in 1:D
         shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
         buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
         buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
         buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
         buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
+
+        buf_host[4d-3] = Array(buf[4d-3])
+        buf_host[4d-2] = Array(buf[4d-2])
+        buf_host[4d-1] = Array(buf[4d-1])
+        buf_host[4d] = Array(buf[4d])
     end
 
 
@@ -129,7 +138,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
     return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, MPI.Comm_rank(cart), PN, comm0, indexer, temps)
+        A, buf, buf_host, MPI.Comm_rank(cart), PN, comm0, indexer, temps)
 end
 
 function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
@@ -371,6 +380,8 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
     bufSM, bufRM = ls.buf[iSM], ls.buf[iRM]      # minus side: send / recv
     bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]      # plus  side: send / recv
+    bufSM_host, bufRM_host = ls.buf_host[iSM], ls.buf_host[iRM]      # minus side: send / recv
+    bufSP_host, bufRP_host = ls.buf_host[iSP], ls.buf_host[iRP]      # plus  side: send / recv
 
     rankM, rankP = ls.nbr[d]                     # neighbour ranks
     me = ls.myrank
@@ -406,10 +417,13 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
         cnt = length(bufSM)
 
-        push!(reqs, MPI.Isend(bufSM, rankM, d, ls.cart))#;
+        #push!(reqs, MPI.Isend(bufSM, rankM, d, ls.cart))#;
+        copyto!(bufSM_host, bufSM)
+        push!(reqs, MPI.Isend(bufSM_host, rankM, d, ls.cart))#;
         #count=cnt, datatype=baseT))
 
-        push!(reqs, MPI.Irecv!(bufRM, rankM, d + D, ls.cart))#;
+        #push!(reqs, MPI.Irecv!(bufRM, rankM, d + D, ls.cart))#;
+        push!(reqs, MPI.Irecv!(bufRM_host, rankM, d + D, ls.cart))#;
         #count=cnt, datatype=baseT))
     end
 
@@ -427,9 +441,13 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
         cnt = length(bufSP)
 
-        push!(reqs, MPI.Isend(bufSP, rankP, d + D, ls.cart))#;
+        #push!(reqs, MPI.Isend(bufSP, rankP, d + D, ls.cart))#;
+        copyto!(bufSP_host, bufSP)
+        push!(reqs, MPI.Isend(bufSP_host, rankP, d + D, ls.cart))#;
+
         #count=cnt, datatype=baseT))
-        push!(reqs, MPI.Irecv!(bufRP, rankP, d, ls.cart))
+        #push!(reqs, MPI.Irecv!(bufRP, rankP, d, ls.cart))
+        push!(reqs, MPI.Irecv!(bufRP_host, rankP, d, ls.cart))
         #count=cnt, datatype=baseT))
     end
 
@@ -439,10 +457,12 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
 
     # -------- copy received data into ghosts -----------
     if rankM != me
-        copy!(gminus, bufRM)
+        #copy!(gminus, bufRM)
+        copy!(gminus, bufRM_host)
     end
     if rankP != me
-        copy!(gplus, bufRP)
+        #copy!(gplus, bufRP)
+        copy!(gplus, bufRP_host)
     end
 end
 

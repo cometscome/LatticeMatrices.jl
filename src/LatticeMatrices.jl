@@ -439,6 +439,7 @@ export mul_A_shiftBdag!
 include("Operators/Operators.jl")
 include("Operators/DiracOperators.jl")
 include("Operators/DiracOperators_5D.jl")
+include("Operators/DiracOperators_5DG.jl")
 
 
 end

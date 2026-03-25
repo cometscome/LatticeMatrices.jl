@@ -19,13 +19,13 @@ struct D5DW_MobiusDomainwallOperator5D{T,L5} <: OperatorOnKernel
         κ_wilson = 1 / (2 * Dim * r + 2M)
         wilsonparam = Wilson_parameters(κ_wilson, M)
 
-        if b == 1 && c == 1
-            println("Shamir kernel (standard DW) is used")
-        elseif b == 2 && c == 0
-            println("Borici/Wilson kernel (truncated overlap) is used")
-        elseif b == 2 && c == 1
-            println("scaled Shamir kernel (Mobius DW) is used")
-        end
+        # if b == 1 && c == 1
+        #     println("Shamir kernel (standard DW) is used")
+        # elseif b == 2 && c == 0
+        #     println("Borici/Wilson kernel (truncated overlap) is used")
+        # elseif b == 2 && c == 1
+        #     println("scaled Shamir kernel (Mobius DW) is used")
+        # end
 
         return new{T,L5}(U, mass, wilsonparam, b, c)
     end
@@ -482,6 +482,141 @@ function kernel_apply_F!(i,C, ψdata, ::Val{NC1},mass,::Val{L5},::Val{nw}, dinde
         C[ic, 2, indices...] += coeff_1mg5 * massfactor * ψdata[ic, 2, indices_5m...]
 
 
+    end
+
+    return
+
+
+end
+
+function apply_P_5D!(C::TC,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
+    Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+    
+    JACC.parallel_for(
+        prod(C.PN), kernel_apply_P!,
+        Cdata, ψdata,
+        Val(NC1), Val(L5), Val(nw), C.indexer)
+        
+
+end
+
+function kernel_apply_P!(i,C, ψdata, ::Val{NC1},::Val{L5},::Val{nw}, dindexer) where {NC1,L5,nw}
+    indices = delinearize(dindexer, i, nw) #5D indices
+    indices_5p = shiftindices(indices, shift_5p5D)
+    # indices_5m = shiftindices(indices, shift_5m5D)
+    indices_5m = indices
+
+    massfactor = 1
+    # coeff_1mg5 = ifelse(indices[5] == 1 + nw, -mass, 1)
+    # coeff_1pg5 = ifelse(indices[5] == L5 + nw, -mass, 1)
+    #coeff_1pg5 = ifelse(indices[5] == 1 + nw, -mass, 0)
+    #@info indices[5]
+    #coeff_1mg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
+
+    @inbounds for ic = 1:NC1
+        #(1+gamma_5) 3,4 only #LTK definition
+        #if coeff_1mg5 != 0
+        #@info ψdata[ic, 3, indices_5m...]
+        #end
+        C[ic, 1, indices...] += massfactor * ψdata[ic, 1, indices_5p...]
+        C[ic, 2, indices...] += massfactor * ψdata[ic, 2, indices_5p...]
+
+        #(1-gamma_5) 1,2 only #LTK definition
+        C[ic, 3, indices...] += massfactor * ψdata[ic, 3, indices_5m...]
+        C[ic, 4, indices...] += massfactor * ψdata[ic, 4, indices_5m...]
+
+
+    end
+
+    return
+
+
+end
+
+function apply_R_5D!(C::TC,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
+    Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+    
+    JACC.parallel_for(
+        prod(C.PN), kernel_apply_R!,
+        Cdata, ψdata,
+        Val(NC1), Val(L5), Val(nw), C.indexer)
+        
+
+end
+
+function kernel_apply_R!(i,C, ψdata, ::Val{NC1},::Val{L5},::Val{nw}, dindexer) where {NC1,L5,nw}
+    indices = delinearize(dindexer, i, nw) #5D indices
+    # idx5 = indices[5] - nw
+    indices_R = (indices[1], indices[2], indices[3], indices[4], L5-indices[5]+2*nw+1)
+
+    massfactor = 1
+    # coeff_1mg5 = ifelse(indices[5] == 1 + nw, -mass, 1)
+    # coeff_1pg5 = ifelse(indices[5] == L5 + nw, -mass, 1)
+    #coeff_1pg5 = ifelse(indices[5] == 1 + nw, -mass, 0)
+    #@info indices[5]
+    #coeff_1mg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
+
+    @inbounds for ic = 1:NC1
+        for ia = 1:4
+            C[ic, ia, indices...] = massfactor * ψdata[ic, ia, indices_R...]
+        end
+    end
+
+    return
+
+
+end
+
+function apply_P_edge_5D!(C::TC,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
+    TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
+    Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    ψdata = get_matrix(ψ)
+    Cdata = get_matrix(C)
+    
+    JACC.parallel_for(
+        prod(C.PN), kernel_apply_P_edge!,
+        Cdata, ψdata,
+        Val(NC1), Val(L5), Val(nw), C.indexer)
+        
+
+end
+
+function kernel_apply_P_edge!(i,C, ψdata, ::Val{NC1},::Val{L5},::Val{nw}, dindexer) where {NC1,L5,nw}
+    indices = delinearize(dindexer, i, nw) #5D indices
+    indices_5p = shiftindices(indices, shift_5p5D)
+    # indices_5m = shiftindices(indices, shift_5m5D)
+    indices_5m = indices
+    massfactor = 1
+    # coeff_1mg5 = ifelse(indices[5] == 1 + nw, -mass, 1)
+    # coeff_1pg5 = ifelse(indices[5] == L5 + nw, -mass, 1)
+    #coeff_1pg5 = ifelse(indices[5] == 1 + nw, -mass, 0)
+    #@info indices[5]
+    #coeff_1mg5 = ifelse(indices[5] == L5 + nw, -mass, 0)
+
+    idx5 = indices[5] - nw
+    if idx5 == 1
+        @inbounds for ic = 1:NC1
+            #(1-gamma_5) 1,2 only #LTK definition
+            C[ic, 3, indices...] = massfactor * ψdata[ic, 3, indices...]
+            C[ic, 4, indices...] = massfactor * ψdata[ic, 4, indices...]
+        end
+    end
+
+    if idx5 == L5
+        @inbounds for ic = 1:NC1
+            C[ic, 1, indices...] = massfactor * ψdata[ic, 1, indices...]
+            C[ic, 2, indices...] = massfactor * ψdata[ic, 2, indices...]
+
+        end
     end
 
     return

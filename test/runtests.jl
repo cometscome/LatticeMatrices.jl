@@ -6,6 +6,20 @@ using LinearAlgebra
 using InteractiveUtils
 JACC.@init_backend
 using MPI, JACC, StaticArrays
+include("nw0.jl")
+include("regressions.jl")
+include("enzyme.jl")
+
+@testset "boundary phase multiplication" begin
+    buf = ComplexF64[1 + 2im, 3 + 4im]
+    original = copy(buf)
+
+    @test LatticeMatrices._mul_phase!(buf, 1.0) === nothing
+    @test buf == original
+
+    @test LatticeMatrices._mul_phase!(buf, -1.0) === nothing
+    @test buf == -original
+end
 
 function dotproduct(i, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
     indices = delinearize(dindexer, i, nw)
@@ -925,6 +939,9 @@ end
 
 function main()
     MPI.Init()
+    nw0test()
+    regressiontests()
+    enzymetests()
     #=
     for dim = 1:5
         indextest(dim)
@@ -997,5 +1014,3 @@ end
     main()
 
 end
-
-

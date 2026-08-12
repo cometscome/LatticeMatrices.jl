@@ -133,7 +133,8 @@ LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
 ```
 
 - **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.  
-- **Phases**: wrap-around phases per dimension (applied on the boundary faces during exchange).  
+- **Phases**: wrap-around phases per dimension. A positive-direction wrap applies `phase`,
+  while a negative-direction wrap applies `inv(phase)`.
 - **Exchange**: `set_halo!(ls)` calls `exchange_dim!(ls, d)` for each spatial dimension `d`.
 
 ---
@@ -180,13 +181,18 @@ a1 = exp(a2)
 
 ```
 
-Adjoints and **shifted** operands are supported via lightweight wrappers:
+Adjoints and **shifted** operands are supported via wrappers:
 
 ```julia
 M2p = Shifted_Lattice(M2, (1, 0, 0, 0))    # shift by +1 along X (periodic)
 mul!(M1, M2', M3p)                          # all combinations in tests:
                                             # (A, B, C), (A, B', C), (A, B, C'), etc.
 ```
+
+For `nw > 0`, an in-halo shift is a lightweight view and therefore observes later
+changes to its source lattice. For `nw == 0`, a nonzero shift is materialized when
+`Shifted_Lattice` is constructed, so it is a snapshot. This eager behavior keeps every
+public operation safe even though a halo-free lattice has no boundary storage.
 
 **Convenience**
 ```julia
@@ -245,7 +251,8 @@ All combinations of shifted and adjoint operands are supported and tested in `te
 
 ## Automatic differentiation (Enzyme)
 
-(above v0.3: experimental) We provide Enzyme-based AD extensions and test cases. See `test/adtest/ad.jl` for a concrete comparison between
+(above v0.3: experimental) Enzyme is an optional dependency loaded through a package extension.
+Install and load Enzyme explicitly when AD is needed. We provide Enzyme-based AD extensions and test cases. See `test/adtest/ad.jl` for a concrete comparison between
 automatic differentiation and numerical differentiation using `calc_action_loopfn`. The loop body is factored
 into a small helper function (`_calc_action_step!`), which makes Enzyme AD more reliable for loop-heavy code.
 
@@ -263,6 +270,9 @@ include("test/adtest/ad.jl") # runs main() in the script
 Note: the AD result here follows Enzyme's complex differentiation convention. For a complex variable
 `U = X + iY`, the gradient reported by Enzyme is
 `dS/dUij = dS/dXij + i dS/dYij`.
+
+`Enzyme_derivative!` requires `nw >= 1` for every lattice argument and work buffer.
+Halo-free (`nw=0`) lattices can be used for ordinary calculations, but are rejected before AD starts.
 
 
 ---

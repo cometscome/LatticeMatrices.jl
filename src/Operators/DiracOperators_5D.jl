@@ -54,11 +54,19 @@ end
     return x.b, x.c
 end
 
+@inline function _require_5d_halo(::Val{nw}) where nw
+    nw > 0 || throw(ArgumentError(
+        "5D Dirac operators do not support nw=0 yet; construct the 5D fields with nw >= 1"))
+    return nothing
+end
+
 #LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}
 function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::Tp) where {T1,AT1,NC1,nw,DI,L5,TU,
     TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},TD<:D5DW_MobiusDomainwallOperator5D{TU,L5},
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    _require_5d_halo(Val(nw))
 
     
     U1 = get_matrix(Dirac.U[1])
@@ -127,6 +135,8 @@ end
 function D4x_5D!(C::TC,U,ψ::Tp,coeff) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    _require_5d_halo(Val(nw))
 
     U1 = get_matrix(U[1])
     U2 = get_matrix(U[2])
@@ -443,6 +453,8 @@ function apply_F_5D!(C::TC,mass,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
 
+    _require_5d_halo(Val(nw))
+
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
@@ -492,6 +504,8 @@ end
 function apply_δF_5D!(C::TC,mass,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    _require_5d_halo(Val(nw))
 
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
@@ -634,6 +648,8 @@ function LinearAlgebra.mul!(C::TC,
     TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
     TD<:Adjoint_D5DW_MobiusDomainwallOperator5D{D5DW_MobiusDomainwallOperator5D{T,L5}},
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
+
+    _require_5d_halo(Val(nw))
 
     U1 = get_matrix(Dirac.parent.U[1])
     U2 = get_matrix(Dirac.parent.U[2])

@@ -49,6 +49,12 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
     numtemps = length(ls.temps._data)
     tA = zero(ls.A)
     temps = PreallocatedArray(tA; num=numtemps, haslabel=false)
+    buf = similar(ls.buf)
+    buf_host = similar(ls.buf_host)
+    for i in eachindex(ls.buf)
+        buf[i] = zero(ls.buf[i])
+        buf_host[i] = similar(ls.buf_host[i])
+    end
 
     return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
         ls.phases,
@@ -60,8 +66,8 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         ls.dims,
         ls.nbr,
         tA,
-        ls.buf,
-        ls.buf_host,
+        buf,
+        buf_host,
         ls.myrank,
         ls.PN,
         ls.comm,
@@ -88,10 +94,33 @@ end
 function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD,
     numtemps=1)
 
+    nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
+    dim > 0 || throw(ArgumentError("dim must be positive, got $dim"))
+    length(gsize) == dim || throw(ArgumentError(
+        "global size must have $dim entries, got $(length(gsize))"))
+    length(PEs) == dim || throw(ArgumentError(
+        "process grid must have $dim entries, got $(length(PEs))"))
+    length(phases) == dim || throw(ArgumentError(
+        "phases must have $dim entries, got $(length(phases))"))
+    NC1 > 0 && NC2 > 0 || throw(ArgumentError("matrix dimensions must be positive"))
+
+    gsize = ntuple(i -> Int(gsize[i]), dim)
+    dims = ntuple(i -> Int(PEs[i]), dim)
+    all(>(0), gsize) || throw(ArgumentError("global lattice sizes must be positive, got $gsize"))
+    all(>(0), dims) || throw(ArgumentError("process-grid sizes must be positive, got $dims"))
+    any(iszero, phases) && throw(ArgumentError(
+        "boundary phases must be nonzero because negative wraps use inv(phase)"))
+    for d in 1:dim
+        iszero(gsize[d] % dims[d]) || throw(ArgumentError(
+            "global size $(gsize[d]) in dimension $d is not divisible by process-grid size $(dims[d])"))
+    end
+    comm_size = MPI.Comm_size(comm0)
+    prod(dims) == comm_size || throw(ArgumentError(
+        "process grid $dims contains $(prod(dims)) ranks, but communicator contains $comm_size"))
+
     # Cartesian grid
     D = dim
     T = elementtype
-    dims = PEs #MPI.dims_create(MPI.Comm_size(MPI.COMM_WORLD), D)
     periodic = ntuple(_ -> true, D)
     #println(dims)
     #println(periodic)
@@ -109,19 +138,22 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #stride = ntuple(i -> (i == 1 ? 1 : prod(locS[1:i-1])), D)
 
     # contiguous buffers for each face
-    buf = Vector{typeof(A)}(undef, 4D)
-    buf_host = Vector{Array{elementtype}}(undef, 4D)
-    for d in 1:D
-        shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
-        buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
-        buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
-        buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
-        buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
+    nbuf = iszero(nw) ? 0 : 4D
+    buf = Vector{typeof(A)}(undef, nbuf)
+    buf_host = Vector{Array{elementtype}}(undef, nbuf)
+    if !iszero(nw)
+        for d in 1:D
+            shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
+            buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
+            buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
+            buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
+            buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
 
-        buf_host[4d-3] = Array(buf[4d-3])
-        buf_host[4d-2] = Array(buf[4d-2])
-        buf_host[4d-1] = Array(buf[4d-1])
-        buf_host[4d] = Array(buf[4d])
+            buf_host[4d-3] = Array(buf[4d-3])
+            buf_host[4d-2] = Array(buf[4d-2])
+            buf_host[4d-1] = Array(buf[4d-1])
+            buf_host[4d] = Array(buf[4d])
+        end
     end
 
 
@@ -260,6 +292,8 @@ end
 
 
 
+Base.@noinline set_halo!(::TL) where {D,T,AT,NC1,NC2,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}} = nothing
+
 Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     # Single-process lattices do not need MPI communication. Keep halo updates local.
     if MPI.Comm_size(ls.cart) == 1
@@ -351,7 +385,7 @@ function exchange_dim_local!(ls::LatticeMatrix{D}, d::Int) where D
 
     # minus ghost <= plus face
     copy!(gminus, fplus)
-    _mul_phase!(gminus, ls.phases[d])
+    _mul_phase!(gminus, inv(ls.phases[d]))
 
     # plus ghost <= minus face
     copy!(gplus, fminus)
@@ -436,7 +470,7 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     else
         copy!(bufSP, fplus)
         if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(bufSP, ls.phases[d])
+            _mul_phase!(bufSP, inv(ls.phases[d]))
         end
 
         cnt = length(bufSP)
@@ -610,6 +644,7 @@ end
 export gather_and_bcast_matrix
 
 @inline function _mul_phase!(buf, ϕ)
+    isone(ϕ) && return nothing
     buf .*= ϕ
     return
 end

@@ -19,10 +19,17 @@ struct Shifted_Lattice{D,Dim} <: AbstractLattice
     data::D
     shift::NTuple{Dim,Int64}
 
-    Base.@noinline function Shifted_Lattice(data, shift, ::Val{Dim}) where {Dim}
+    @inline function Shifted_Lattice(data, shift, ::Val{Dim}) where {Dim}
         return new{typeof(data),Dim}(data, shift)
     end
 
+end
+
+# Internal lazy representation used only by halo-free kernels that implement
+# periodic indexing themselves. Public shift constructors never return it.
+struct _LazyShifted_Lattice{D,Dim} <: AbstractLattice
+    data::D
+    shift::NTuple{Dim,Int64}
 end
 
 struct Traceless_AntiHermitian{D} <: AbstractLattice
@@ -45,7 +52,11 @@ function Base.adjoint(data::TD) where {D,T,AT,TD<:Lattice{D,T,AT}}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 
-function Base.adjoint(data::T) where {D,Dim,T<:Shifted_Lattice{D,Dim}}
+@inline function Base.adjoint(data::T) where {D,Dim,T<:Shifted_Lattice{D,Dim}}
+    return Adjoint_Lattice{typeof(data)}(data)
+end
+
+@inline function Base.adjoint(data::T) where {D,Dim,T<:_LazyShifted_Lattice{D,Dim}}
     return Adjoint_Lattice{typeof(data)}(data)
 end
 
@@ -65,13 +76,16 @@ include("ND.jl")
 include("LinearAlgebras/staggered.jl")
 
 
-function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+@inline function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     return x.shift
 end
 
-function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx,D}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+@inline function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx,D}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     return x.data.shift
 end
+
+@inline get_shift(x::_LazyShifted_Lattice) = x.shift
+@inline get_shift(x::Adjoint_Lattice{<:_LazyShifted_Lattice}) = x.data.shift
 
 
 
@@ -115,6 +129,153 @@ Base.@noinline function Shifted_Lattice(data::TL, shift_in::TS) where {
     return Shifted_Lattice_construct(data, shift_in)
 end
 
+@inline function _periodic_shift_index(i::Integer, shift::Integer, n::Integer)
+    raw = i + shift
+    return mod(raw - 1, n) + 1, fld(raw - 1, n)
+end
+
+@inline function _global_core_indices(local_indices::NTuple{D,<:Integer}, coords, local_size) where D
+    return ntuple(d -> coords[d] * local_size[d] + local_indices[d], D)
+end
+
+@inline function _shifted_global_indices_and_phase(indices::NTuple{D,<:Integer}, shift,
+    global_size, phases, ::Type{T}) where {D,T}
+    shifted_indices = ntuple(d -> begin
+        shifted, _ = _periodic_shift_index(indices[d], shift[d], global_size[d])
+        shifted
+    end, D)
+
+    factor = one(T)
+    @inbounds for d in 1:D
+        _, wraps = _periodic_shift_index(indices[d], shift[d], global_size[d])
+        factor *= phases[d]^wraps
+    end
+    return shifted_indices, factor
+end
+
+@inline function kernel_periodic_shift_nowing!(i, C, A, ::Val{NC1}, ::Val{NC2},
+    dindexer, shift, coords, local_size, global_size, phases) where {NC1,NC2}
+    local_indices = delinearize(dindexer, i, 0)
+    global_indices = _global_core_indices(local_indices, coords, local_size)
+    source_indices, factor = _shifted_global_indices_and_phase(
+        global_indices, shift, global_size, phases, eltype(C))
+
+    @inbounds for jc in 1:NC2
+        for ic in 1:NC1
+            C[ic, jc, local_indices...] = factor * A[ic, jc, source_indices...]
+        end
+    end
+    return nothing
+end
+
+@inline _nowing_slab_indices(A, d, range) =
+    ntuple(i -> i == d + 2 ? range : Colon(), ndims(A))
+
+function _shift_one_dimension_host!(destination, source, data, d, direction)
+    local_length = data.PN[d]
+    if direction > 0
+        destination_range = 1:(local_length-1)
+        source_range = 2:local_length
+        send_range = 1:1
+        receive_range = local_length:local_length
+        send_rank = data.nbr[d][1]
+        receive_rank = data.nbr[d][2]
+        crosses_global_boundary = data.coords[d] == data.dims[d] - 1
+    else
+        destination_range = 2:local_length
+        source_range = 1:(local_length-1)
+        send_range = local_length:local_length
+        receive_range = 1:1
+        send_rank = data.nbr[d][2]
+        receive_rank = data.nbr[d][1]
+        crosses_global_boundary = data.coords[d] == 0
+    end
+
+    destination_indices = _nowing_slab_indices(destination, d, destination_range)
+    source_indices = _nowing_slab_indices(source, d, source_range)
+    @views copyto!(destination[destination_indices...], source[source_indices...])
+
+    send_indices = _nowing_slab_indices(source, d, send_range)
+    send_buffer = Array(@view source[send_indices...])
+    receive_buffer = similar(send_buffer)
+
+    if send_rank == data.myrank && receive_rank == data.myrank
+        copyto!(receive_buffer, send_buffer)
+    else
+        tag = 1200 + 2d + ifelse(direction > 0, 0, 1)
+        requests = MPI.Request[]
+        push!(requests, MPI.Irecv!(receive_buffer, receive_rank, tag, data.cart))
+        push!(requests, MPI.Isend(send_buffer, send_rank, tag, data.cart))
+        MPI.Waitall!(requests)
+    end
+
+    if crosses_global_boundary
+        phase = direction > 0 ? data.phases[d] : inv(data.phases[d])
+        _mul_phase!(receive_buffer, phase)
+    end
+    receive_indices = _nowing_slab_indices(destination, d, receive_range)
+    @views copyto!(destination[receive_indices...], receive_buffer)
+    return nothing
+end
+
+function _materialize_periodic_shift_mpi(data::TL, shift::NTuple{D,Int}) where {
+    D,T,AT,NC1,NC2,DI,
+    TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}
+}
+    current = Array(data.A)
+    scratch = similar(current)
+
+    for d in 1:D
+        direction = sign(shift[d])
+        for _ in 1:abs(shift[d])
+            _shift_one_dimension_host!(scratch, current, data, d, direction)
+            current, scratch = scratch, current
+        end
+    end
+
+    shifted = similar(data)
+    shifted.A .= JACC.array(current)
+    return shifted
+end
+
+function _materialize_periodic_shift(data::TL, shift::NTuple{D,Int}) where {
+    D,T,AT,NC1,NC2,DI,
+    TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}
+}
+    all(iszero, shift) && return data
+
+    if MPI.Comm_size(data.cart) > 1
+        return _materialize_periodic_shift_mpi(data, shift)
+    end
+
+    shifted = similar(data)
+    JACC.parallel_for(
+        prod(data.PN), kernel_periodic_shift_nowing!, shifted.A, data.A,
+        Val(NC1), Val(NC2), data.indexer, shift, data.coords, data.PN,
+        data.gsize, data.phases)
+    return shifted
+end
+
+@inline function Shifted_Lattice_construct(data::TL, shift_in::TS) where {
+    D,T,AT,NC1,NC2,DI,
+    TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI},TS
+}
+    shift = _as_shift_tuple(shift_in, Val(D))
+    shifted = _materialize_periodic_shift(data, shift)
+    zero_shift = ntuple(_ -> 0, D)
+    return Shifted_Lattice(shifted, zero_shift, Val(D))
+end
+
+@inline function _lazy_shift_nowing(data::TL, shift_in) where {
+    D,T,AT,NC1,NC2,DI,
+    TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}
+}
+    MPI.Comm_size(data.cart) == 1 || throw(ArgumentError(
+        "lazy nw=0 shifts are only available on a single MPI rank"))
+    shift = _as_shift_tuple(shift_in, Val(D))
+    return _LazyShifted_Lattice{typeof(data),D}(data, shift)
+end
+
 Base.@noinline function Shifted_Lattice_construct(data::TL, shift_in::TS) where {
     D,T,AT,NC1,NC2,nw,DI,
     TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TS
@@ -138,51 +299,18 @@ Base.@noinline function Shifted_Lattice_construct(data::TL, shift_in::TS) where 
     sl0 = similar(data)
     sl1 = similar(data)
     substitute!(sl0, data)
-
-    zeroT = ntuple(_ -> 0, D)
+    set_halo!(sl0)
 
     @inbounds for i in 1:D
-        s = shift[i]
-        if s == 0
-            continue
-        end
-
-        if s > nw
-            smallshift = s ÷ nw
-            step = ntuple(j -> (j == i ? nw : 0), D)
-            for _ in 1:smallshift
-                sls = Shifted_Lattice(sl0, step, Val(D))
-                substitute!(sl1, sls)
-                substitute!(sl0, sl1)
-            end
-            rems = s % nw
-            step2 = make_step(i, rems, Val(D))
-            #step2 = ntuple(j -> (j == i ? rems : 0), D)
-            sls = Shifted_Lattice(sl0, step2, Val(D))
-            substitute!(sl1, sls)
-            substitute!(sl0, sl1)
-
-        elseif s < -nw
-            as = -s
-            smallshift = as ÷ nw
-            step = ntuple(j -> (j == i ? -nw : 0), D)
-            for _ in 1:smallshift
-                sls = Shifted_Lattice(sl0, step, Val(D))
-                substitute!(sl1, sls)
-                substitute!(sl0, sl1)
-            end
-            rems = -(as % nw)
-            step2 = make_step(i, rems, Val(D))
-            #step2 = ntuple(j -> (j == i ? rems : 0), D)
-            sls = Shifted_Lattice(sl0, step2, Val(D))
-            substitute!(sl1, sls)
-            substitute!(sl0, sl1)
-
-        else
-            step = ntuple(j -> (j == i ? s : 0), D)
+        remaining = shift[i]
+        while !iszero(remaining)
+            amount = clamp(remaining, -nw, nw)
+            step = make_step(i, amount, Val(D))
             sls = Shifted_Lattice(sl0, step, Val(D))
             substitute!(sl1, sls)
-            substitute!(sl0, sl1)
+            set_halo!(sl1)
+            sl0, sl1 = sl1, sl0
+            remaining -= amount
         end
     end
 
@@ -199,6 +327,8 @@ Base.@noinline function shift_L(B, sh::NTuple{Dim,Int}) where {Dim}
     return Shifted_Lattice(B, sh)
     #return Shifted_Lattice{typeof(B),Dim}(B, sh)
 end
+
+include("LinearAlgebras/mul_nowing.jl")
 
 #=
 function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
@@ -372,7 +502,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
     b = get_matrix(B)
     s = JACC.parallel_reduce(
         prod(C.PN), kernelfunction, C.A, a, b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
-        ; init=zero(eltype(C.A), op=+)
+        ; init=zero(eltype(C.A)), op=+
     )
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
 end

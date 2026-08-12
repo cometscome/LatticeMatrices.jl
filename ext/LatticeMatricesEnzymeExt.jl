@@ -17,6 +17,39 @@ include("./AD/AD.jl")
 toann(a::DiffArg) = Enzyme.Active(a.x)
 toann(a::NoDiffArg) = Enzyme.Const(a.x)
 
+function _reject_nw0_enzyme_input(x::LatticeMatrix, label::AbstractString)
+    x.nw == 0 && throw(ArgumentError(
+        "Enzyme_derivative! does not support nw=0 lattice arguments ($label); " *
+        "construct every lattice argument and work buffer with nw >= 1."))
+    return nothing
+end
+
+function _reject_nw0_enzyme_input(xs::Tuple, label::AbstractString)
+    for (i, x) in pairs(xs)
+        _reject_nw0_enzyme_input(x, "$label[$i]")
+    end
+    return nothing
+end
+
+function _reject_nw0_enzyme_input(xs::AbstractVector, label::AbstractString)
+    for (i, x) in pairs(xs)
+        (x isa LatticeMatrix || x isa DiffArg || x isa NoDiffArg) || continue
+        _reject_nw0_enzyme_input(x, "$label[$i]")
+    end
+    return nothing
+end
+
+_reject_nw0_enzyme_input(x::Union{DiffArg,NoDiffArg}, label::AbstractString) =
+    _reject_nw0_enzyme_input(x.x, label)
+_reject_nw0_enzyme_input(::Any, ::AbstractString) = nothing
+
+function _validate_enzyme_inputs(inputs::Pair...)
+    for (label, value) in inputs
+        _reject_nw0_enzyme_input(value, string(label))
+    end
+    return nothing
+end
+
 function _fold_and_zero!(ls::LatticeMatrix)
     for d in length(ls.PN):-1:1
         fold_halo_dim_to_core_grad!(ls, d)
@@ -59,6 +92,11 @@ function Enzyme_derivative!(
     phitemp=nothing,
     dphitemp=nothing
 )
+    _validate_enzyme_inputs(
+        "U1" => U1, "U2" => U2, "U3" => U3, "U4" => U4,
+        "dfdU1" => dfdU1, "dfdU2" => dfdU2, "dfdU3" => dfdU3, "dfdU4" => dfdU4,
+        "args" => args, "temp" => temp, "dtemp" => dtemp,
+        "phitemp" => phitemp, "dphitemp" => dphitemp)
     #println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
@@ -129,6 +167,10 @@ function Enzyme_derivative!(
     temp=nothing,
     dtemp=nothing
 )
+    _validate_enzyme_inputs(
+        "U1" => U1, "U2" => U2, "U3" => U3,
+        "dfdU1" => dfdU1, "dfdU2" => dfdU2, "dfdU3" => dfdU3,
+        "args" => args, "temp" => temp, "dtemp" => dtemp)
     println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
@@ -181,6 +223,10 @@ function Enzyme_derivative!(
     temp=nothing,
     dtemp=nothing
 )
+    _validate_enzyme_inputs(
+        "U1" => U1, "U2" => U2,
+        "dfdU1" => dfdU1, "dfdU2" => dfdU2,
+        "args" => args, "temp" => temp, "dtemp" => dtemp)
     println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
@@ -227,6 +273,9 @@ function Enzyme_derivative!(
     temp=nothing,
     dtemp=nothing
 )
+    _validate_enzyme_inputs(
+        "U1" => U1, "dfdU1" => dfdU1,
+        "args" => args, "temp" => temp, "dtemp" => dtemp)
     println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated

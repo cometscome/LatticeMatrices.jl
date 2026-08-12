@@ -711,3 +711,92 @@ function kernel_adjoint_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdat
 
 
 end
+
+# ---------------------------------------------------------------------------
+# Halo-free Wilson kernels (nw == 0)
+# ---------------------------------------------------------------------------
+
+@inline function kernel_initialize_WilsonDiracOperator4D_nowing!(
+    i, C, ψ, ::Val{NC1}, dindexer, ::Val{copy_input}) where {NC1,copy_input}
+    indices = delinearize(dindexer, i, 0)
+    @inbounds for ia in 1:4
+        for ic in 1:NC1
+            value = ψ[ic, ia, indices...]
+            C[ic, ia, indices...] = copy_input ? value : zero(value)
+        end
+    end
+    return nothing
+end
+
+@inline function kernel_WilsonDiracOperator4D_direction_nowing!(
+    i, C, U, Uminus, ψplus, ψminus, coefficient,
+    ::Val{NC1}, dindexer, op_plus, op_minus) where NC1
+    indices = delinearize(dindexer, i, 0)
+
+    @inbounds for ic in 1:NC1
+        for jc in 1:NC1
+            vplus = mul_op(op_plus, ψplus, jc, indices)
+            vminus = mul_op(op_minus, ψminus, jc, indices)
+            uplus = U[ic, jc, indices...]
+            uminus = Uminus[jc, ic, indices...]'
+            for ia in 1:4
+                C[ic, ia, indices...] += coefficient *
+                    (uplus * vplus[ia] + uminus * vminus[ia])
+            end
+        end
+    end
+    return nothing
+end
+
+function _apply_WilsonDiracOperator4D_nowing!(C, U, ψ, coefficient,
+    copy_input::Bool, adjoint_operator::Bool)
+    all(u -> iszero(u.nw), U) || throw(ArgumentError(
+        "nw=0 Wilson operators require nw=0 gauge fields"))
+
+    JACC.parallel_for(
+        prod(C.PN), kernel_initialize_WilsonDiracOperator4D_nowing!,
+        C.A, ψ.A, Val(C.NC1), C.indexer, Val(copy_input))
+
+    plus_operators = adjoint_operator ? oneplusγs : oneminusγs
+    minus_operators = adjoint_operator ? oneminusγs : oneplusγs
+
+    for d in 1:4
+        ψplus = _materialize_periodic_shift(ψ, shifts_p[d])
+        ψminus = _materialize_periodic_shift(ψ, shifts_m[d])
+        Uminus = _materialize_periodic_shift(U[d], shifts_m[d])
+
+        JACC.parallel_for(
+            prod(C.PN), kernel_WilsonDiracOperator4D_direction_nowing!,
+            C.A, U[d].A, Uminus.A, ψplus.A, ψminus.A, coefficient,
+            Val(C.NC1), C.indexer, plus_operators[d], minus_operators[d])
+    end
+    return C
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::WilsonDiracOperator4D, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.U, ψ, -Dirac.κ, true, false)
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::Adjoint_WilsonDiracOperator4D, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.parent.U, ψ, -Dirac.parent.κ, true, true)
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::WilsonDiracOperator4D_Donly, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.U, ψ, 0.5, false, false)
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::Adjoint_WilsonDiracOperator4D_Donly, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.parent.U, ψ, 0.5, false, true)
+end

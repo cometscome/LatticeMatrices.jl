@@ -85,7 +85,7 @@ function LinearAlgebra.mul!(C::TC,
 
 
     
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_D5DW_MobiusDomainwallOperator5D!,
         Cdata, U1, U2, U3, U4, mass, wilson_params, ψdata,
         Val(NC1), Val(nw), C.indexer, Val(L5), coeff_plus, coeff_minus)
@@ -145,7 +145,7 @@ function D4x_5D!(C::TC,U,ψ::Tp,coeff) where {T1,AT1,NC1,nw,DI,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_D4x_5D_single!,
         Cdata, U1, U2, U3, U4, ψdata,coeff,
         Val(NC1), Val(nw), C.indexer)
@@ -460,7 +460,7 @@ function apply_F_5D!(C::TC,mass,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
 
 
     
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_apply_F!,
         Cdata, ψdata,
         Val(NC1), mass,Val(L5), Val(nw), C.indexer)
@@ -512,7 +512,7 @@ function apply_δF_5D!(C::TC,mass,L5,ψ::Tp) where {T1,AT1,NC1,nw,DI,
 
 
     
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_apply_δF!,
         Cdata, ψdata,
         Val(NC1), mass,Val(L5), Val(nw), C.indexer)
@@ -665,7 +665,7 @@ function LinearAlgebra.mul!(C::TC,
     #println("mass = ", mass)
 
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_adjoint_D5DW_MobiusDomainwallOperator5D!,
         Cdata, U1, U2, U3, U4, mass, wilson_params, ψdata,
         Val(NC1), Val(nw), C.indexer, Val(L5), coeff_plus, coeff_minus)

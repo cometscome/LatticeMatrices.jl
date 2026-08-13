@@ -25,7 +25,7 @@ const sr3i2 = 2 * sr3i
 function traceless_antihermitian!(A::TA, B::TB) where {D,T1,AT1,N,nw,DI,
     TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI},TB<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(A,
         prod(A.PN), kernel_traceless_antihermitian!, A.A, B.A, Val(N), Val(nw), A.indexer
     )
     #display(A.A[:, :, 2, 2, 2, 2])
@@ -138,7 +138,7 @@ end
 function traceless_antihermitian!(A::TA, factor, B::TB) where {D,T1,AT1,N,nw,DI,
     TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI},TB<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(A,
         prod(A.PN), kernel_traceless_antihermitian!, A.A, factor, B.A, Val(N), Val(nw), A.indexer
     )
     #display(A.A[:, :, 2, 2, 2, 2])
@@ -252,16 +252,16 @@ end
 
 function traceless_antihermitian!(A::TA) where {D,T1,AT1,N,nw,DI,TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
     if N == 3
-        JACC.parallel_for(
+        _parallel_for_mutating!(A,
             prod(A.PN), kernel_traceless_antihermitian_4DNC3!, A.A, A.nw, A.indexer)
     elseif N == 2
-        JACC.parallel_for(
+        _parallel_for_mutating!(A,
             prod(A.PN), kernel_traceless_antihermitian_4DNC2!, A.A, A.nw, A.indexer)
     elseif N == 1
         @warn("No traceless antihermitian condition applied for SU(1). This is a scalar lattice, so no special unitary condition is needed.")
         # For N=1, no SU(N) condition is needed, as it is just a scalar.
     else
-        JACC.parallel_for(
+        _parallel_for_mutating!(A,
             prod(A.PN), kernel_traceless_antihermitian_4D!, A.A, N, A.nw, A.indexer)
         #error("Unsupported number of colors for special unitary lattice: $N")
     end
@@ -272,16 +272,16 @@ function traceless_antihermitian!(A::TA) where {T,AT,N,TA<:TALattice{4,T,AT,N}}
     traceless_antihermitian!(A.lt)
     #=
     if N == 3
-        JACC.parallel_for(
+        _parallel_for_mutating!(A.lt,
             prod(A.lt.PN), kernel_traceless_antihermitian_4DNC3!, A.lt.A, A.lt.nw, A.lt.PN)
     elseif N == 2
-        JACC.parallel_for(
+        _parallel_for_mutating!(A.lt,
             prod(A.lt.PN), kernel_traceless_antihermitian_4DNC2!, A.lt.A, A.lt.nw, A.lt.PN)
     elseif N == 1
         @warn("No traceless antihermitian condition applied for SU(1). This is a scalar lattice, so no special unitary condition is needed.")
         # For N=1, no SU(N) condition is needed, as it is just a scalar.
     else
-        JACC.parallel_for(
+        _parallel_for_mutating!(A.lt,
             prod(A.lt.PN), kernel_traceless_antihermitian_4D!, A.lt.A, N, A.lt.nw, A.lt.PN)
         #error("Unsupported number of colors for special unitary lattice: $N")
     end
@@ -396,15 +396,15 @@ function expt!(C::TC, A::TA, t::S=one(S)) where {T,AT,NC1,NC2,S<:Number,T1,AT1,
     TC<:LatticeMatrix{4,T,AT,NC1,NC2},TA<:TALattice{4,T1,AT1,NC1}}
     @assert NC1 == NC2 "Matrix exponentiation requires square matrices, but got $(NC1) x $(NC2)."
     if NC1 == 3
-        JACC.parallel_for(
+        _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt_SU3!, C.A, A.lt.A, C.PN, t
         )
     elseif NC1 == 2
-        JACC.parallel_for(
+        _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt_SU2!, C.A, A.lt.A, C.PN, t
         )
     else
-        JACC.parallel_for(
+        _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt!, C.A, A.lt.A, C.PN, t, Val(NC1)
         )
     end

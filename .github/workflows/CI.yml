@@ -16,6 +16,8 @@ jobs:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      JULIA_NUM_THREADS: 4
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
       actions: write
       contents: read
@@ -36,5 +38,27 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
+      - name: Verify base package without Enzyme
+        env:
+          JULIA_LOAD_PATH: "@:@stdlib"
+        run: |
+          julia --startup-file=no -e '
+            using Pkg
+            Pkg.activate(; temp=true)
+            Pkg.develop(path=pwd())
+            @assert Base.find_package("Enzyme") === nothing
+            using LatticeMatrices
+            @assert Base.get_extension(
+              LatticeMatrices, :LatticeMatricesEnzymeExt) === nothing
+          '
       - uses: julia-actions/julia-buildpkg@v1
+      - name: MPI halo epoch regression (2 ranks)
+        if: matrix.version == '1.11'
+        run: |
+          julia --project=. --startup-file=no -e '
+            using MPI
+            MPI.install_mpiexecjl(destdir=".ci-bin", force=true)
+          '
+          .ci-bin/mpiexecjl -n 2 \
+            julia --project=. --startup-file=no test/mpi_halo.jl
       - uses: julia-actions/julia-runtest@v1

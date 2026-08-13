@@ -87,7 +87,7 @@ function _mul_periodic_nowing!(
 ) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NCA1,NCA2,NCB1,NCB2,NC3,DI}
     alpha_in = T1(alpha)
     beta_in = T1(beta)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_periodic_nowing!,
         C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), C.indexer,
         shiftA, shiftB, A.gsize, B.gsize, A.phases, B.phases,
@@ -263,7 +263,7 @@ function substitute!(
     A::_LazyShifted_Lattice{L,D},
 ) where {D,T1,T2,AT1,AT2,NC1,NC2,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,0,DI}}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dsubstitute_periodic_nowing!,
         C.A, A.data.A, Val(NC1), Val(NC2), C.indexer, get_shift(A),
         A.data.gsize, A.data.phases, Val(false))
@@ -277,7 +277,7 @@ function substitute!(
 ) where {D,T1,T2,AT1,AT2,NC1,NC2,DI,
     L<:LatticeMatrix{D,T2,AT2,NC2,NC1,0,DI}}
     shifted_A = A.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dsubstitute_periodic_nowing!,
         C.A, shifted_A.data.A, Val(NC1), Val(NC2), C.indexer, get_shift(A),
         shifted_A.data.gsize, shifted_A.data.phases, Val(true))

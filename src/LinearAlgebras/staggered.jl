@@ -47,7 +47,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Adata = A.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
     )
     #set_halo!(C)
@@ -60,7 +60,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -73,7 +73,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -85,7 +85,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Adata = A.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
     )
     #set_halo!(C)
@@ -97,7 +97,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -110,7 +110,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -122,7 +122,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -134,7 +134,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Adata = A.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
     )
     #set_halo!(C)
@@ -147,7 +147,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -159,7 +159,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -171,7 +171,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
     Adata = A.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
     )
     #set_halo!(C)
@@ -184,7 +184,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     Bdata = B.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -196,7 +196,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Adata = A.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
     )
     #set_halo!(C)
@@ -208,7 +208,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -221,7 +221,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -233,7 +233,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Adata = A.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
     )
     #set_halo!(C)
@@ -245,7 +245,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -258,7 +258,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -270,7 +270,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Adata = A.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
     )
     #set_halo!(C)
@@ -282,7 +282,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -295,7 +295,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
     )
     #set_halo!(C)
@@ -307,7 +307,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     TA<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Adata = A.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
     )
     #set_halo!(C)
@@ -319,7 +319,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},TB<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)
@@ -332,7 +332,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     Bdata = B.data.data
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
     )
     #set_halo!(C)

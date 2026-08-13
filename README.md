@@ -132,10 +132,52 @@ LatticeMatrix(NC1, NC2, dim, gsize, PEs;
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
 ```
 
-- **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.  
+- **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.
 - **Phases**: wrap-around phases per dimension. A positive-direction wrap applies `phase`,
   while a negative-direction wrap applies `inv(phase)`.
 - **Exchange**: `set_halo!(ls)` calls `exchange_dim!(ls, d)` for each spatial dimension `d`.
+
+#### Halo epochs and automatic synchronization
+
+Each `LatticeMatrix` tracks a core-data epoch and a halo epoch. Public
+mutating operations advance the core epoch. A nonzero `Shifted_Lattice` read
+calls `ensure_halo!`, which exchanges halos only when the two epochs differ.
+Reusing a shifted wrapper after another mutation is safe: the wrapper checks
+the source lattice again when its data is read.
+
+```julia
+add_matrix!(M, M2)               # core epoch advances; halo is now dirty
+@assert halo_is_dirty(M)
+
+Mp = Shifted_Lattice(M, (1, 0, 0, 0))
+@assert !halo_is_dirty(M)        # the shift synchronized the halo on demand
+
+epochs = halo_epochs(M)          # (core=..., halo=...)
+ensure_halo!(M)                  # no communication while already clean
+@assert halo_epochs(M) == epochs
+```
+
+Writing through the storage field bypasses the public mutating API. Call
+`mark_halo_dirty!` once after the core writes are complete:
+
+```julia
+@views M.A[:, :, interior_ranges...] .= new_values
+mark_halo_dirty!(M)
+
+# Optional eager synchronization. Usually a later shift can do this lazily.
+ensure_halo!(M)
+```
+
+Backend packages wrapping `LatticeMatrix` have the same obligation: a kernel
+that writes directly to `M.A` must call `mark_halo_dirty!(M)` before a shifted
+read or `set_halo!`. Operations that use the exported LatticeMatrices mutating
+API are marked automatically. With `nw=0`, the core and halo epochs remain
+equal and `ensure_halo!` is a no-op.
+
+Halo exchange is an MPI collective operation. All ranks in the Cartesian
+communicator must therefore execute mutations and later shifted reads in the
+same control flow. Do not let only a subset of ranks enter `ensure_halo!` or a
+nonzero shifted operation.
 
 ---
 
@@ -288,6 +330,9 @@ julia --project -e 'using Pkg; Pkg.test("LatticeMatrices")'
 # MPI (choose ranks and an MPI launcher)
 mpiexec -n 4 julia --project test/runtests.jl
 
+# Focused two-rank halo/epoch regression used by CI
+mpiexec -n 2 julia --project test/mpi_halo.jl
+
 # With GPUs (example; make sure CUDA/ROCm works and select a JACC backend)
 julia --project -e 'using JACC; JACC.@init_backend; using Pkg; Pkg.test()'
 ```
@@ -297,6 +342,21 @@ Internally, the tests:
 - construct `LatticeMatrix` objects on a Cartesian grid `PEs`,
 - verify `mul!` for all nine combinations with/without adjoint and with/without shifts,
 - use `DIndexer` to map between linear and multi-indices, including halo offsets.
+
+The epoch overhead benchmark has no extra package dependencies:
+
+```bash
+# Single rank
+julia --project benchmark/halo_epochs.jl
+
+# Include real inter-rank halo communication
+mpiexec -n 2 julia --project benchmark/halo_epochs.jl
+```
+
+It reports the median time for `mark_halo_dirty!`, a clean `ensure_halo!`, a
+dirty synchronization, and an unconditional `set_halo!`. Environment variables
+`LM_BENCH_FAST_ITERS`, `LM_BENCH_SYNC_ITERS`, `LM_BENCH_SAMPLES`, and
+`LM_BENCH_LOCAL_X` control the workload.
 
 ---
 
@@ -316,6 +376,10 @@ LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64,
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
 
 set_halo!(ls)
+ensure_halo!(ls)
+mark_halo_dirty!(ls)
+halo_is_dirty(ls)::Bool
+halo_epochs(ls)::NamedTuple{(:core, :halo)}
 exchange_dim!(ls, d::Int)
 
 gather_matrix(ls; root=0)::Union{Array{T},Nothing}

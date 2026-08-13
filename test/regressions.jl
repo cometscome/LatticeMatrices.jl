@@ -7,6 +7,15 @@ function _reduce_three_lattices_with_scale(i, C, A, B, scale,
     return scale * (C[1, 1, indices...] + A[1, 1, indices...] + B[1, 1, indices...])
 end
 
+function _deterministic_checkerboard_map!(U, V)
+    for jc in 1:size(U, 2)
+        for ic in 1:size(U, 1)
+            U[ic, jc] = 2 * U[ic, jc] - conj(V[jc, ic])
+        end
+    end
+    return nothing
+end
+
 function regressiontests()
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
 
@@ -81,6 +90,252 @@ function regressiontests()
             result = gather_matrix(restored)
             if rank == 0
                 @test result == A
+            end
+        end
+    end
+
+    @testset "checkerboard clear uses global coordinates" begin
+        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        global_size = (3 * nprocs, 2, 2, 2)
+        process_grid = (nprocs, 1, 1, 1)
+        original = reshape(
+            ComplexF64.(1:(4 * prod(global_size))),
+            2,
+            2,
+            global_size...,
+        )
+
+        for nw in (0, 1)
+            for target_even in (true, false)
+                M = LatticeMatrix(original, 4, process_grid; nw)
+                clear_matrix!(M, target_even)
+
+                result = gather_matrix(M)
+                expected = copy(original)
+                for site in CartesianIndices(global_size)
+                    global_indices = Tuple(site)
+                    if iseven(sum(global_indices)) == target_even
+                        @views expected[:, :, global_indices...] .= zero(eltype(expected))
+                    end
+                end
+
+                if rank == 0
+                    @test result == expected
+                end
+
+                if nw == 1
+                    shifted = similar(M)
+                    substitute!(shifted, Shifted_Lattice(M, (1, 0, 0, 0)))
+                    shifted_result = gather_matrix(shifted)
+                    if rank == 0
+                        @test shifted_result == circshift(expected, (0, 0, -1, 0, 0, 0))
+                    end
+                end
+            end
+        end
+    end
+
+    @testset "checkerboard addition" begin
+        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        global_size = (3 * nprocs, 2, 2, 2)
+        process_grid = (nprocs, 1, 1, 1)
+        zero_shift = (0, 0, 0, 0)
+        source_shift = (1, 0, 0, 0)
+
+        for nc in (2, 3)
+            nvalues = nc * nc * prod(global_size)
+            original_a = reshape(
+                [complex(Float64(2i + 1), Float64(-i)) for i in 1:nvalues],
+                nc,
+                nc,
+                global_size...,
+            )
+            initial_c = reshape(
+                [complex(Float64(-3i), Float64(i + 2)) for i in 1:nvalues],
+                nc,
+                nc,
+                global_size...,
+            )
+
+            A = LatticeMatrix(original_a, 4, process_grid; nw=1)
+            shifted_a = Shifted_Lattice(A, source_shift)
+            operand_specs = (
+                (A, zero_shift, false),
+                (shifted_a, source_shift, false),
+                (A', zero_shift, true),
+                (shifted_a', source_shift, true),
+            )
+
+            for (operand, shift, source_adjoint) in operand_specs
+                for target_even in (true, false)
+                    for α in (1.0, -0.5)
+                        masked = LatticeMatrix(initial_c, 4, process_grid; nw=1)
+                        add_matrix_evenodd!(masked, operand, target_even, α)
+                        result = gather_matrix(masked)
+
+                        if rank == 0
+                            expected = copy(initial_c)
+                            for site in CartesianIndices(global_size)
+                                global_indices = Tuple(site)
+                                if iseven(sum(global_indices)) == target_even
+                                    source_indices = ntuple(
+                                        d -> mod1(
+                                            global_indices[d] + shift[d],
+                                            global_size[d],
+                                        ),
+                                        4,
+                                    )
+                                    for jc in 1:nc
+                                        for ic in 1:nc
+                                            value = source_adjoint ?
+                                                conj(original_a[jc, ic, source_indices...]) :
+                                                original_a[ic, jc, source_indices...]
+                                            expected[ic, jc, global_indices...] += α * value
+                                        end
+                                    end
+                                end
+                            end
+                            @test result == expected
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    @testset "checkerboard site map" begin
+        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        global_size = (3 * nprocs, 2, 2, 2)
+        process_grid = (nprocs, 1, 1, 1)
+        shift = (1, 0, 0, 0)
+
+        for nc in (2, 3)
+            nvalues = nc * nc * prod(global_size)
+            original_u = reshape(
+                [complex(Float64(i), Float64(2i + 1)) for i in 1:nvalues],
+                nc,
+                nc,
+                global_size...,
+            )
+            original_v = reshape(
+                [complex(Float64(3i - 1), Float64(-i)) for i in 1:nvalues],
+                nc,
+                nc,
+                global_size...,
+            )
+
+            for target_even in (true, false)
+                U = LatticeMatrix(original_u, 4, process_grid; nw=1)
+                V = LatticeMatrix(original_v, 4, process_grid; nw=1)
+                map_matrix_evenodd!(U, V, _deterministic_checkerboard_map!, target_even)
+
+                result = gather_matrix(U)
+                expected = copy(original_u)
+                for site in CartesianIndices(global_size)
+                    global_indices = Tuple(site)
+                    if iseven(sum(global_indices)) == target_even
+                        for jc in 1:nc
+                            for ic in 1:nc
+                                expected[ic, jc, global_indices...] =
+                                    2 * original_u[ic, jc, global_indices...] -
+                                    conj(original_v[jc, ic, global_indices...])
+                            end
+                        end
+                    end
+                end
+
+                shifted = similar(U)
+                substitute!(shifted, Shifted_Lattice(U, shift))
+                shifted_result = gather_matrix(shifted)
+
+                if rank == 0
+                    @test result == expected
+                    @test shifted_result == circshift(expected, (0, 0, -1, 0, 0, 0))
+                end
+            end
+        end
+    end
+
+    @testset "checkerboard shifted multiplication" begin
+        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        global_size = (3 * nprocs, 2, 2, 2)
+        process_grid = (nprocs, 1, 1, 1)
+        shift_a = (1, 0, 0, 0)
+        shift_b = (-1, 0, 0, 0)
+
+        for nc in (2, 3)
+            nvalues = nc * nc * prod(global_size)
+            original_a = reshape(
+                [complex(Float64(i), Float64(2i + 1)) for i in 1:nvalues],
+                nc,
+                nc,
+                global_size...,
+            )
+            original_b = reshape(
+                [complex(Float64(3i - 1), Float64(-i)) for i in 1:nvalues],
+                nc,
+                nc,
+                global_size...,
+            )
+            sentinel = complex(-17.0, 5.0)
+            initial_c = fill(sentinel, nc, nc, global_size...)
+
+            A = LatticeMatrix(original_a, 4, process_grid; nw=1)
+            B = LatticeMatrix(original_b, 4, process_grid; nw=1)
+            shifted_a = Shifted_Lattice(A, shift_a)
+            shifted_b = Shifted_Lattice(B, shift_b)
+            adjoint_pairs = ((false, false), (true, false), (false, true), (true, true))
+
+            for (adjoint_a, adjoint_b) in adjoint_pairs
+                operand_a = adjoint_a ? shifted_a' : shifted_a
+                operand_b = adjoint_b ? shifted_b' : shifted_b
+                reference = zeros(ComplexF64, nc, nc, global_size...)
+
+                for site in CartesianIndices(global_size)
+                    global_indices = Tuple(site)
+                    source_a = ntuple(
+                        d -> mod1(global_indices[d] + shift_a[d], global_size[d]),
+                        4,
+                    )
+                    source_b = ntuple(
+                        d -> mod1(global_indices[d] + shift_b[d], global_size[d]),
+                        4,
+                    )
+
+                    for jc in 1:nc
+                        for ic in 1:nc
+                            value = zero(eltype(reference))
+                            for kc in 1:nc
+                                value_a = adjoint_a ?
+                                    conj(original_a[kc, ic, source_a...]) :
+                                    original_a[ic, kc, source_a...]
+                                value_b = adjoint_b ?
+                                    conj(original_b[jc, kc, source_b...]) :
+                                    original_b[kc, jc, source_b...]
+                                value += value_a * value_b
+                            end
+                            reference[ic, jc, global_indices...] = value
+                        end
+                    end
+                end
+
+                for target_even in (true, false)
+                    masked = LatticeMatrix(initial_c, 4, process_grid; nw=1)
+                    mul!(masked, operand_a, operand_b, target_even)
+                    result = gather_matrix(masked)
+
+                    if rank == 0
+                        expected = copy(initial_c)
+                        for site in CartesianIndices(global_size)
+                            global_indices = Tuple(site)
+                            if iseven(sum(global_indices)) == target_even
+                                @views expected[:, :, global_indices...] .=
+                                    reference[:, :, global_indices...]
+                            end
+                        end
+                        @test result == expected
+                    end
+                end
             end
         end
     end

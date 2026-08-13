@@ -19,6 +19,13 @@ abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} 
 # ---------------------------------------------------------------------------
 # container  (faces / derived datatypes are GONE)
 # ---------------------------------------------------------------------------
+mutable struct HaloEpoch
+    core::UInt64
+    halo::UInt64
+end
+
+HaloEpoch() = HaloEpoch(0, 0)
+
 #struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
 struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
     nw::Int                          # ghost width
@@ -41,8 +48,46 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
     comm::MPI.Comm
     indexer::DI
     temps::PreallocatedArray{AT,Union{Nothing,String},false}
+    halo_epoch::HaloEpoch
     #stride::NTuple{D,Int}
 end
+
+"""
+    mark_halo_dirty!(lattice)
+
+Advance the core-data epoch after modifying the local lattice data. Public
+mutating operations call this automatically. Call it explicitly after writing
+through `lattice.A` directly.
+
+On an MPI lattice, rank-local mutations and later shifted reads must follow the
+same control flow on every rank because halo synchronization is collective.
+"""
+@inline function mark_halo_dirty!(ls::LatticeMatrix)
+    epoch = ls.halo_epoch
+    epoch.core += UInt64(1)
+    if iszero(ls.nw)
+        epoch.halo = epoch.core
+    end
+    return nothing
+end
+
+@inline function _mark_halo_clean!(ls::LatticeMatrix)
+    ls.halo_epoch.halo = ls.halo_epoch.core
+    return nothing
+end
+
+"""Return whether the stored halo is older than the lattice core data."""
+@inline halo_is_dirty(ls::LatticeMatrix) = ls.halo_epoch.core != ls.halo_epoch.halo
+
+"""Return the current `(core, halo)` epochs as a named tuple."""
+@inline halo_epochs(ls::LatticeMatrix) = (core=ls.halo_epoch.core, halo=ls.halo_epoch.halo)
+
+function _parallel_for_mutating!(destination::LatticeMatrix, args...; kwargs...)
+    mark_halo_dirty!(destination)
+    return JACC.parallel_for(args...; kwargs...)
+end
+
+export mark_halo_dirty!, halo_is_dirty, halo_epochs
 
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
@@ -72,7 +117,8 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         ls.PN,
         ls.comm,
         ls.indexer,
-        temps
+        temps,
+        HaloEpoch()
     )
 end
 
@@ -170,7 +216,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
     return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, buf_host, MPI.Comm_rank(cart), PN, comm0, indexer, temps)
+        A, buf, buf_host, MPI.Comm_rank(cart), PN, comm0, indexer, temps, HaloEpoch())
 end
 
 function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
@@ -217,6 +263,7 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
     Agpu = JACC.array(Acpu)
     ls.A .= Agpu
 
+    mark_halo_dirty!(ls)
     set_halo!(ls)
     #println(ls.A)
 
@@ -292,7 +339,10 @@ end
 
 
 
-Base.@noinline set_halo!(::TL) where {D,T,AT,NC1,NC2,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}} = nothing
+Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}}
+    _mark_halo_clean!(ls)
+    return nothing
+end
 
 Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     # Single-process lattices do not need MPI communication. Keep halo updates local.
@@ -300,13 +350,29 @@ Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:Lattic
         for id = 1:D
             exchange_dim_local!(ls, id)
         end
-        return
+        _mark_halo_clean!(ls)
+        return nothing
     end
     for id = 1:D
         exchange_dim!(ls, id)
     end
+    _mark_halo_clean!(ls)
+    return nothing
 end
 export set_halo!
+
+"""
+    ensure_halo!(lattice)
+
+Synchronize the halo only when its epoch is older than the core-data epoch.
+Shifted lattice operations call this automatically.
+"""
+Base.@noinline function ensure_halo!(ls::LatticeMatrix)
+    halo_is_dirty(ls) && set_halo!(ls)
+    return nothing
+end
+
+export ensure_halo!
 
 # ---------------------------------------------------------------------------
 # helpers that build proper “view tuples” without parsing errors

@@ -6,17 +6,21 @@ function numerical_differentiation(f, indices, A::T, params...) where {D,T1,AT1,
         for ic = 1:NC1
             Ap = deepcopy(A)
             Ap.A[ic, jc, indices...] += ϵ
+            mark_halo_dirty!(Ap)
             set_halo!(Ap)
             Am = deepcopy(A)
             Am.A[ic, jc, indices...] -= ϵ
+            mark_halo_dirty!(Am)
             set_halo!(Am)
             grad[ic, jc] = (f(Ap, params...) - f(Am, params...)) / (2ϵ)
 
             Ap = deepcopy(A)
             Ap.A[ic, jc, indices...] += im * ϵ
+            mark_halo_dirty!(Ap)
             set_halo!(Ap)
             Am = deepcopy(A)
             Am.A[ic, jc, indices...] -= im * ϵ
+            mark_halo_dirty!(Am)
             set_halo!(Am)
             grad[ic, jc] += im * (f(Ap, params...) - f(Am, params...)) / (2ϵ)
         end
@@ -34,14 +38,18 @@ function numerical_differentiation(f, indices, A::T, B::T, params...) where {D,T
         for ic = 1:NC1
             Ap = deepcopy(A)
             Ap.A[ic, jc, indices...] += ϵ
+            mark_halo_dirty!(Ap)
             Am = deepcopy(A)
             Am.A[ic, jc, indices...] -= ϵ
+            mark_halo_dirty!(Am)
             gradA[ic, jc] = (f(Ap, B, params...) - f(Am, B, params...)) / (2ϵ)
 
             Ap = deepcopy(A)
             Ap.A[ic, jc, indices...] += im * ϵ
+            mark_halo_dirty!(Ap)
             Am = deepcopy(A)
             Am.A[ic, jc, indices...] -= im * ϵ
+            mark_halo_dirty!(Am)
             gradA[ic, jc] += im * (f(Ap, B, params...) - f(Am, B, params...)) / (2ϵ)
         end
     end
@@ -53,14 +61,18 @@ function numerical_differentiation(f, indices, A::T, B::T, params...) where {D,T
         for ic = 1:NC1
             Bp = deepcopy(B)
             Bp.A[ic, jc, indices...] += ϵ
+            mark_halo_dirty!(Bp)
             Bm = deepcopy(B)
             Bm.A[ic, jc, indices...] -= ϵ
+            mark_halo_dirty!(Bm)
             gradB[ic, jc] = (f(A, Bp, params...) - f(A, Bm, params...)) / (2ϵ)
 
             Bp = deepcopy(B)
             Bp.A[ic, jc, indices...] += im * ϵ
+            mark_halo_dirty!(Bp)
             Bm = deepcopy(B)
             Bm.A[ic, jc, indices...] -= im * ϵ
+            mark_halo_dirty!(Bm)
             gradB[ic, jc] += im * (f(A, Bp, params...) - f(A, Bm, params...)) / (2ϵ)
         end
     end
@@ -138,18 +150,22 @@ function Wiltinger_numerical_derivative(f, indices, U;
             # --- Re part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += ϵ
+            mark_halo_dirty!(Up[k])
             set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= ϵ
+            mark_halo_dirty!(Um[k])
             set_halo!.(Um)
             dRe = (callf(Up) - callf(Um)) / (2ϵ)
 
             # --- Im part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += im * ϵ
+            mark_halo_dirty!(Up[k])
             set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= im * ϵ
+            mark_halo_dirty!(Um[k])
             set_halo!.(Um)
             dIm = (callf(Up) - callf(Um)) / (2ϵ)
 
@@ -221,18 +237,22 @@ function Numerical_derivative_Enzyme(f, indices, U1, U2, U3, U4;
             # --- Re part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += ϵ
+            mark_halo_dirty!(Up[k])
             set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= ϵ
+            mark_halo_dirty!(Um[k])
             set_halo!.(Um)
             dRe = (callf(Up...) - callf(Um...)) / (2ϵ)
 
             # --- Im part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += im * ϵ
+            mark_halo_dirty!(Up[k])
             set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= im * ϵ
+            mark_halo_dirty!(Um[k])
             set_halo!.(Um)
             dIm = (callf(Up...) - callf(Um...)) / (2ϵ)
 
@@ -303,18 +323,22 @@ function Numerical_derivative_Enzyme(f, indices, U;
             # --- Re part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += ϵ
+            mark_halo_dirty!(Up[k])
             set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= ϵ
+            mark_halo_dirty!(Um[k])
             set_halo!.(Um)
             dRe = (callf(Up) - callf(Um)) / (2ϵ)
 
             # --- Im part derivative ---
             Up = deepcopy(Uvec)
             Up[k].A[ic, jc, indices...] += im * ϵ
+            mark_halo_dirty!(Up[k])
             set_halo!.(Up)
             Um = deepcopy(Uvec)
             Um[k].A[ic, jc, indices...] -= im * ϵ
+            mark_halo_dirty!(Um[k])
             set_halo!.(Um)
             dIm = (callf(Up) - callf(Um)) / (2ϵ)
 

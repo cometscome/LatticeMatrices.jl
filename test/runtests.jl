@@ -7,6 +7,8 @@ using InteractiveUtils
 JACC.@init_backend
 using MPI, JACC, StaticArrays
 include("nw0.jl")
+include("site_rng.jl")
+include("halo_epoch.jl")
 include("regressions.jl")
 include("enzyme.jl")
 
@@ -939,7 +941,9 @@ end
 
 function main()
     MPI.Init()
+    site_rng_tests()
     nw0test()
+    halo_epoch_tests()
     regressiontests()
     enzymetests()
     #=

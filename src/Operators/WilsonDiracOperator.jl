@@ -36,7 +36,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_WilsonDiracOperator4D!, Cdata, U1, U2, U3, U4, Dirac.κ, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -261,7 +261,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_adjoint_WilsonDiracOperator4D!, Cdata, U1, U2, U3, U4, Dirac.parent.κ, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -418,7 +418,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_WilsonDiracOperator4D_Donly!, Cdata, U1, U2, U3, U4, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -576,7 +576,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_adjoint_WilsonDiracOperator4D_Donly!, Cdata, U1, U2, U3, U4, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -753,7 +753,7 @@ function _apply_WilsonDiracOperator4D_nowing!(C, U, ψ, coefficient,
     all(u -> iszero(u.nw), U) || throw(ArgumentError(
         "nw=0 Wilson operators require nw=0 gauge fields"))
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_initialize_WilsonDiracOperator4D_nowing!,
         C.A, ψ.A, Val(C.NC1), C.indexer, Val(copy_input))
 
@@ -765,7 +765,7 @@ function _apply_WilsonDiracOperator4D_nowing!(C, U, ψ, coefficient,
         ψminus = _materialize_periodic_shift(ψ, shifts_m[d])
         Uminus = _materialize_periodic_shift(U[d], shifts_m[d])
 
-        JACC.parallel_for(
+        _parallel_for_mutating!(C,
             prod(C.PN), kernel_WilsonDiracOperator4D_direction_nowing!,
             C.A, U[d].A, Uminus.A, ψplus.A, ψminus.A, coefficient,
             Val(C.NC1), C.indexer, plus_operators[d], minus_operators[d])

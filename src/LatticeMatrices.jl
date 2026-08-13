@@ -77,10 +77,12 @@ include("LinearAlgebras/staggered.jl")
 
 
 @inline function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+    ensure_halo!(x)
     return x.shift
 end
 
 @inline function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx,D}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+    ensure_halo!(x)
     return x.data.shift
 end
 
@@ -136,6 +138,68 @@ end
 
 @inline function _global_core_indices(local_indices::NTuple{D,<:Integer}, coords, local_size) where D
     return ntuple(d -> coords[d] * local_size[d] + local_indices[d], D)
+end
+
+"""
+    global_site_coordinates(local_indices, mpi_coordinates, local_size)
+    global_site_coordinates(lattice, local_indices)
+
+Convert one-based core-local lattice coordinates to one-based global
+coordinates. MPI Cartesian coordinates are expected to be zero-based, as in a
+[`LatticeMatrix`](@ref).
+"""
+@inline function global_site_coordinates(
+    local_indices::NTuple{D,<:Integer},
+    coords::NTuple{D,<:Integer},
+    local_size::NTuple{D,<:Integer},
+) where D
+    return _global_core_indices(local_indices, coords, local_size)
+end
+
+@inline function global_site_coordinates(
+    lattice::LatticeMatrix{D},
+    local_indices::NTuple{D,<:Integer},
+) where D
+    return global_site_coordinates(local_indices, lattice.coords, lattice.PN)
+end
+
+"""
+    global_site_id(global_coordinates, global_size)
+    global_site_id(lattice, local_indices)
+
+Return the zero-based global linear site id in Julia column-major order.  The
+result depends only on the global coordinates and lattice size, not on MPI rank
+or process-grid decomposition.
+"""
+@inline function global_site_id(
+    global_indices::NTuple{D,<:Integer},
+    global_size::NTuple{D,<:Integer},
+) where D
+    site = UInt64(0)
+    stride = UInt64(1)
+    @inbounds for d in 1:D
+        site += UInt64(global_indices[d] - 1) * stride
+        stride *= UInt64(global_size[d])
+    end
+    return site
+end
+
+@inline function global_site_id(
+    lattice::LatticeMatrix{D},
+    local_indices::NTuple{D,<:Integer},
+) where D
+    global_indices = global_site_coordinates(lattice, local_indices)
+    return global_site_id(global_indices, lattice.gsize)
+end
+
+export global_site_coordinates, global_site_id
+
+@inline function _global_site_is_even(local_indices::NTuple{D,<:Integer}, coords, local_size) where D
+    coordinate_sum = 0
+    @inbounds for d in 1:D
+        coordinate_sum += coords[d] * local_size[d] + local_indices[d]
+    end
+    return iszero(coordinate_sum & 1)
 end
 
 @inline function _shifted_global_indices_and_phase(indices::NTuple{D,<:Integer}, shift,
@@ -235,6 +299,7 @@ function _materialize_periodic_shift_mpi(data::TL, shift::NTuple{D,Int}) where {
 
     shifted = similar(data)
     shifted.A .= JACC.array(current)
+    mark_halo_dirty!(shifted)
     return shifted
 end
 
@@ -249,7 +314,7 @@ function _materialize_periodic_shift(data::TL, shift::NTuple{D,Int}) where {
     end
 
     shifted = similar(data)
-    JACC.parallel_for(
+    _parallel_for_mutating!(shifted,
         prod(data.PN), kernel_periodic_shift_nowing!, shifted.A, data.A,
         Val(NC1), Val(NC2), data.indexer, shift, data.coords, data.PN,
         data.gsize, data.phases)
@@ -292,6 +357,7 @@ Base.@noinline function Shifted_Lattice_construct(data::TL, shift_in::TS) where 
             end
         end
         if isinside
+            any(s -> !iszero(s), shift) && ensure_halo!(data)
             return Shifted_Lattice(data, shift, Val(D))
         end
     end
@@ -403,6 +469,7 @@ function get_matrix(a::T) where {T<:LatticeMatrix}
 end
 
 function get_matrix(a::T) where {T<:Shifted_Lattice}
+    ensure_halo!(a)
     return a.data.A
 end
 
@@ -412,11 +479,30 @@ function get_matrix(a::T) where {T<:Adjoint_Lattice}
 end
 
 function get_matrix(a::Adjoint_Lattice{T}) where {T<:Shifted_Lattice}
+    ensure_halo!(a)
     return a.data.data.A
 end
 
+@inline function ensure_halo!(a::Shifted_Lattice)
+    shift = getfield(a, :shift)
+    any(s -> !iszero(s), shift) && ensure_halo!(getfield(a, :data))
+    return nothing
+end
+
+@inline function ensure_halo!(a::Adjoint_Lattice{<:Shifted_Lattice})
+    ensure_halo!(getfield(a, :data))
+    return nothing
+end
+
+@inline function Base.getproperty(a::Shifted_Lattice, name::Symbol)
+    if name === :data
+        ensure_halo!(a)
+    end
+    return getfield(a, name)
+end
+
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, variables...) where {D,T1,AT1,NC1,NG,nw,DI}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernelfunction, C.A, variables..., Val(NC1), Val(NG), Val(nw), C.indexer
     )
 end
@@ -430,7 +516,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}) where {D,T1,AT1,NC1,NG,nw,DI}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernelfunction, C.A, Val(NC1), Val(NG), Val(nw), C.indexer
     )
 end
@@ -446,7 +532,7 @@ end
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, A::Lattice{D,T2,AT2,NC2,NG2,nw2}, variables...) where {D,T1,AT1,NC1,NG,nw,DI,
     T2,AT2,NC2,NG2,nw2}
     a = get_matrix(A)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernelfunction, C.A, a, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), C.indexer
     )
 
@@ -465,7 +551,7 @@ end
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, A::Lattice{D,T2,AT2,NC2,NG2,nw2}) where {D,T1,AT1,NC1,NG,nw,DI,
     T2,AT2,NC2,NG2,nw2}
     a = get_matrix(A)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernelfunction, C.A, a, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), C.indexer
     )
 
@@ -488,7 +574,7 @@ function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,N
     T3,AT3,NC3,NG3,nw3}
     a = get_matrix(A)
     b = get_matrix(B)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernelfunction, C.A, a, b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
     )
 end
@@ -514,7 +600,7 @@ function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,N
     T3,AT3,NC3,NG3,nw3}
     a = get_matrix(A)
     b = get_matrix(B)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernelfunction, C.A, a, b, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
     )
 end

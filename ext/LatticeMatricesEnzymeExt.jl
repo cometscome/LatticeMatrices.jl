@@ -8,6 +8,7 @@ import LatticeMatrices: Wirtinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme
 
 
 include("./AD/AD.jl")
+include("./AD/WilsonDiracOperator.jl")
 
 # Convert user-specified arguments into Enzyme annotations.
 #

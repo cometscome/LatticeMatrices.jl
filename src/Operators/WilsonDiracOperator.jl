@@ -11,6 +11,15 @@ end
 
 export WilsonDiracOperator4D
 
+@inline function _ensure_wilson_halo!(U, psi)
+    ensure_halo!(U[1])
+    ensure_halo!(U[2])
+    ensure_halo!(U[3])
+    ensure_halo!(U[4])
+    ensure_halo!(psi)
+    return nothing
+end
+
 struct Adjoint_WilsonDiracOperator4D{T} <: OperatorOnKernel
     parent::T
 end
@@ -29,7 +38,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:WilsonDiracOperator4D}
 
-
+    _ensure_wilson_halo!(Dirac.U, ψ)
     U1 = get_matrix(Dirac.U[1])
     U2 = get_matrix(Dirac.U[2])
     U3 = get_matrix(Dirac.U[3])
@@ -254,7 +263,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:Adjoint_WilsonDiracOperator4D}
 
-
+    _ensure_wilson_halo!(Dirac.parent.U, ψ)
     U1 = get_matrix(Dirac.parent.U[1])
     U2 = get_matrix(Dirac.parent.U[2])
     U3 = get_matrix(Dirac.parent.U[3])
@@ -411,7 +420,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:WilsonDiracOperator4D_Donly}
 
-
+    _ensure_wilson_halo!(Dirac.U, ψ)
     U1 = get_matrix(Dirac.U[1])
     U2 = get_matrix(Dirac.U[2])
     U3 = get_matrix(Dirac.U[3])
@@ -570,7 +579,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:Adjoint_WilsonDiracOperator4D_Donly}
 
-
+    _ensure_wilson_halo!(Dirac.parent.U, ψ)
     U1 = get_matrix(Dirac.parent.U[1])
     U2 = get_matrix(Dirac.parent.U[2])
     U3 = get_matrix(Dirac.parent.U[3])

@@ -9,6 +9,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 - **MPI** domain decomposition via a Cartesian communicator (halo width `nw`, periodic BCs).
 - **GPU-ready** through **[JACC.jl](https://github.com/JuliaORNL/JACC.jl)** (portable CPU/GPU kernels; CUDA/ROCm/Threads).
 - Fast, allocation-free **indexing helpers** for kernels: `DIndexer`, `linearize`, `delinearize`, `shiftindices`.
+- Lattice-QCD fermion operators including Wilson, clover, staggered, and a **HISQ stencil with level-1 Fat7 smearing**.
 
 > This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.
 
@@ -256,6 +257,7 @@ fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 | `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
 | `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
+| `HISQDiracOperator4D(X, L, mass; naik_epsilon)` | HISQ stencil for precomputed corrected fat links `X` and forward-anchored Naik transporters `L` | `nw=0` or `nw>=3` |
 | `D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)` | Five-dimensional Möbius/domain-wall operator with a four-dimensional gauge field | `nw>=1` only |
 
 All of these operators support both `mul!(out, D, psi)` and
@@ -395,8 +397,9 @@ the staggered sign at rank boundaries.
 
 Fermion boundary conditions are supplied through `psi_staggered.phases`; the
 example is antiperiodic in time.  Boundary phases must have unit magnitude,
-and the gauge links themselves must be periodic.  The implementation is the
-standard one-link/unimproved staggered operator, not an Asqtad or HISQ action.
+and the gauge links themselves must be periodic. This particular
+implementation is the standard one-link/unimproved staggered operator; HISQ
+is exposed separately through `HISQDiracOperator4D`.
 For the production `nw>=1` path, all eight neighbor terms and the mass are
 fused into one JACC kernel, with an unrolled `NC=3` matrix-vector path.  The
 `nw=0` fallback is supported but materializes shifted fields and is primarily
@@ -408,6 +411,65 @@ field spectrum, gauge covariance, odd-local-extent MPI decomposition, and
 fixed numerical fingerprints generated directly by Bridge++ 2.1.3.  The
 Bridge++ oracle source is
 [`test/reference/bridgepp_staggered_reference.cpp`](test/reference/bridgepp_staggered_reference.cpp).
+
+#### HISQ Fat7 level 1 and stencil (SIMULATeQCD convention)
+
+The first HISQ smearing level can be constructed directly from periodic thin
+links. It sums the 1-, 3-, 5-, and 7-link paths with the SIMULATeQCD
+coefficients `1/8`, `1/16`, `1/64`, and `1/384`:
+
+```julia
+V = hisq_fat7_level1(U)
+
+# An allocation-controlling form is also available.
+V_preallocated = [similar(link) for link in U]
+hisq_fat7_level1!(V_preallocated, U)
+```
+
+`V` is the unprojected level-1 field. This builder accepts `nw>=1`; a slower
+`nw=0` compatibility path is also provided. Input and output gauge links are
+periodic and do not contain staggered or fermion boundary phases. Its numerical
+results have been cross-checked against SIMULATeQCD.
+
+The Dirac stencil remains separate from smearing. Supply the corrected fat
+links `X[mu]`, which connect `x` to `x+mu`, and the forward-anchored Naik
+transporters `L[mu]`, which connect `x` to `x+3mu`:
+
+```julia
+nw_hisq = 3
+X = [LatticeMatrix(X_host[mu], 4, PEs; nw=nw_hisq) for mu in 1:4]
+L = [LatticeMatrix(L_host[mu], 4, PEs; nw=nw_hisq) for mu in 1:4]
+
+psi_hisq = LatticeMatrix(psi_staggered_host, 4, PEs;
+    nw=nw_hisq, phases=(1, 1, 1, -1))
+out_hisq = similar(psi_hisq)
+
+epsilon_N = 0.0
+hisq_links = HISQLinks4D(X, L)
+D_hisq = HISQDiracOperator4D(
+    hisq_links, mass; naik_epsilon=epsilon_N)
+mul!(out_hisq, D_hisq, psi_hisq)
+mul!(out_hisq, adjoint(D_hisq), psi_hisq)
+```
+
+The normalization follows SIMULATeQCD `HisqDSlash`:
+
+```math
+(D_{\mathrm{HISQ}}\psi)(x) = m\psi(x)
++ \sum_{\mu=1}^{4}\eta_\mu(x)\left\{
+\frac{1}{2}\left[X_\mu(x)\psi(x+\hat\mu)
+-X_\mu^\dagger(x-\hat\mu)\psi(x-\hat\mu)\right]
+-\frac{1+\epsilon_N}{48}\left[L_\mu(x)\psi(x+3\hat\mu)
+-L_\mu^\dagger(x-3\hat\mu)\psi(x-3\hat\mu)\right]
+\right\}.
+```
+
+The fused path requires a halo width of at least three and each local lattice
+extent must be at least that width. A halo-free `nw=0` compatibility path is
+also available. Construction of the final `X` and `L` is not yet one call:
+U(3) reunitarization, the second corrected smearing with its Lepage term, and
+the Naik product remain separate implementation stages after the available
+level-1 Fat7 builder.
 
 #### Five-dimensional Möbius/domain-wall example
 
@@ -627,6 +689,10 @@ WilsonDiracOperator4D(U, kappa)
 WilsonDiracOperator4D_Donly(U)
 WilsonDiracCloverOperator4D(U, kappa, cSW)
 StaggeredDiracOperator4D(U, mass)
+hisq_fat7_level1(U)
+hisq_fat7_level1!(V, U)
+HISQLinks4D(X, L)
+HISQDiracOperator4D(X, L, mass; naik_epsilon=0)
 CloverFieldStrength4D(U)
 update_clover!(field_strength, U)
 update_clover!(clover_operator)

@@ -9,6 +9,8 @@ using Test
     words,
     uniforms32,
     uniforms64,
+    normals32,
+    normals64,
     bounded,
     key,
     algorithm,
@@ -23,6 +25,16 @@ using Test
     @inbounds for draw in axes(uniforms64, 1)
         rng, uniforms64[draw, i] = rand_uniform(rng, Float64)
     end
+    @inbounds for draw in 1:2:size(normals32, 1)
+        rng, value0, value1 = rand_normal_pair(rng, Float32)
+        normals32[draw, i] = value0
+        normals32[draw + 1, i] = value1
+    end
+    @inbounds for draw in 1:2:size(normals64, 1)
+        rng, value0, value1 = rand_normal_pair(rng, Float64)
+        normals64[draw, i] = value0
+        normals64[draw + 1, i] = value1
+    end
     @inbounds for draw in axes(bounded, 1)
         rng, bounded[draw, i] = rand_bounded(rng, UInt32(17))
     end
@@ -35,6 +47,8 @@ function site_rng_gpu_tests()
         nwords = 19
         nfloat32 = 7
         nfloat64 = 7
+        nnormal32 = 8
+        nnormal64 = 8
         nbounded = 11
         key = RNGStreamKey(0x123456789abcdef0, 27, 3, 1, 2)
 
@@ -42,6 +56,8 @@ function site_rng_gpu_tests()
             words = JACC.zeros(UInt32, nwords, nsites)
             uniforms32 = JACC.zeros(Float32, nfloat32, nsites)
             uniforms64 = JACC.zeros(Float64, nfloat64, nsites)
+            normals32 = JACC.zeros(Float32, nnormal32, nsites)
+            normals64 = JACC.zeros(Float64, nnormal64, nsites)
             bounded = JACC.zeros(UInt32, nbounded, nsites)
             JACC.parallel_for(
                 nsites,
@@ -49,6 +65,8 @@ function site_rng_gpu_tests()
                 words,
                 uniforms32,
                 uniforms64,
+                normals32,
+                normals64,
                 bounded,
                 key,
                 algorithm,
@@ -57,6 +75,8 @@ function site_rng_gpu_tests()
             gpu_words = JACC.to_host(words)
             gpu_uniforms32 = JACC.to_host(uniforms32)
             gpu_uniforms64 = JACC.to_host(uniforms64)
+            gpu_normals32 = JACC.to_host(normals32)
+            gpu_normals64 = JACC.to_host(normals64)
             gpu_bounded = JACC.to_host(bounded)
 
             for i in 1:nsites
@@ -74,6 +94,16 @@ function site_rng_gpu_tests()
                     rng, expected = rand_uniform(rng, Float64)
                     @test reinterpret(UInt64, gpu_uniforms64[draw, i]) ==
                           reinterpret(UInt64, expected)
+                end
+                for draw in 1:2:nnormal32
+                    rng, expected0, expected1 = rand_normal_pair(rng, Float32)
+                    @test gpu_normals32[draw, i] ≈ expected0 rtol = 2f-6 atol = 2f-6
+                    @test gpu_normals32[draw + 1, i] ≈ expected1 rtol = 2f-6 atol = 2f-6
+                end
+                for draw in 1:2:nnormal64
+                    rng, expected0, expected1 = rand_normal_pair(rng, Float64)
+                    @test gpu_normals64[draw, i] ≈ expected0 rtol = 2e-12 atol = 2e-12
+                    @test gpu_normals64[draw + 1, i] ≈ expected1 rtol = 2e-12 atol = 2e-12
                 end
                 for draw in 1:nbounded
                     rng, expected = rand_bounded(rng, UInt32(17))

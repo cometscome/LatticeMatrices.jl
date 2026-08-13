@@ -8,11 +8,13 @@ JACC.@init_backend
 using MPI, JACC, StaticArrays
 include("nw0.jl")
 include("site_rng.jl")
+include("random_fill.jl")
 include("halo_epoch.jl")
 include("regressions.jl")
 include("enzyme.jl")
 include("enzyme_gradient.jl")
 include("wilson_clover.jl")
+include("staggered_dirac.jl")
 
 @testset "boundary phase multiplication" begin
     buf = ComplexF64[1 + 2im, 3 + 4im]
@@ -944,12 +946,14 @@ end
 function main()
     MPI.Init()
     site_rng_tests()
+    random_fill_tests()
     nw0test()
     halo_epoch_tests()
     regressiontests()
     enzymetests()
     enzyme_gradient_tests()
     wilson_clover_tests()
+    staggered_dirac_tests()
     #=
     for dim = 1:5
         indextest(dim)

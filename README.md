@@ -247,19 +247,21 @@ s = allsum(M)   # MPI.Reduce to root (returns the global sum on rank 0)
 
 LatticeMatrices.jl currently provides the following fermion operators.  Gauge
 links are supplied as a four-element `Vector` of four-dimensional
-`LatticeMatrix` objects with per-site shape `NC×NC`.  A four-dimensional
-fermion field has per-site shape `NC×4`.
+`LatticeMatrix` objects with per-site shape `NC×NC`.  Wilson and clover
+fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 
 | Type | Meaning | Halo support |
 | --- | --- | --- |
 | `WilsonDiracOperator4D(U, kappa)` | Wilson operator, including the on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
+| `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
 | `D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)` | Five-dimensional Möbius/domain-wall operator with a four-dimensional gauge field | `nw>=1` only |
 
 All of these operators support both `mul!(out, D, psi)` and
-`mul!(out, adjoint(D), psi)`.  The spin basis is the chiral basis represented by
-the exported matrices `γ1`, ..., `γ4`.
+`mul!(out, adjoint(D), psi)`.  Wilson, clover, and domain-wall spinors use the
+chiral basis represented by the exported matrices `γ1`, ..., `γ4`; a
+staggered field has no explicit spin index beyond its singleton second axis.
 
 #### Wilson and Wilson--clover example
 
@@ -356,6 +358,54 @@ mul!(out, D_clover, psi)
 lattice's storage (`U[mu].A`) must additionally be followed by
 `mark_halo_dirty!(U[mu])`, as described in the halo-epoch section above.
 
+#### One-link staggered example (Bridge++ convention)
+
+Continue with `U`, `gsize`, `PEs`, `NC`, and `nw` from the Wilson example.
+Only the per-site fermion shape changes from `NC×4` to `NC×1`:
+
+```julia
+psi_staggered_host = randn(ComplexF64, NC, 1, gsize...)
+psi_staggered = LatticeMatrix(psi_staggered_host, 4, PEs;
+    nw, phases=(1, 1, 1, -1))
+out_staggered = similar(psi_staggered)
+
+mass = 0.01
+D_staggered = StaggeredDiracOperator4D(U, mass)
+mul!(out_staggered, D_staggered, psi_staggered)
+mul!(out_staggered, adjoint(D_staggered), psi_staggered)
+```
+
+The operator is normalized exactly as Bridge++ `Fopr_Staggered`:
+
+```math
+(D_{\mathrm{stag}}\psi)(x) = m\psi(x)
++ \frac{1}{2}\sum_{\mu=1}^{4}\eta_\mu(x)
+\left[U_\mu(x)\psi(x+\hat\mu)
+- U_\mu^\dagger(x-\hat\mu)\psi(x-\hat\mu)\right],
+```
+
+with zero-based global coordinates
+`eta_mu(x) = (-1)^(sum(x[nu] for nu=1:mu-1))`.  `adjoint(D_staggered)`
+changes the sign of the hopping term and keeps the real mass term.  The phase
+is evaluated from global MPI coordinates, so odd local extents do not reset
+the staggered sign at rank boundaries.
+
+Fermion boundary conditions are supplied through `psi_staggered.phases`; the
+example is antiperiodic in time.  Boundary phases must have unit magnitude,
+and the gauge links themselves must be periodic.  The implementation is the
+standard one-link/unimproved staggered operator, not an Asqtad or HISQ action.
+For the production `nw>=1` path, all eight neighbor terms and the mass are
+fused into one JACC kernel, with an unrolled `NC=3` matrix-vector path.  The
+`nw=0` fallback is supported but materializes shifted fields and is primarily
+useful for compatibility and small tests.
+
+The regression suite compares D and D-dagger against an independent dense
+host implementation, adjoint and epsilon-Hermiticity identities, the free
+field spectrum, gauge covariance, odd-local-extent MPI decomposition, and
+fixed numerical fingerprints generated directly by Bridge++ 2.1.3.  The
+Bridge++ oracle source is
+[`test/reference/bridgepp_staggered_reference.cpp`](test/reference/bridgepp_staggered_reference.cpp).
+
 #### Five-dimensional Möbius/domain-wall example
 
 The gauge field remains four-dimensional, while the fermion field has a fifth
@@ -395,7 +445,25 @@ additional fermion discretizations.  In particular, `DdagDOp` currently
 accepts a `DiracOp`, not a `WilsonDiracOperator4D` directly.
 
 The same operator code runs on the JACC backend selected for the current
-project.  For the CUDA benchmark used by the Wilson--clover tests, run:
+project.  For the CUDA correctness check and staggered benchmark, run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+LATTICEMATRICES_STAGGERED_BENCH_L=24 \
+LATTICEMATRICES_STAGGERED_BENCH_PRECISION=Float32 \
+julia --project=test/multigpu test/multigpu/staggered_bench.jl
+```
+
+Set the precision to `Float64` for double precision.  The script reports
+milliseconds per D/D-dagger application, lattice sites per second, the
+Bridge++ flop-count convention, and a minimum-traffic bandwidth estimate.
+The two-rank integration test also covers staggered D/D-dagger on two GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 test/multigpu/run_h100_2gpu.sh
+```
+
+For the Wilson--clover CUDA benchmark, run:
 
 ```bash
 julia --project=test/multigpu test/multigpu/wilson_clover_bench.jl
@@ -555,6 +623,7 @@ struct Adjoint_Lattice{D};       data::D; end
 WilsonDiracOperator4D(U, kappa)
 WilsonDiracOperator4D_Donly(U)
 WilsonDiracCloverOperator4D(U, kappa, cSW)
+StaggeredDiracOperator4D(U, mass)
 CloverFieldStrength4D(U)
 update_clover!(field_strength, U)
 update_clover!(clover_operator)
@@ -588,7 +657,9 @@ Built on the excellent Julia HPC stack: **MPI.jl**, **JACC.jl**, and the Julia s
 - MPI.jl: https://github.com/JuliaParallel/MPI.jl  
 - JACC.jl: https://github.com/JuliaORNL/JACC.jl
 - Sheikholeslami--Wohlert improved Wilson action: https://doi.org/10.1016/0550-3213(85)90002-1
+- Kogut--Susskind staggered fermions: https://doi.org/10.1103/PhysRevD.11.395
 - Bridge++ source and releases: https://bridge.kek.jp/Lattice-code/source.html
+- Bridge++ 2.1.x documentation: https://bridge.kek.jp/Lattice-code/docs/html.2.1.x/index.html
 
 
 

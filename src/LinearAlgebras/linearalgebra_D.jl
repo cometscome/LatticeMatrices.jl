@@ -2003,87 +2003,243 @@ export randomize_matrix!
 end
 =#
 
-# Host wrapper: choose a fixed or time-based seed and launch
-function randomize_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
-    seed0 = UInt64(0x12345678ABCDEF01)  # or UInt64(time_ns())
-    _parallel_for_mutating!(C, prod(C.PN), kernel_randomize_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw), seed0)
+const _DEFAULT_RANDOMIZE_SEED = UInt64(0x12345678ABCDEF01)
+
+@inline _random_real_type(::Type{Float32}) = Float32
+@inline _random_real_type(::Type{Float64}) = Float64
+@inline _random_real_type(::Type{ComplexF32}) = Float32
+@inline _random_real_type(::Type{ComplexF64}) = Float64
+
+function _check_randomize_eltype(::Type{T}) where {T}
+    T in (Float32, Float64, ComplexF32, ComplexF64) && return nothing
+    throw(ArgumentError("random lattice fills do not support element type $T"))
+end
+
+"""
+    randomize_matrix!(C, key::RNGStreamKey; rng_algorithm=Philox4x32())
+    randomize_matrix!(C; seed=0x12345678ABCDEF01, sweep=0, direction=0,
+                      color=0, subgroup=0, rng_algorithm=Philox4x32())
+
+Fill the core of `C` with uniform values in `[-0.5, 0.5)`.  Every site owns
+one independent stream keyed by its zero-based global site id, so an explicit
+key produces the same global field for every MPI decomposition.  Complex
+elements consume independent uniforms for their real and imaginary parts.
+"""
+function randomize_matrix!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    key::RNGStreamKey;
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+) where {D,T,AT,NC1,NC2,nw,DI}
+    _check_randomize_eltype(T)
+    _parallel_for_mutating!(
+        C,
+        prod(C.PN),
+        kernel_randomize_global_sites!,
+        C.A,
+        C.indexer,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+        C.coords,
+        C.PN,
+        C.gsize,
+        key,
+        rng_algorithm,
+    )
     set_halo!(C)
+    return nothing
 end
-export randomize_matrix!
 
-# We split on element type at compile time via Val to avoid dynamic branches.
-@inline function kernel_randomize_4D!(i, u, dindexer, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
+function randomize_matrix!(
+    C::LatticeMatrix;
+    seed::Integer=_DEFAULT_RANDOMIZE_SEED,
+    sweep::Integer=0,
+    direction::Integer=0,
+    color::Integer=0,
+    subgroup::Integer=0,
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+)
+    key = RNGStreamKey(seed, sweep, direction, color, subgroup)
+    return randomize_matrix!(C, key; rng_algorithm)
+end
+
+"""
+    randomize_gaussian_matrix!(C, key::RNGStreamKey;
+                               sigma=1, rng_algorithm=Philox4x32())
+    randomize_gaussian_matrix!(C; sigma=1, seed=..., sweep=0, direction=0,
+                               color=0, subgroup=0,
+                               rng_algorithm=Philox4x32())
+
+Fill the core of `C` with independent zero-mean normal values of standard
+deviation `sigma`, using the same decomposition-independent site streams as
+[`randomize_matrix!`](@ref).  Complex elements receive independent normal real
+and imaginary components.
+"""
+function randomize_gaussian_matrix!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    key::RNGStreamKey;
+    sigma::Real=1,
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+) where {D,T,AT,NC1,NC2,nw,DI}
+    _check_randomize_eltype(T)
+    real_type = _random_real_type(T)
+    sigma_typed = real_type(sigma)
+    sigma_typed >= zero(real_type) || throw(ArgumentError("sigma must be non-negative"))
+    _parallel_for_mutating!(
+        C,
+        prod(C.PN),
+        kernel_randomize_gaussian_global_sites!,
+        C.A,
+        C.indexer,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+        C.coords,
+        C.PN,
+        C.gsize,
+        key,
+        rng_algorithm,
+        sigma_typed,
+    )
+    set_halo!(C)
+    return nothing
+end
+
+function randomize_gaussian_matrix!(
+    C::LatticeMatrix;
+    sigma::Real=1,
+    seed::Integer=_DEFAULT_RANDOMIZE_SEED,
+    sweep::Integer=0,
+    direction::Integer=0,
+    color::Integer=0,
+    subgroup::Integer=0,
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+)
+    key = RNGStreamKey(seed, sweep, direction, color, subgroup)
+    return randomize_gaussian_matrix!(C, key; sigma, rng_algorithm)
+end
+
+@inline function _global_site_rng(
+    i,
+    dindexer,
+    coords::NTuple{D,Int},
+    local_size::NTuple{D,Int},
+    global_size::NTuple{D,Int},
+    key,
+    algorithm,
+) where {D}
+    local_indices = delinearize(dindexer, i, 0)
+    global_indices = global_site_coordinates(local_indices, coords, local_size)
+    global_site = global_site_id(global_indices, global_size)
+    return site_rng(key, global_site, algorithm)
+end
+
+@inline function kernel_randomize_global_sites!(
+    i,
+    u,
+    dindexer,
+    ::Val{NC1},
+    ::Val{NC2},
+    ::Val{nw},
+    coords,
+    local_size,
+    global_size,
+    key,
+    algorithm,
+) where {NC1,NC2,nw}
     indices = delinearize(dindexer, i, nw)
-    T = eltype(u)
-
-    if T === ComplexF32
-        _rand_fill!(Val(:c32), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    elseif T === ComplexF64
-        _rand_fill!(Val(:c64), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    elseif T === Float32
-        _rand_fill!(Val(:r32), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    elseif T === Float64
-        _rand_fill!(Val(:r64), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    else
-        # If you ever support other types, you can add more specializations.
-        # For now, throw a clear error on host side before launching widely.
-        @assert false "Unsupported eltype in randomize: $(T)"
-    end
+    rng = _global_site_rng(i, dindexer, coords, local_size, global_size, key, algorithm)
+    _uniform_site_fill!(u, indices, Val(NC1), Val(NC2), rng)
     return nothing
 end
 
-# --- Specializations (no convert(T, ...) inside) ---
-
-# ComplexF32
-@inline function _rand_fill!(::Val{:c32}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        state, r2 = pcg32_step(state, inc)
-        realv = u01_f32(r1) - 0.5f0
-        imagv = u01_f32(r2) - 0.5f0
-        u[ic, jc, indices...] = ComplexF32(realv, imagv)
+@inline function _uniform_site_fill!(
+    u::AbstractArray{T},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        rng, value = rand_uniform(rng, T)
+        u[ic, jc, indices...] = value - T(0.5)
     end
+    return rng
+end
+
+@inline function _uniform_site_fill!(
+    u::AbstractArray{Complex{T}},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        rng, real_value = rand_uniform(rng, T)
+        rng, imag_value = rand_uniform(rng, T)
+        u[ic, jc, indices...] = Complex{T}(real_value - T(0.5), imag_value - T(0.5))
+    end
+    return rng
+end
+
+@inline function kernel_randomize_gaussian_global_sites!(
+    i,
+    u,
+    dindexer,
+    ::Val{NC1},
+    ::Val{NC2},
+    ::Val{nw},
+    coords,
+    local_size,
+    global_size,
+    key,
+    algorithm,
+    sigma,
+) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+    rng = _global_site_rng(i, dindexer, coords, local_size, global_size, key, algorithm)
+    _gaussian_site_fill!(u, indices, Val(NC1), Val(NC2), rng, sigma)
     return nothing
 end
 
-# ComplexF64
-@inline function _rand_fill!(::Val{:c64}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        state, r2 = pcg32_step(state, inc)
-        realv = u01_f64(r1, r2) - 0.5
-        state, i1 = pcg32_step(state, inc)
-        state, i2 = pcg32_step(state, inc)
-        imagv = u01_f64(i1, i2) - 0.5
-        u[ic, jc, indices...] = ComplexF64(realv, imagv)
+@inline function _gaussian_site_fill!(
+    u::AbstractArray{T},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+    sigma::T,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    use_spare = false
+    spare = zero(T)
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        if use_spare
+            value = spare
+        else
+            rng, value, spare = rand_normal_pair(rng, T)
+        end
+        u[ic, jc, indices...] = sigma * value
+        use_spare = !use_spare
     end
-    return nothing
+    return rng
 end
 
-# Float32
-@inline function _rand_fill!(::Val{:r32}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        realv = u01_f32(r1) - 0.5f0
-        u[ic, jc, indices...] = realv  # already Float32
+@inline function _gaussian_site_fill!(
+    u::AbstractArray{Complex{T}},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+    sigma::T,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        rng, real_value, imag_value = rand_normal_pair(rng, T)
+        u[ic, jc, indices...] = Complex{T}(sigma * real_value, sigma * imag_value)
     end
-    return nothing
+    return rng
 end
 
-# Float64
-@inline function _rand_fill!(::Val{:r64}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        state, r2 = pcg32_step(state, inc)
-        realv = u01_f64(r1, r2) - 0.5
-        u[ic, jc, indices...] = realv  # already Float64
-    end
-    return nothing
-end
+export randomize_matrix!, randomize_gaussian_matrix!
 
 function clear_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
     _parallel_for_mutating!(C, prod(C.PN), kernel_clear_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw))

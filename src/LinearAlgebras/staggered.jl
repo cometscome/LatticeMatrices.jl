@@ -36,6 +36,38 @@ end
     return staggered_eta_halo(coords, μ, nw)
 end
 
+# `indices` are one-based coordinates in the halo-padded rank-local array.
+# Staggered phases, however, are defined using zero-based *global* lattice
+# coordinates.  Keeping this conversion in one GPU-friendly helper avoids the
+# rank-local sign ambiguity when a preceding local lattice extent is odd.
+@inline function staggered_eta_global_halo(
+    indices::NTuple{D,<:Integer},
+    μ,
+    nw,
+    mpi_coordinates::NTuple{D,<:Integer},
+    local_size::NTuple{D,<:Integer},
+) where D
+    μ == 1 && return 1
+    parity_sum = 0
+    @inbounds for ν in 1:(μ-1)
+        local_zero_based = indices[ν] - nw - 1
+        parity_sum += mpi_coordinates[ν] * local_size[ν] + local_zero_based
+    end
+    return iseven(parity_sum) ? 1 : -1
+end
+
+@inline function staggered_eta_global_halo0(
+    indices::NTuple{D,<:Integer},
+    μ,
+    nw,
+    mpi_coordinates::NTuple{D,<:Integer},
+    local_size::NTuple{D,<:Integer},
+) where D
+    μ == 0 && return 1
+    return staggered_eta_global_halo(
+        indices, μ, nw, mpi_coordinates, local_size)
+end
+
 function Base.adjoint(data::TS) where {D,μ,TS<:Staggered_Lattice{D,μ}}
     return Adjoint_Lattice{typeof(data)}(data)
 end
@@ -48,7 +80,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -61,7 +93,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -74,7 +106,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -86,7 +118,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -98,7 +130,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -111,7 +143,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -123,7 +155,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -135,7 +167,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -148,7 +180,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data.data
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -160,7 +192,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -172,7 +204,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -185,7 +217,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data.data
     Bdata = B.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagB!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -197,7 +229,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -209,7 +241,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -222,7 +254,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -234,7 +266,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -246,7 +278,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, A.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -259,7 +291,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaABdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -271,7 +303,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -283,7 +315,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -296,7 +328,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data.data
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN
     )
     #set_halo!(C)
 end
@@ -308,7 +340,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Adata = A.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(0), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -320,7 +352,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, A.data.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(0), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
@@ -333,15 +365,15 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     Adata = A.data.data
     Bdata = B.data.data
     _parallel_for_mutating!(C,
-        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, α, β
+        prod(C.PN), kernel_Dmatrix_mul_etaAdagBdag!, C.A, Adata.A, Bdata.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), Val(μA), Val(μB), C.indexer, C.coords, C.PN, α, β
     )
     #set_halo!(C)
 end
 
-@inline function kernel_Dmatrix_mul_etaAB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaAB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -353,10 +385,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaAB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, α, β) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaAB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size, α, β) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -368,10 +400,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaAdagB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaAdagB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -383,10 +415,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaAdagB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, α, β) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaAdagB!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size, α, β) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -398,10 +430,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaABdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaABdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -413,10 +445,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaABdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, α, β) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaABdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size, α, β) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -428,10 +460,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaAdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaAdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -443,10 +475,10 @@ end
     end
 end
 
-@inline function kernel_Dmatrix_mul_etaAdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, α, β) where {NC1,NC2,NC3,nw,μA,μB}
+@inline function kernel_Dmatrix_mul_etaAdagBdag!(i, C, A, B, ::Val{NC1}, ::Val{NC2}, ::Val{NC3}, ::Val{nw}, ::Val{μA}, ::Val{μB}, dindexer, mpi_coordinates, local_size, α, β) where {NC1,NC2,NC3,nw,μA,μB}
     indices = delinearize(dindexer, i, nw)
 
-    η = staggered_eta_halo0(indices, μA, nw) * staggered_eta_halo0(indices, μB, nw)
+    η = staggered_eta_global_halo0(indices, μA, nw, mpi_coordinates, local_size) * staggered_eta_global_halo0(indices, μB, nw, mpi_coordinates, local_size)
     @inbounds for jc = 1:NC2
         for ic = 1:NC1
             s = zero(eltype(C))
@@ -457,4 +489,3 @@ end
         end
     end
 end
-

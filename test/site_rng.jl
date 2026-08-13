@@ -1,8 +1,9 @@
 function _site_rng_allocation_probe(key, algorithm::A) where A
     stream = site_rng(key, UInt64(41), algorithm)
     stream, x = rand_uniform(stream, Float64)
+    stream, z0, z1 = rand_normal_pair(stream, Float64)
     stream, y = rand_bounded(stream, UInt32(11))
-    return x + Float64(y)
+    return x + z0 + z1 + Float64(y)
 end
 
 _site_rng_allocated(key::K, algorithm::A) where {K,A} =
@@ -46,6 +47,17 @@ function site_rng_tests()
         @test value64 isa Float64
         @test 0.0 <= value64 < 1.0
 
+        normal32 = site_rng(key, 41, algorithm)
+        normal32, z32a, z32b = rand_normal_pair(normal32, Float32)
+        @test z32a isa Float32
+        @test z32b isa Float32
+        @test isfinite(z32a) && isfinite(z32b)
+
+        normal64 = site_rng(key, 41, algorithm)
+        normal64, z64 = rand_normal(normal64, Float64)
+        @test z64 isa Float64
+        @test isfinite(z64)
+
         for T in (Float32, Float64)
             rng_open = site_rng(key, 41, algorithm)
             for _ in 1:1000
@@ -54,6 +66,20 @@ function site_rng_tests()
             end
         end
     end
+
+    normal_stream = site_rng(key, 73, Philox4x32())
+    normal_sum = 0.0
+    normal_sum2 = 0.0
+    normal_count = 100_000
+    for _ in 1:(normal_count ÷ 2)
+        normal_stream, z0, z1 = rand_normal_pair(normal_stream, Float64)
+        normal_sum += z0 + z1
+        normal_sum2 += abs2(z0) + abs2(z1)
+    end
+    normal_mean = normal_sum / normal_count
+    normal_std = sqrt(normal_sum2 / normal_count - normal_mean^2)
+    @test abs(normal_mean) < 0.015
+    @test abs(normal_std - 1) < 0.015
 
     for algorithm in (PCG32(), Xoshiro256PlusPlus(), Philox4x32())
         counts = zeros(Int, 7)

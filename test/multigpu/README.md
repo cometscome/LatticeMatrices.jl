@@ -11,6 +11,8 @@ The test checks:
 - MPI halo exchange across the two GPU-owned lattice partitions;
 - distributed `mul!`, shifted-lattice materialization, gather, and reduction results
   against CPU reference values.
+- staggered D and D-dagger against a dense CPU oracle with an odd local x
+  extent, checking global staggered phases across the rank boundary.
 
 Run from the `LatticeMatrices.jl` directory:
 
@@ -36,3 +38,16 @@ multi-GPU correctness test on a non-H100 pair, explicitly set
 If `MPIEXEC` points at another MPI installation, update the matching `libmpi` and
 `mpiexec` entries in `LocalPreferences.toml` as well; the launcher and MPI library must
 come from the same implementation.
+
+For a single-GPU correctness check and steady-state staggered benchmark:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+LATTICEMATRICES_STAGGERED_BENCH_L=24 \
+LATTICEMATRICES_STAGGERED_BENCH_PRECISION=Float32 \
+julia --project=test/multigpu test/multigpu/staggered_bench.jl
+```
+
+`LATTICEMATRICES_STAGGERED_BENCH_ITERS` and
+`LATTICEMATRICES_STAGGERED_BENCH_SAMPLES` control timing repetitions.  Use
+`Float64` for the double-precision run.

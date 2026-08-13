@@ -117,8 +117,8 @@ RNGStreamKey(
     UInt32(subgroup),
 )
 
-# SplitMix64 finalizer.  The legacy `mix_seed` above deliberately remains
-# unchanged because it defines the current `randomize_matrix!` streams.
+# SplitMix64 finalizer.  `mix_seed` above is retained for source compatibility
+# with older kernels; new lattice fills use the global-site API below.
 @inline function _splitmix64(x::UInt64)
     z = x + 0x9e3779b97f4a7c15
     z = xor(z, z >> 30) * 0xbf58476d1ce4e5b9
@@ -368,6 +368,35 @@ end
 end
 
 """
+    rand_normal_pair(rng::SiteRNG, Float32/Float64) -> updated_rng, z0, z1
+
+Generate two independent standard-normal values with the Box--Muller
+transform.  The RNG state and all intermediate values are immutable scalars,
+so this function is allocation-free and safe to call inside accelerator
+kernels.  Uniform draws are bit-identical across supported backends; the last
+bits of the normal values may differ because device transcendental functions
+need not be bit-identical to their host counterparts.
+"""
+@inline function rand_normal_pair(rng::SiteRNG, ::Type{T}) where {T<:Union{Float32,Float64}}
+    rng, radial_uniform = rand_uniform_open(rng, T)
+    rng, angular_uniform = rand_uniform(rng, T)
+    radius = sqrt(T(-2) * log(radial_uniform))
+    angle = T(2pi) * angular_uniform
+    return rng, radius * cos(angle), radius * sin(angle)
+end
+
+"""
+    rand_normal(rng::SiteRNG, Float32/Float64) -> updated_rng, value
+
+Generate one standard-normal value.  For bulk generation, prefer
+[`rand_normal_pair`](@ref), which consumes both Box--Muller outputs.
+"""
+@inline function rand_normal(rng::SiteRNG, ::Type{T}) where {T<:Union{Float32,Float64}}
+    rng, value, _ = rand_normal_pair(rng, T)
+    return rng, value
+end
+
+"""
     rand_bounded(rng::SiteRNG, upper::UInt32) -> updated_rng, value
 
 Generate an unbiased integer in `0:(upper-1)` using rejection sampling.
@@ -398,4 +427,6 @@ export SiteRNG,
     rand_u64,
     rand_uniform,
     rand_uniform_open,
+    rand_normal,
+    rand_normal_pair,
     rand_bounded

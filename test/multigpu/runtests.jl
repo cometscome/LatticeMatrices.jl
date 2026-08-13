@@ -8,6 +8,8 @@ using LatticeMatrices
 using LinearAlgebra
 using Test
 
+include("../staggered_dirac.jl")
+
 const EXPECTED_RANKS = 2
 const PROCESS_GRID = (2, 1, 1, 1)
 const GLOBAL_SIZE = (16, 8, 8, 8)
@@ -147,6 +149,60 @@ function run_tests()
         if rank == 0
             @test global_sum ≈ sum(A)
             @info "two-GPU test completed" iterations max_elapsed_seconds = max_elapsed
+        end
+    end
+
+    @testset "two-GPU staggered Dirac operator" begin
+        # Each rank owns an odd x extent.  This detects rank-local eta phases
+        # while exercising the same CUDA halo path as a production Dslash.
+        staggered_size = (6, 4, 4, 4)
+        staggered_phases = (1, 1, 1, -1)
+        staggered_mass = 0.17f0
+        staggered_links = _staggered_test_links(
+            staggered_size, NC; elementtype=ComplexF32)
+        staggered_psi_host = _staggered_test_fermion(
+            staggered_size, NC; elementtype=ComplexF32)
+        staggered_reference = _staggered_test_reference(
+            staggered_links, staggered_psi_host,
+            staggered_mass, staggered_phases)
+        staggered_reference_dag = _staggered_test_reference(
+            staggered_links, staggered_psi_host,
+            staggered_mass, staggered_phases; adjoint_operator=true)
+
+        staggered_U = [LatticeMatrix(
+            link, 4, PROCESS_GRID; nw=HALO_WIDTH) for link in staggered_links]
+        staggered_psi = LatticeMatrix(
+            staggered_psi_host, 4, PROCESS_GRID;
+            nw=HALO_WIDTH, phases=staggered_phases)
+        staggered_result = similar(staggered_psi)
+        staggered_operator = StaggeredDiracOperator4D(
+            staggered_U, staggered_mass)
+        @test staggered_result.A isa CUDA.CuArray
+
+        mul!(staggered_result, staggered_operator, staggered_psi)
+        JACC.synchronize()
+        staggered_global = gather_matrix(staggered_result)
+        if rank == 0
+            @test staggered_global ≈ staggered_reference atol=4f-5 rtol=4f-5
+        end
+
+        MPI.Barrier(comm)
+        staggered_elapsed = @elapsed begin
+            for _ in 1:iterations
+                mul!(staggered_result, staggered_operator, staggered_psi)
+            end
+            JACC.synchronize()
+        end
+        staggered_max_elapsed = MPI.Allreduce(staggered_elapsed, max, comm)
+
+        mul!(staggered_result, adjoint(staggered_operator), staggered_psi)
+        JACC.synchronize()
+        staggered_global_dag = gather_matrix(staggered_result)
+        if rank == 0
+            @test isapprox(
+                staggered_global_dag, staggered_reference_dag;
+                atol=4f-5, rtol=4f-5)
+            @info "two-GPU staggered test completed" iterations max_elapsed_seconds=staggered_max_elapsed
         end
     end
 

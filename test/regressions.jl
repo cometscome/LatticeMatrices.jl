@@ -19,6 +19,35 @@ end
 function regressiontests()
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
 
+    @testset "Dirac operator adjoint involution" begin
+        lattice_size = (2 * nprocs, 2, 2, 2)
+        process_grid = (nprocs, 1, 1, 1)
+        gauge_array = ones(ComplexF64, 1, 1, lattice_size...)
+        U = [LatticeMatrix(gauge_array, 4, process_grid; nw=1) for _ in 1:4]
+
+        operators = (
+            WilsonDiracOperator4D(U, 0.12),
+            WilsonDiracOperator4D_Donly(U),
+            WilsonDiracCloverOperator4D(U, 0.12, 1.0),
+            StaggeredDiracOperator4D(U, 0.01),
+            D5DW_MobiusDomainwallOperator5D(U, 2, 0.01, -1.0, 1.0, 1.0),
+        )
+        for operator in operators
+            @test adjoint(adjoint(operator)) === operator
+        end
+
+        prototype_array = zeros(ComplexF64, 1, 4, lattice_size...)
+        prototype = LatticeMatrix(prototype_array, 4, process_grid; nw=1)
+        apply(args...) = nothing
+        apply_dag(args...) = nothing
+        callback_operator = DiracOp(U, apply, apply_dag, nothing, prototype)
+        @test adjoint(adjoint(callback_operator)) === callback_operator
+
+        normal_operator = DdagDOp(callback_operator)
+        @test adjoint(normal_operator) === normal_operator
+        @test adjoint(adjoint(normal_operator)) === normal_operator
+    end
+
     @testset "5D nw=0 safety" begin
         L5 = 2
         gauge_size = (2 * nprocs, 2, 2, 2)

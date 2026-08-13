@@ -54,6 +54,7 @@ struct AdjointOp{Op}
     op::Op
 end
 Base.adjoint(D::DiracOp) = AdjointOp(D)
+Base.adjoint(A::AdjointOp{<:DiracOp}) = A.op
 
 function LinearAlgebra.mul!(y, A::AdjointOp{<:DiracOp}, x)
     D = A.op
@@ -75,6 +76,8 @@ struct DdagDOp{T<:DiracOp}
     end
 end
 export DdagDOp
+
+Base.adjoint(A::DdagDOp) = A
 
 function LinearAlgebra.mul!(y, A::T, x) where {T<:DdagDOp}
     D = A.D

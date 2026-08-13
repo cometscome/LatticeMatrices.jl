@@ -262,6 +262,9 @@ All of these operators support both `mul!(out, D, psi)` and
 `mul!(out, adjoint(D), psi)`.  Wilson, clover, and domain-wall spinors use the
 chiral basis represented by the exported matrices `γ1`, ..., `γ4`; a
 staggered field has no explicit spin index beyond its singleton second axis.
+Adjoint wrappers are involutive: `adjoint(adjoint(D)) === D` for every
+operator listed above.  The same property holds for `DiracOp`, while the
+self-adjoint `DdagDOp` satisfies `adjoint(DdagD) === DdagD`.
 
 #### Wilson and Wilson--clover example
 

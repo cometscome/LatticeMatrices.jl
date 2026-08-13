@@ -293,6 +293,7 @@ end
 
 Base.adjoint(operator::WilsonDiracCloverOperator4D) =
     Adjoint_WilsonDiracCloverOperator4D(operator)
+Base.adjoint(operator::Adjoint_WilsonDiracCloverOperator4D) = operator.parent
 
 function update_clover!(operator::WilsonDiracCloverOperator4D)
     update_clover!(operator.clover, operator.wilson.U)

@@ -41,6 +41,7 @@ end
 function Base.adjoint(A::T) where {T<:D5DW_MobiusDomainwallOperator5D}
     Adjoint_D5DW_MobiusDomainwallOperator5D{typeof(A)}(A)
 end
+Base.adjoint(A::Adjoint_D5DW_MobiusDomainwallOperator5D) = A.parent
 
 @inline @inbounds function get_mass(x::T) where {T<:D5DW_MobiusDomainwallOperator5D}
     return x.mass

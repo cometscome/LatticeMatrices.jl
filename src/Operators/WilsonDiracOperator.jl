@@ -18,6 +18,7 @@ end
 function Base.adjoint(A::T) where {T<:WilsonDiracOperator4D}
     Adjoint_WilsonDiracOperator4D{typeof(A)}(A)
 end
+Base.adjoint(A::Adjoint_WilsonDiracOperator4D) = A.parent
 
 
 
@@ -559,6 +560,7 @@ end
 function Base.adjoint(A::T) where {T<:WilsonDiracOperator4D_Donly}
     Adjoint_WilsonDiracOperator4D_Donly{typeof(A)}(A)
 end
+Base.adjoint(A::Adjoint_WilsonDiracOperator4D_Donly) = A.parent
 
 
 """

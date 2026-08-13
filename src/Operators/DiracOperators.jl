@@ -43,11 +43,13 @@ end
 export DiracOp
 
 function LinearAlgebra.mul!(y, D::DiracOp, x)
+    ensure_halo!(x)
     temp, ittemp = get_block(D.temps, 4)
     phitemp, itphitemp = get_block(D.phitemps, 4)
     D.apply(y, D.U[1], D.U[2], D.U[3], D.U[4], x, D.p, phitemp, temp)
     unused!(D.temps, ittemp)
     unused!(D.phitemps, itphitemp)
+    return y
 end
 
 
@@ -60,6 +62,7 @@ Base.adjoint(A::AdjointOp{<:DiracOp}) = A.op
 
 function LinearAlgebra.mul!(y, A::AdjointOp{<:DiracOp}, x)
     D = A.op
+    ensure_halo!(x)
     temp, ittemp = get_block(D.temps, 4)
     phitemp, itphitemp = get_block(D.phitemps, 4)
 
@@ -67,53 +70,61 @@ function LinearAlgebra.mul!(y, A::AdjointOp{<:DiracOp}, x)
 
     unused!(D.temps, ittemp)
     unused!(D.phitemps, itphitemp)
+    return y
 end
 
 
 
-struct DdagDOp{T<:DiracOp}
+"""
+    DdagDOp(D, temp)
+
+Allocation-free normal operator `D' * D`.  `temp` is caller-owned storage for
+`D*x` and must not alias the input or output passed to `mul!`.  A distinct
+`DdagDOp` (and `temp`) is required for each concurrent application.
+"""
+struct DdagDOp{T,F}
     D::T
-    function DdagDOp(D::T) where {T<:DiracOp}
-        return new{T}(D)
-    end
+    temp::F
 end
 export DdagDOp
 
 Base.adjoint(A::DdagDOp) = A
 
-function LinearAlgebra.mul!(y, A::T, x) where {T<:DdagDOp}
-    D = A.D
-    phitemp1, itphitemp1 = get_block(D.phitemps)
-    temp, ittemp = get_block(D.temps, 4)
-    phitemp, itphitemp = get_block(D.phitemps, 4)
-
-    D.apply(phitemp1, D.U[1], D.U[2], D.U[3], D.U[4], x, D.p, phitemp, temp)
-    set_halo!(phitemp1)
-    D.apply_dag(y, D.U[1], D.U[2], D.U[3], D.U[4], phitemp1, D.p, phitemp, temp)
-    set_halo!(y)
-
-    #DdagDmul!(y, D.U[1], D.U[2], D.U[3], D.U[4], x, D.p, phitemp1, temp, phitemp)
-    unused!(D.phitemps, itphitemp1)
-    unused!(D.temps, ittemp)
-    unused!(D.phitemps, itphitemp)
+function LinearAlgebra.mul!(y, A::DdagDOp, x)
+    (A.temp === x || A.temp === y) && throw(ArgumentError(
+        "DdagDOp temporary field must not alias its input or output"))
+    mul!(A.temp, A.D, x)
+    mul!(y, adjoint(A.D), A.temp)
+    return y
 end
 
 
+"""
+    solve!(x, A::DdagDOp, b, r, p, Ap; kwargs...)
 
-function solve!(y, A::T, x; verboselevel=2) where {T<:DdagDOp}
-    cg(y, A, x, A.D.phitemps; verboselevel)
+Explicit-workspace convenience alias for [`cg!`](@ref).  The returned value is
+a [`CGResult`](@ref).
+"""
+function solve!(x, A::DdagDOp, b, r, p, Ap; kwargs...)
+    return cg!(x, A, b, r, p, Ap; kwargs...)
 end
 export solve!
 
-function pseudofermion_action(D::T, φ) where {T<:DiracOp}
-    DdagD = DdagDOp(D)
-    phitemp1, itphitemp1 = get_block(D.phitemps)
-    η = phitemp1
-    solve!(η, DdagD, φ)
-    S = real(dot(φ, η))
+"""
+    pseudofermion_action(D, phi, eta, Deta, r, p, Ap; kwargs...)
 
-    unused!(D.phitemps, itphitemp1)
-    return S
+Compute `real(dot(phi, (D' * D) \\ phi))`.  `eta` contains the initial guess
+and is overwritten by the solution.  `Deta` is the normal-operator temporary;
+`r`, `p`, and `Ap` are the three CG work fields.  All five fields are supplied
+and owned by the caller.
+"""
+function pseudofermion_action(D, φ, η, Dη, r, p, Ap; kwargs...)
+    normal_operator = DdagDOp(D, Dη)
+    result = solve!(η, normal_operator, φ, r, p, Ap; kwargs...)
+    result.converged || error(
+        "CG failed with reason $(result.reason) after $(result.iterations) iterations; " *
+        "relative residual = $(result.relative_residual)")
+    return real(dot(φ, η))
 end
 
 export pseudofermion_action

@@ -43,7 +43,7 @@ function regressiontests()
         callback_operator = DiracOp(U, apply, apply_dag, nothing, prototype)
         @test adjoint(adjoint(callback_operator)) === callback_operator
 
-        normal_operator = DdagDOp(callback_operator)
+        normal_operator = DdagDOp(callback_operator, similar(prototype))
         @test adjoint(normal_operator) === normal_operator
         @test adjoint(adjoint(normal_operator)) === normal_operator
     end

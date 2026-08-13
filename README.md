@@ -497,17 +497,95 @@ mul!(out5, D5, psi5)
 mul!(out5, adjoint(D5), psi5)
 ```
 
-The currently recognized parameter choices are `(b,c)=(1,1)` for Shamir,
-`(2,0)` for the Borici/Wilson-kernel form, and `(2,1)` for scaled-Shamir
-Möbius.  Five-dimensional operators reject `nw=0`.
+The constructor keeps the package's legacy `(b,c)` convention.  Its
+coefficients in the standard Möbius formula are
+`b5=(b+c)/2` and `c5=(b-c)/2`:
+
+| `LatticeMatrices` `(b,c)` | standard/Bridge++ `(b5,c5)` | kernel |
+| --- | --- | --- |
+| `(1,1)` | `(1,0)` | Shamir |
+| `(2,0)` | `(1,1)` | Borici/truncated-overlap |
+| `(2,1)` | `(1.5,0.5)` | scaled Shamir |
+
+This mapping follows the Möbius operator of
+[Brower, Neff, and Orginos](https://arxiv.org/abs/1206.5214).  The gauge-link
+pullback uses the same reduction over fifth-dimensional slices as the
+[Bridge++ domain-wall force](https://bridge.kek.jp/Lattice-code/docs/html.2.1.x/force__F__Domainwall_8cpp_source.html).
+Five-dimensional operators reject `nw=0`.
+
+Loading Enzyme enables reverse rules for both `D5` and `adjoint(D5)`.  The
+following example differentiates `real(dot(left, D5*psi))` with respect to
+the four gauge links and `psi`:
+
+```julia
+using Enzyme
+
+loss(D, psi, left, out) = (mul!(out, D, psi); real(dot(left, out)))
+
+left = LatticeMatrix(randn(ComplexF64, NC, 4, gsize5...), 5, PEs5;
+    nw=1, phases=(1, 1, 1, -1, 1))
+dU = [similar(link) for link in U]
+dpsi, dout = similar(psi5), similar(out5)
+clear_matrix!.(dU)
+clear_matrix!.((dpsi, dout))
+dD5 = D5DW_MobiusDomainwallOperator5D(dU, L5, mass, M, b, c)
+
+Enzyme.autodiff(
+    Enzyme.Reverse, Enzyme.Const(loss), Enzyme.Active,
+    Enzyme.Duplicated(D5, dD5),
+    Enzyme.Duplicated(psi5, dpsi),
+    Enzyme.Const(left),
+    Enzyme.Duplicated(out5, dout),
+)
+```
+
+For the adjoint operator, pass `adjoint(D5)` and `adjoint(dD5)` as the
+primal and shadow operator annotations, respectively.
+
+The pullback treats `mass`, `M`, `b`, and `c` as constants and accumulates
+cotangents into `dU` and `dpsi`.  It requires `nw>=1`, identical primal and
+shadow layouts, and `PEs5[5] == 1`.  The link kernel directly reduces all
+`L5` slices into each four-dimensional link element, uses no atomics, and
+does not allocate a five-dimensional link-gradient temporary.  A CUDA
+correctness/performance driver is available as
+`test/multigpu/domainwall_pullback_bench.jl`.
 
 #### Generic operator wrappers
 
 `DiracOp(U, apply, apply_dag, parameters, prototype)` wraps user-supplied
-forward and adjoint kernels in the same `mul!` interface.  `DdagDOp`, `solve!`,
-and `pseudofermion_action` operate on this callback-based wrapper; they are not
-additional fermion discretizations.  In particular, `DdagDOp` currently
-accepts a `DiracOp`, not a `WilsonDiracOperator4D` directly.
+forward and adjoint kernels in the same `mul!` interface.  Normal operators
+and CG use caller-owned temporary fields explicitly, so the low-level solver
+does not allocate fields or acquire hidden storage from a pool:
+
+```julia
+# Solve (D' * D) x = rhs.  D can be any operator implementing D and D'.
+x = similar(rhs)       # also supplies the initial guess
+clear_matrix!(x)       # zero initial guess for this example
+Dpsi = similar(rhs)    # temporary used while applying D' * D
+r = similar(rhs)       # the three CG work fields
+p = similar(rhs)
+Ap = similar(rhs)
+
+normal = DdagDOp(D, Dpsi)
+status = cg!(x, normal, rhs, r, p, Ap;
+    rtol=1e-10, atol=0, maxiter=5000)
+status.converged || error("CG failed: $(status.reason)")
+```
+
+`x`, `rhs`, `Dpsi`, `r`, `p`, and `Ap` must not alias.  `cg!` returns a
+`CGResult` containing the convergence flag, iteration count, absolute and
+relative residuals, and termination reason.  It does not print or throw on
+ordinary non-convergence.  `solve!(x, normal, rhs, r, p, Ap; ...)` is an
+equivalent convenience entry point.
+
+The original pool-based interface remains available for compatibility.  It
+borrows three fields from `temps`, returns `nothing` on convergence, and
+throws on failure:
+
+```julia
+LatticeMatrices.cg(x, normal, rhs, temps;
+    eps=1e-10, maxsteps=5000, verboselevel=2)
+```
 
 The same operator code runs on the JACC backend selected for the current
 project.  For the CUDA correctness check and staggered benchmark, run:
@@ -701,9 +779,14 @@ D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)
 # Callback-based operator composition and solver helpers
 DiracOp(U, apply, apply_dag, parameters, prototype;
         numtemp=4, numphitemp=4)
-DdagDOp(D::DiracOp)
-solve!(out, DdagD, rhs; verboselevel=2)
-pseudofermion_action(D::DiracOp, phi)
+DdagDOp(D, Dpsi)
+cg!(x, A, rhs, r, p, Ap; rtol=1e-10, atol=0, maxiter=5000)
+solve!(x, DdagD, rhs, r, p, Ap; rtol=1e-10, atol=0, maxiter=5000)
+pseudofermion_action(D, phi, eta, Deta, r, p, Ap)
+
+# Compatibility interface using a PreallocatedArray pool
+LatticeMatrices.cg(x, A, rhs, temps;
+                   eps=1e-10, maxsteps=5000, verboselevel=2)
 ```
 
 ---

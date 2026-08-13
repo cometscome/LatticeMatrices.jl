@@ -9,6 +9,11 @@ import LatticeMatrices: Wirtinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme
 
 include("./AD/AD.jl")
 include("./AD/WilsonDiracOperator.jl")
+include("./AD/StaggeredDiracOperator.jl")
+include("./AD/HISQDiracOperator.jl")
+include("./AD/HISQSmearing.jl")
+include("./AD/WilsonDiracCloverOperator.jl")
+include("./AD/DomainwallDiracOperator.jl")
 
 # Convert user-specified arguments into Enzyme annotations.
 #
@@ -360,11 +365,19 @@ function dSFdU(dfdU, D::T, φ; numtemp=5) where {T<:DiracOp}
     dfdU3 = dfdU[3]
     dfdU4 = dfdU[4]
 
-    DdagD = DdagDOp(D)
+    Dη, itDη = get_block(D.phitemps)
+    DdagD = DdagDOp(D, Dη)
     phitemp1, itphitemp1 = get_block(D.phitemps)
     η = phitemp1
+    cg_r, itcg_r = get_block(D.phitemps)
+    cg_p, itcg_p = get_block(D.phitemps)
+    cg_Ap, itcg_Ap = get_block(D.phitemps)
 
-    solve!(η, DdagD, φ) #η = (DdagD)^-1 φ
+    solve!(η, DdagD, φ, cg_r, cg_p, cg_Ap) #η = (DdagD)^-1 φ
+    unused!(D.phitemps, itcg_r)
+    unused!(D.phitemps, itcg_p)
+    unused!(D.phitemps, itcg_Ap)
+    unused!(D.phitemps, itDη)
     println("solved")
     set_halo!(η)
     phitemp2, itphitemp2 = get_block(D.phitemps)

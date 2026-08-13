@@ -90,10 +90,12 @@ function ER.augmented_primal(
 ) where RT
     result.val.nw == 0 && throw(ArgumentError(
         "Enzyme differentiation of WilsonDiracOperator4D requires nw >= 1"))
-    LinearAlgebra.mul!(result.val, operator.val, psi.val)
+    primal_return = LinearAlgebra.mul!(result.val, operator.val, psi.val)
     tape = nothing
+    primal = ER.needs_primal(cfg) ? primal_return : nothing
+    shadow = ER.needs_shadow(cfg) ? _getshadow(result.dval) : nothing
     RetT = ER.augmented_rule_return_type(cfg, RT, tape)
-    return RetT(nothing, nothing, tape)
+    return RetT(primal, shadow, tape)
 end
 
 function ER.reverse(

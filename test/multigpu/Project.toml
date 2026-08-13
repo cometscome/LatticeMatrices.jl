@@ -1,5 +1,6 @@
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 JACC = "0979c8fe-16a4-4796-9b82-89a9f10403ea"
 LatticeMatrices = "dd6a91e4-736f-4540-ac85-13822ca7b545"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -12,6 +13,7 @@ LatticeMatrices = {path = "../.."}
 
 [compat]
 CUDA = "5"
+Enzyme = "0.13"
 JACC = "1.3"
 MPI = "0.20"
 MPIPreferences = "0.1"

@@ -9,6 +9,7 @@ using LinearAlgebra
 using Test
 
 include("../staggered_dirac.jl")
+include("../cg.jl")
 
 const EXPECTED_RANKS = 2
 const PROCESS_GRID = (2, 1, 1, 1)
@@ -205,6 +206,11 @@ function run_tests()
             @info "two-GPU staggered test completed" iterations max_elapsed_seconds=staggered_max_elapsed
         end
     end
+
+    # The same backend-independent solver tests exercise CUDA kernels for
+    # axpby!, mul!, dot/Allreduce, explicit DdagD storage, and the legacy pool
+    # adapter once each MPI rank has selected its GPU above.
+    cg_tests()
 
     return nothing
 end

@@ -51,3 +51,19 @@ julia --project=test/multigpu test/multigpu/staggered_bench.jl
 `LATTICEMATRICES_STAGGERED_BENCH_ITERS` and
 `LATTICEMATRICES_STAGGERED_BENCH_SAMPLES` control timing repetitions.  Use
 `Float64` for the double-precision run.
+
+For a single-GPU Möbius/domain-wall forward and Enzyme-pullback benchmark:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+LATTICEMATRICES_DOMAINWALL_BENCH_L=16 \
+LATTICEMATRICES_DOMAINWALL_BENCH_L5=12 \
+LATTICEMATRICES_DOMAINWALL_BENCH_PRECISION=Float32 \
+julia --project=test/multigpu \
+    test/multigpu/domainwall_pullback_bench.jl
+```
+
+`LATTICEMATRICES_DOMAINWALL_BENCH_ITERS` and
+`LATTICEMATRICES_DOMAINWALL_BENCH_SAMPLES` control the timing repetitions.
+The reported pullback time includes the primal application and scalar loss,
+as required by the complete reverse-mode evaluation.

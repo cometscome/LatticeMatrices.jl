@@ -1,33 +1,45 @@
-struct Wilson_parameters
-    κ_wilson::Float64
-    M_wilson::Float64
+struct Wilson_parameters{K<:Real,M<:Real}
+    κ_wilson::K
+    M_wilson::M
 end
 using InteractiveUtils
 #using CUDA #debug
 
-struct D5DW_MobiusDomainwallOperator5D{T,L5} <: OperatorOnKernel
+struct D5DW_MobiusDomainwallOperator5D{T,L5,R<:Real,WP<:Wilson_parameters} <: OperatorOnKernel
     U::Vector{T}
-    mass::Float64
-    wilson_params::Wilson_parameters
-    b::Float64
-    c::Float64
+    mass::R
+    wilson_params::WP
+    b::R
+    c::R
 
 
-    function D5DW_MobiusDomainwallOperator5D(U::Vector{T}, L5, mass, M, b, c) where {T<:LatticeMatrix}
-        r = 1
+    function D5DW_MobiusDomainwallOperator5D(
+        U::Vector{T}, L5, mass::Real, M::Real, b::Real, c::Real,
+    ) where {T<:LatticeMatrix}
+        length(U) == 4 || throw(ArgumentError(
+            "D5DW_MobiusDomainwallOperator5D requires four gauge links"))
+        L5 isa Integer || throw(ArgumentError("L5 must be an integer"))
+        L5 > 0 || throw(ArgumentError("L5 must be positive"))
+
+        R = promote_type(
+            typeof(float(mass)), typeof(float(M)),
+            typeof(float(b)), typeof(float(c)))
+        mass_R, M_R, b_R, c_R = R(mass), R(M), R(b), R(c)
+        r = one(R)
         Dim = length(U)
-        κ_wilson = 1 / (2 * Dim * r + 2M)
-        wilsonparam = Wilson_parameters(κ_wilson, M)
+        κ_wilson = one(R) / (2 * Dim * r + 2M_R)
+        wilsonparam = Wilson_parameters(κ_wilson, M_R)
 
-        if b == 1 && c == 1
+        if b_R == 1 && c_R == 1
             println("Shamir kernel (standard DW) is used")
-        elseif b == 2 && c == 0
+        elseif b_R == 2 && c_R == 0
             println("Borici/Wilson kernel (truncated overlap) is used")
-        elseif b == 2 && c == 1
+        elseif b_R == 2 && c_R == 1
             println("scaled Shamir kernel (Mobius DW) is used")
         end
 
-        return new{T,L5}(U, mass, wilsonparam, b, c)
+        return new{T,L5,R,typeof(wilsonparam)}(
+            U, mass_R, wilsonparam, b_R, c_R)
     end
 end
 export D5DW_MobiusDomainwallOperator5D
@@ -61,6 +73,15 @@ end
     return nothing
 end
 
+@inline function _ensure_5d_operator_halo!(U, ψ)
+    ensure_halo!(U[1])
+    ensure_halo!(U[2])
+    ensure_halo!(U[3])
+    ensure_halo!(U[4])
+    ensure_halo!(ψ)
+    return nothing
+end
+
 #LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}
 function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::Tp) where {T1,AT1,NC1,nw,DI,L5,TU,
@@ -68,6 +89,7 @@ function LinearAlgebra.mul!(C::TC,
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
 
     _require_5d_halo(Val(nw))
+    _ensure_5d_operator_halo!(Dirac.U, ψ)
 
     
     U1 = get_matrix(Dirac.U[1])
@@ -138,6 +160,7 @@ function D4x_5D!(C::TC,U,ψ::Tp,coeff) where {T1,AT1,NC1,nw,DI,
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
 
     _require_5d_halo(Val(nw))
+    _ensure_5d_operator_halo!(U, ψ)
 
     U1 = get_matrix(U[1])
     U2 = get_matrix(U[2])
@@ -645,12 +668,14 @@ end
 
 
 function LinearAlgebra.mul!(C::TC,
-    Dirac::TD, ψ::Tp) where {T1,AT1,NC1,nw,DI,T,L5,
+    Dirac::Adjoint_D5DW_MobiusDomainwallOperator5D{TD}, ψ::Tp) where {
+    T1,AT1,NC1,nw,DI,T,L5,
     TC<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI},
-    TD<:Adjoint_D5DW_MobiusDomainwallOperator5D{D5DW_MobiusDomainwallOperator5D{T,L5}},
+    TD<:D5DW_MobiusDomainwallOperator5D{T,L5},
     Tp<:LatticeMatrix{5,T1,AT1,NC1,4,nw,DI}}
 
     _require_5d_halo(Val(nw))
+    _ensure_5d_operator_halo!(Dirac.parent.U, ψ)
 
     U1 = get_matrix(Dirac.parent.U[1])
     U2 = get_matrix(Dirac.parent.U[2])

@@ -11,6 +11,8 @@ include("site_rng.jl")
 include("halo_epoch.jl")
 include("regressions.jl")
 include("enzyme.jl")
+include("enzyme_gradient.jl")
+include("wilson_clover.jl")
 
 @testset "boundary phase multiplication" begin
     buf = ComplexF64[1 + 2im, 3 + 4im]
@@ -946,6 +948,8 @@ function main()
     halo_epoch_tests()
     regressiontests()
     enzymetests()
+    enzyme_gradient_tests()
+    wilson_clover_tests()
     #=
     for dim = 1:5
         indextest(dim)

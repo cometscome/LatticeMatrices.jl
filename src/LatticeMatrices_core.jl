@@ -372,6 +372,11 @@ Base.@noinline function ensure_halo!(ls::LatticeMatrix)
     return nothing
 end
 
+@inline function _ensure_halo_for_shift!(ls::LatticeMatrix, shift)
+    any(s -> !iszero(s), shift) && ensure_halo!(ls)
+    return nothing
+end
+
 export ensure_halo!
 
 # ---------------------------------------------------------------------------

@@ -625,12 +625,49 @@ function get_PEs(ls::LatticeMatrix{D,T,AT,NC1,NC2}) where {D,T,AT,NC1,NC2}
 end
 export get_PEs
 
-function Wiltinger! end
-export Wiltinger!
+function Wirtinger! end
+export Wirtinger!
+
+"""
+    Wirtinger!(gradient)
+
+Convert an Enzyme complex gradient in place to the Wirtinger derivative
+`(∂f/∂x - im*∂f/∂y)/2`. Only the local core is transformed; the halo is
+marked stale and will be synchronized on the next shifted read.
+"""
+function Wirtinger!(gradient::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T<:Complex,AT,NC1,NC2,nw,DI}
+    half = convert(T, 0.5)
+    _parallel_for_mutating!(
+        gradient,
+        prod(gradient.PN),
+        _wirtinger_kernel!,
+        gradient.A,
+        half,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+        gradient.indexer,
+    )
+    return gradient
+end
+
+@inline function _wirtinger_kernel!(i, gradient, half, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, indexer) where {NC1,NC2,nw}
+    indices = delinearize(indexer, i, nw)
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        gradient[ic, jc, indices...] = half * conj(gradient[ic, jc, indices...])
+    end
+    return nothing
+end
+
 function realtrace end
 export realtrace
-function Wiltinger_derivative! end
-export Wiltinger_derivative!
+function Wirtinger_derivative! end
+export Wirtinger_derivative!
+
+# Compatibility with the misspelled pre-v1 API.
+Base.@deprecate Wiltinger! Wirtinger!
+Base.@deprecate Wiltinger_derivative! Wirtinger_derivative!
+export Wiltinger!, Wiltinger_derivative!
 function Enzyme_derivative! end
 export Enzyme_derivative!
 function fold_halo_to_core_grad! end

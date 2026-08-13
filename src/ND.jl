@@ -100,7 +100,7 @@ Returns:
 Notes:
 - Returns the Wirtinger derivative ∂f/∂U = (df/dx - i df/dy)/2.
 """
-function Wiltinger_numerical_derivative(f, indices, U;
+function Wirtinger_numerical_derivative(f, indices, U;
     params=(),
     targets=:all,
     ϵ::Real=1e-8)
@@ -171,7 +171,7 @@ function Wiltinger_numerical_derivative(f, indices, U;
 
             # your convention: df/dx + i df/dy
             #grad[ic, jc] = dRe + im * dIm
-            # Wiltinger: 
+            # Wirtinger:
             grad[ic, jc] = (dRe - im * dIm) / 2
         end
 
@@ -258,7 +258,7 @@ function Numerical_derivative_Enzyme(f, indices, U1, U2, U3, U4;
 
             # your convention: df/dx + i df/dy
             grad[ic, jc] = dRe + im * dIm
-            # Wiltinger: 
+            # Wirtinger:
             #grad[ic, jc] = (dRe - im * dIm) / 2
         end
 
@@ -344,7 +344,7 @@ function Numerical_derivative_Enzyme(f, indices, U;
 
             # your convention: df/dx + i df/dy
             grad[ic, jc] = dRe + im * dIm
-            # Wiltinger: 
+            # Wirtinger:
             #grad[ic, jc] = (dRe - im * dIm) / 2
         end
 
@@ -360,4 +360,8 @@ function Numerical_derivative_Enzyme(f, indices, U;
 end
 export Numerical_derivative_Enzyme
 
+export Wirtinger_numerical_derivative
+
+# Compatibility with the misspelled pre-v1 API.
+Base.@deprecate Wiltinger_numerical_derivative Wirtinger_numerical_derivative
 export Wiltinger_numerical_derivative

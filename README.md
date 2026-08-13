@@ -243,6 +243,165 @@ s = allsum(M)   # MPI.Reduce to root (returns the global sum on rank 0)
 ```
 
 
+### 4) Dirac operators
+
+LatticeMatrices.jl currently provides the following fermion operators.  Gauge
+links are supplied as a four-element `Vector` of four-dimensional
+`LatticeMatrix` objects with per-site shape `NC×NC`.  A four-dimensional
+fermion field has per-site shape `NC×4`.
+
+| Type | Meaning | Halo support |
+| --- | --- | --- |
+| `WilsonDiracOperator4D(U, kappa)` | Wilson operator, including the on-site identity term | `nw=0` or `nw>=1` |
+| `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
+| `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
+| `D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)` | Five-dimensional Möbius/domain-wall operator with a four-dimensional gauge field | `nw>=1` only |
+
+All of these operators support both `mul!(out, D, psi)` and
+`mul!(out, adjoint(D), psi)`.  The spin basis is the chiral basis represented by
+the exported matrices `γ1`, ..., `γ4`.
+
+#### Wilson and Wilson--clover example
+
+The following is a complete single- or multi-rank setup.  It uses unit gauge
+links as a small smoke test; consequently its clover field strength is zero.
+Replacing `unit_link` with a nontrivial gauge configuration activates the
+clover contribution without changing the API.
+
+```julia
+using MPI, LinearAlgebra, Random
+import JACC
+
+JACC.@init_backend
+using LatticeMatrices
+MPI.Init()
+
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+NC = 3
+gsize = (4 * nprocs, 4, 4, 4)
+PEs = (nprocs, 1, 1, 1)
+nw = 1
+
+# U[mu] is an NC×NC gauge matrix at every four-dimensional lattice site.
+unit_link = zeros(ComplexF64, NC, NC, gsize...)
+for site in CartesianIndices(gsize), color in 1:NC
+    unit_link[color, color, Tuple(site)...] = 1
+end
+U = [LatticeMatrix(unit_link, 4, PEs; nw) for _ in 1:4]
+
+# The second per-site index is the four-component spin index.  Here the time
+# direction is antiperiodic for the fermion and the spatial directions are
+# periodic.
+Random.seed!(1234)
+psi_host = randn(ComplexF64, NC, 4, gsize...)
+psi = LatticeMatrix(psi_host, 4, PEs;
+    nw, phases=(1, 1, 1, -1))
+out = similar(psi)
+
+kappa = 0.12
+
+D_wilson = WilsonDiracOperator4D(U, kappa)
+mul!(out, D_wilson, psi)
+mul!(out, adjoint(D_wilson), psi)
+
+D_clover = WilsonDiracCloverOperator4D(U, kappa, 1.0)
+mul!(out, D_clover, psi)
+mul!(out, adjoint(D_clover), psi)
+
+# The hopping-only operator is available separately when building composite
+# formulations or preconditioners.
+D_hopping = WilsonDiracOperator4D_Donly(U)
+mul!(out, D_hopping, psi)
+```
+
+The Wilson operator is normalized as
+
+```math
+(D_W\psi)(x) = \psi(x)
+- \kappa\sum_{\mu=1}^{4}\left[
+U_\mu(x)(1-\gamma_\mu)\psi(x+\hat\mu)
++ U_\mu^\dagger(x-\hat\mu)(1+\gamma_\mu)\psi(x-\hat\mu)
+\right].
+```
+
+The clover implementation follows the Bridge++ chiral-basis convention:
+
+```math
+D_{\mathrm{clover}} = D_W
+- \kappa c_{\mathrm{SW}}\sum_{\mu<\nu}
+\gamma_\mu\gamma_\nu F_{\mu\nu}, \qquad
+F_{\mu\nu} = \frac{Q_{\mu\nu}-Q_{\mu\nu}^\dagger}{8},
+```
+
+where `Q` is the sum of the four plaquettes touching the site in the
+`mu`--`nu` plane.  The six anti-Hermitian components are cached in the order
+`(12, 13, 14, 23, 24, 34)` and can also be constructed directly:
+
+```julia
+field_strength = CloverFieldStrength4D(U)
+F12 = field_strength[1]
+```
+
+Constructing the clover field is considerably more expensive than applying
+its local term, so it is not rebuilt by each `mul!`.  After changing any gauge
+link, explicitly refresh the cache before applying the operator again:
+
+```julia
+# mutate U with substitute!, a LatticeMatrices mutating operation, or a kernel
+update_clover!(D_clover)
+mul!(out, D_clover, psi)
+```
+
+`update_clover!` is unnecessary while `U` is unchanged.  Direct writes to a
+lattice's storage (`U[mu].A`) must additionally be followed by
+`mark_halo_dirty!(U[mu])`, as described in the halo-epoch section above.
+
+#### Five-dimensional Möbius/domain-wall example
+
+The gauge field remains four-dimensional, while the fermion field has a fifth
+extent `L5`.  Keeping the fifth process-grid dimension equal to one is the
+recommended setup.
+
+```julia
+# Continue with U, gsize, PEs, and NC from the previous example.
+L5 = 8
+gsize5 = (gsize..., L5)
+PEs5 = (PEs..., 1)
+
+psi5_host = randn(ComplexF64, NC, 4, gsize5...)
+psi5 = LatticeMatrix(psi5_host, 5, PEs5;
+    nw=1, phases=(1, 1, 1, -1, 1))
+out5 = similar(psi5)
+
+mass = 0.01
+M = -1.0                    # Wilson-kernel mass parameter
+b, c = 2.0, 1.0             # scaled-Shamir Möbius kernel
+D5 = D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)
+
+mul!(out5, D5, psi5)
+mul!(out5, adjoint(D5), psi5)
+```
+
+The currently recognized parameter choices are `(b,c)=(1,1)` for Shamir,
+`(2,0)` for the Borici/Wilson-kernel form, and `(2,1)` for scaled-Shamir
+Möbius.  Five-dimensional operators reject `nw=0`.
+
+#### Generic operator wrappers
+
+`DiracOp(U, apply, apply_dag, parameters, prototype)` wraps user-supplied
+forward and adjoint kernels in the same `mul!` interface.  `DdagDOp`, `solve!`,
+and `pseudofermion_action` operate on this callback-based wrapper; they are not
+additional fermion discretizations.  In particular, `DdagDOp` currently
+accepts a `DiracOp`, not a `WilsonDiracOperator4D` directly.
+
+The same operator code runs on the JACC backend selected for the current
+project.  For the CUDA benchmark used by the Wilson--clover tests, run:
+
+```bash
+julia --project=test/multigpu test/multigpu/wilson_clover_bench.jl
+```
+
+
 ## Examples: matrix multiplication on lattices
 
 ### 1) Plain matrix multiplication at each lattice site
@@ -391,6 +550,22 @@ allsum(ls)  # Reduce(SUM) to root over interior
 struct Shifted_Lattice{D,shift}; data::D; end
 struct Adjoint_Lattice{D};       data::D; end
 # Base.adjoint(::Lattice) and Base.adjoint(::Shifted_Lattice) return Adjoint_Lattice
+
+# Dirac operators
+WilsonDiracOperator4D(U, kappa)
+WilsonDiracOperator4D_Donly(U)
+WilsonDiracCloverOperator4D(U, kappa, cSW)
+CloverFieldStrength4D(U)
+update_clover!(field_strength, U)
+update_clover!(clover_operator)
+D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)
+
+# Callback-based operator composition and solver helpers
+DiracOp(U, apply, apply_dag, parameters, prototype;
+        numtemp=4, numphitemp=4)
+DdagDOp(D::DiracOp)
+solve!(out, DdagD, rhs; verboselevel=2)
+pseudofermion_action(D::DiracOp, phi)
 ```
 
 ---
@@ -412,6 +587,8 @@ Built on the excellent Julia HPC stack: **MPI.jl**, **JACC.jl**, and the Julia s
 
 - MPI.jl: https://github.com/JuliaParallel/MPI.jl  
 - JACC.jl: https://github.com/JuliaORNL/JACC.jl
+- Sheikholeslami--Wohlert improved Wilson action: https://doi.org/10.1016/0550-3213(85)90002-1
+- Bridge++ source and releases: https://bridge.kek.jp/Lattice-code/source.html
 
 
 

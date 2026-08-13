@@ -13,6 +13,7 @@ const shifts_p = (shift_1p, shift_2p, shift_3p, shift_4p)
 const shifts_m = (shift_1m, shift_2m, shift_3m, shift_4m)
 
 include("WilsonDiracOperator.jl")
+include("WilsonDiracCloverOperator.jl")
 
 
 struct DiracOp{T,TF,Dmul,Ddagmul,P}

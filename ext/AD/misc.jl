@@ -4303,9 +4303,9 @@ _getshadow(::Type) = nothing
 _getshadow_data(x) = nothing
 _getshadow_data(x::Base.RefValue) = _getshadow_data(x[])
 _getshadow_data(x::LatticeMatrix) = x
-_getshadow_data(x::Shifted_Lattice) = x.data
-_getshadow_data(x::Staggered_Lattice) = x.data
-_getshadow_data(x::Adjoint_Lattice) = _getshadow_data(x.data)
+_getshadow_data(x::Shifted_Lattice) = getfield(x, :data)
+_getshadow_data(x::Staggered_Lattice) = getfield(x, :data)
+_getshadow_data(x::Adjoint_Lattice) = _getshadow_data(getfield(x, :data))
 
 @inline function _getshadow_out(dCout, C::Annotation{<:LatticeMatrix})
     if dCout isa Active

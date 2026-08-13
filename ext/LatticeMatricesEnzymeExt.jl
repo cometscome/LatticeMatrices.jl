@@ -3,7 +3,7 @@ using LinearAlgebra
 using LatticeMatrices
 using Enzyme
 using JACC
-import LatticeMatrices: Wiltinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU,
+import LatticeMatrices: Wirtinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU,
     zero_halo_region!, zero_halo_dim!, fold_halo_dim_to_core_grad!
 
 
@@ -312,7 +312,7 @@ end
 
 export Enzyme_derivative
 #=
-function Wiltinger_derivative!(func, U, dfdU, temp=nothing, dtemp=nothing; params...)
+function Wirtinger_derivative!(func, U, dfdU, temp=nothing, dtemp=nothing; params...)
     if length(params) > 1
         if temp === nothing
             Enzyme.autodiff(Reverse, Const(func), Active,
@@ -332,7 +332,7 @@ function Wiltinger_derivative!(func, U, dfdU, temp=nothing, dtemp=nothing; param
     end
     #println("1")
     #display(dfdU[1].A[:, :, 2, 2, 2, 2])
-    Wiltinger!.(dfdU)
+    Wirtinger!.(dfdU)
     #println("2")
     #display(dfdU[1].A[:, :, 2, 2, 2, 2])
 end

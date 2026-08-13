@@ -12,7 +12,10 @@ const _LM_AD_TRACE = get(ENV, "LM_AD_TRACE", "0") == "1"
 @inline _adtrace(msg) = (_LM_AD_TRACE ? println("[LM-AD] " * msg) : nothing)
 const _LM_TRAP_MUL_REVERSE_FALLBACK = get(ENV, "LM_TRAP_MUL_REVERSE_FALLBACK", "0") == "1"
 const _LM_AD_SYNC_DEBUG = get(ENV, "LM_AD_SYNC_DEBUG", "0") == "1"
-const _LM_AD_FOLD_SCATTER = get(ENV, "LM_AD_FOLD_SCATTER", "1") == "1"
+# Defer shifted-input halo cotangents to Enzyme_derivative!'s final collective
+# fold. Folding from inside an Enzyme reverse rule gives incorrect inter-rank
+# accumulation with MPI. The opt-in switch remains useful for rule debugging.
+const _LM_AD_FOLD_SCATTER = get(ENV, "LM_AD_FOLD_SCATTER", "0") == "1"
 
 @inline function _lm_ad_maybe_sync()
     _LM_AD_SYNC_DEBUG || return nothing
@@ -1867,11 +1870,7 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC1), Val(C.val.NC2),
             conj(αval), shiftval, Val(C.val.nw)
         )
-        for d in 1:length(dA_struct.PN)
-            if shiftval[d] != 0
-                fold_halo_dim_to_core_grad!(dA_struct, d)
-            end
-        end
+        _lm_ad_maybe_fold_shift_scatter!(dA_struct, shiftval)
         if get(ENV, "LM_DEBUG_ADD_SHIFT", "") == "1"
             println("add_matrix_shiftedA! reverse: dA max=", maximum(abs, Array(dAval)))
         end
@@ -1931,6 +1930,7 @@ function ER.reverse(cfg::ER.RevConfig,
             Val(C.val.NC2), Val(C.val.NC1),
             conj(αval), shiftval, Val(C.val.nw)
         )
+        _lm_ad_maybe_fold_shift_scatter!(dA_struct, shiftval)
     end
 
     return (nothing, nothing, nothing, nothing)
@@ -3812,8 +3812,8 @@ _getshadow(::Type) = nothing
 _getshadow_data(x) = nothing
 _getshadow_data(x::Base.RefValue) = _getshadow_data(x[])
 _getshadow_data(x::LatticeMatrix) = x
-_getshadow_data(x::Shifted_Lattice) = x.data
-_getshadow_data(x::Adjoint_Lattice) = _getshadow_data(x.data)
+_getshadow_data(x::Shifted_Lattice) = getfield(x, :data)
+_getshadow_data(x::Adjoint_Lattice) = _getshadow_data(getfield(x, :data))
 
 @inline function _getshadow_out(dCout, C::Annotation{<:LatticeMatrix})
     if dCout isa Active

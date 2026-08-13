@@ -776,6 +776,7 @@ end
 function mul_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     #println("C = A*shiftedB $NC1 $NC2 $NC3 ")
     #display(B.data.A[:, :, 2, 2, 2, 2])
     #println("BdataA")
@@ -803,6 +804,7 @@ end
 function mul_simple_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     @inbounds for i in 1:prod(C.PN)
         kernel_Dmatrix_mul_AshiftB!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift)
     end
@@ -827,6 +829,8 @@ end
 function mul_shiftAshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    _ensure_halo_for_shift!(A, shiftA)
+    _ensure_halo_for_shift!(B, shiftB)
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftAshiftB!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
@@ -836,6 +840,8 @@ end
 function mul_shiftAshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Adjoint_Lattice{L1}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    _ensure_halo_for_shift!(getfield(A, :data), shiftA)
+    _ensure_halo_for_shift!(B, shiftB)
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagshiftB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
@@ -975,6 +981,7 @@ function mul_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     βin = T1(β)
     αin = T1(α)
     _parallel_for_mutating!(C,
@@ -995,6 +1002,7 @@ function mul_simple_AshiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     αin = T1(α)
     βin = T1(β)
     @inbounds for i in 1:prod(C.PN)
@@ -2014,6 +2022,8 @@ function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
+    _ensure_halo_for_shift!(B, shift)
+
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
@@ -2023,6 +2033,7 @@ end
 function mul_simple_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     @inbounds for i in 1:prod(C.PN)
         kernel_Dmatrix_mul_AshiftBdag!(i, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift)
     end
@@ -2132,6 +2143,7 @@ function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_AshiftBdag!, C.A, A.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
@@ -2150,6 +2162,7 @@ function mul_simple_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::L, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
+    _ensure_halo_for_shift!(B, shift)
     αin = T1(α)
     βin = T1(β)
     @inbounds for i in 1:prod(C.PN)

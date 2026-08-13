@@ -306,7 +306,7 @@ function test_N(NC, dim)
 
 
     substitute!(dM2, dM3)
-    Wiltinger!(dM3)
+    Wirtinger!(dM3)
 
 
 

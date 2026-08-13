@@ -322,8 +322,14 @@ function test_N(NC, dim)
 
     #return
 
-    Enzyme.autodiff(Reverse, Const(loss7), Active,
-        Duplicated(Ms, dMs), DuplicatedNoNeed(temp, dtemp))
+    loss7_separate(M1, M2, work) = loss7((M1, M2), work)
+    Enzyme_derivative!(
+        loss7_separate,
+        Ms[1], Ms[2],
+        dMs[1], dMs[2];
+        temp,
+        dtemp,
+    )
 
 
 
@@ -351,7 +357,7 @@ function test_N(NC, dim)
 
 
     #substitute!(dM2, dM3)
-    #Wiltinger!(dM3)
+    #Wirtinger!(dM3)
 
 
 
@@ -365,13 +371,20 @@ function test_N(NC, dim)
     GX, GY = real.(dM2.A), imag.(dM2.A)              # ∂L/∂Re(A), ∂L/∂Im(A)
     ∂L_∂A = Complex.(0.5 .* GX, -0.5 .* GY)  # (∂X - i∂Y)/2
     ∂L_∂Aconj = Complex.(0.5 .* GX, 0.5 .* GY)  # (∂X + i∂Y)/2
-    println("Wiltinger")
+    println("Wirtinger")
     display(∂L_∂A[:, :, 2, 2, 2, 2])
     #display(dM2.A[:, :, 2, 2, 2, 2])
     #display(transpose(M2.A[:, :, 2, 2, 2, 2]))
     clear_matrix!.(dMs)
 
-    Wiltinger_derivative!(loss7, Ms, dMs; temp, dtemp)
+    Enzyme_derivative!(
+        loss7_separate,
+        Ms[1], Ms[2],
+        dMs[1], dMs[2];
+        temp,
+        dtemp,
+    )
+    Wirtinger!.(dMs)
     display(dM2.A[:, :, 2, 2, 2, 2])
 
     return

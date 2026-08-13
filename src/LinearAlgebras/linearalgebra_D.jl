@@ -2265,6 +2265,7 @@ end
 
 function add_matrix_shiftedA!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, shift, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+    _ensure_halo_for_shift!(A, shift)
     _parallel_for_mutating!(C, prod(C.PN), kernel_add_4D_shift!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
     #set_halo!(C)
 end
@@ -2364,6 +2365,7 @@ end
 
 function add_matrix_shiftedAdag!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, shift, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+    _ensure_halo_for_shift!(A, shift)
     _parallel_for_mutating!(C, prod(C.PN), kernel_add_4D_shiftdag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
     #set_halo!(C)
 end

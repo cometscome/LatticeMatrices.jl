@@ -1169,7 +1169,7 @@ end
 
 #C = shiftedA'*B
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
 
     shift = get_shift(A)
@@ -1178,7 +1178,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagB!, C.A, A.data.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
@@ -1245,7 +1245,7 @@ end
 
 #C = α*shiftedA'*B + β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
 
@@ -1255,7 +1255,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI}}
     _parallel_for_mutating!(C,
@@ -1613,7 +1613,7 @@ end
 
 #C = shiftedA'*B'
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(A)
@@ -1622,7 +1622,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_Bdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftAdagBdag!, C.A, A.data.data.A, B.data.A, Val(NC1),
@@ -1651,7 +1651,7 @@ end
 
 #C = α*shiftedA'*B'+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
@@ -1661,7 +1661,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_Bdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}, shift,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     _parallel_for_mutating!(C,
@@ -2003,7 +2003,7 @@ end
 
 #C = A*shiftedB'
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{<:Shifted_Lattice{L,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(B)
@@ -2012,7 +2012,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{<:Shifted_Lattice{L,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     shift = get_shift(B)
     mul_simple_A_shiftBdag!(C, A, B.data.data, shift)
@@ -2130,7 +2130,7 @@ end
 
 #C = α*A*shiftedB'+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{<:Shifted_Lattice{L,D}},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
@@ -2151,7 +2151,7 @@ function mul_A_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_simple!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{Shifted_Lattice{L,D}},
+    A::LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}, B::Adjoint_Lattice{<:Shifted_Lattice{L,D}},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
     shift = get_shift(B)
@@ -2292,7 +2292,7 @@ end
 
 #C = A'*shiftedB'
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{L1}, B::Adjoint_Lattice{Shifted_Lattice{L2,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
+    A::Adjoint_Lattice{L1}, B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
     shift = get_shift(B)
@@ -2418,7 +2418,7 @@ end
 end
 #C = α*A'*shiftedB'+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{L1}, B::Adjoint_Lattice{Shifted_Lattice{L2,D}},
+    A::Adjoint_Lattice{L1}, B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
@@ -2751,7 +2751,7 @@ end
 #C = shiftA'*shiftedB
 #C[i,j] = A[k,i]'*B[k,j]
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D}) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
 
@@ -2762,7 +2762,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D},
     target_even::Bool) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
@@ -2773,7 +2773,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
     _parallel_for_mutating!(C,
@@ -2783,7 +2783,7 @@ function mul_shiftAdag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB,
     target_even::Bool) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
@@ -2829,7 +2829,7 @@ end
 
 #C = α*shiftA'*shiftedB+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
@@ -2841,7 +2841,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_shiftB!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::L, shiftA, shiftB,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}}
@@ -3012,7 +3012,7 @@ end
 #C = shiftA*shiftedB'
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Shifted_Lattice{L1,D},
-    B::Adjoint_Lattice{Shifted_Lattice{L2,D}}) where {D,T1,T2,T3,AT1,AT2,
+    B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
@@ -3024,7 +3024,7 @@ end
 
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Shifted_Lattice{L1,D},
-    B::Adjoint_Lattice{Shifted_Lattice{L2,D}},
+    B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}},
     target_even::Bool) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
@@ -3090,7 +3090,7 @@ end
 #C = α* shiftA*shiftedB'+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Shifted_Lattice{L1,D},
-    B::Adjoint_Lattice{Shifted_Lattice{L2,D}},
+    B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
@@ -3223,8 +3223,8 @@ end
 
 #C = shiftA'*shiftedB'
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
-    B::Adjoint_Lattice{Shifted_Lattice{L2,D}}) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
+    B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
 
@@ -3235,8 +3235,8 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
-    B::Adjoint_Lattice{Shifted_Lattice{L2,D}},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
+    B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}},
     target_even::Bool) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
@@ -3247,7 +3247,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
     B::L, shiftA, shiftB) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
@@ -3258,7 +3258,7 @@ function mul_shiftAdag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
     B::L, shiftA, shiftB, target_even::Bool) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
@@ -3302,8 +3302,8 @@ end
 
 #C = α*shiftA'*shiftedB'+β*C
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
-    B::Adjoint_Lattice{Shifted_Lattice{L2,D}},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
+    B::Adjoint_Lattice{<:Shifted_Lattice{L2,D}},
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC1,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC2,NC3,nw,DI}}
@@ -3315,7 +3315,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 end
 
 function mul_shiftAdag_shiftBdag!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
     B::L, shiftA, shiftB,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,S<:Number,DI,

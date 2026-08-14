@@ -16,6 +16,24 @@ function _deterministic_checkerboard_map!(U, V)
     return nothing
 end
 
+function _reference_direct_shift(A, shift, phases)
+    global_size = size(A)[3:end]
+    shifted = similar(A)
+    for site in CartesianIndices(global_size)
+        indices = Tuple(site)
+        source_indices, factor =
+            LatticeMatrices._shifted_global_indices_and_phase(
+                indices, shift, global_size, phases, eltype(A))
+        @views shifted[:, :, indices...] .= factor .* A[:, :, source_indices...]
+    end
+    return shifted
+end
+
+Base.@noinline function _abandon_materialized_shift(M, shift)
+    shifted = Shifted_Lattice(M, shift)
+    return WeakRef(getfield(shifted, :lease))
+end
+
 function regressiontests()
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
 
@@ -74,15 +92,82 @@ function regressiontests()
         global_size = (4 * nprocs,)
         process_grid = (nprocs,)
         A = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)
-        M = LatticeMatrix(A, 1, process_grid; nw=1)
+        M = LatticeMatrix(A, 1, process_grid; nw=1, numtemps=2)
         C = similar(M)
+        initial_pool_size = length(M.temps)
 
         for amount in (2, -2, global_size[1] + 1, -global_size[1] - 1)
-            substitute!(C, Shifted_Lattice(M, (amount,)))
+            with_shifted_lattice(M, (amount,)) do shifted
+                @test isopen(shifted)
+                @test count(M.temps._flagusing) == 1
+                substitute!(C, shifted)
+            end
+            @test count(M.temps._flagusing) == 0
+            @test length(M.temps) == initial_pool_size
             result = gather_matrix(C)
             if rank == 0
                 expected = circshift(A, (0, 0, -amount))
                 @test result == expected
+            end
+        end
+
+        materialized = Shifted_Lattice(M, (2,))
+        @test getfield(materialized, :lease).index in eachindex(M.temps._data)
+        release!(materialized)
+        release!(materialized)
+        @test !isopen(materialized)
+        @test_throws ArgumentError materialized.data
+
+        short_shift = Shifted_Lattice(M, (1,))
+        release!(short_shift)
+        @test isopen(short_shift)
+        substitute!(C, short_shift)
+
+        @test_throws ErrorException with_shifted_lattice(M, (2,)) do _
+            error("intentional scoped-shift failure")
+        end
+        @test count(M.temps._flagusing) == 0
+
+        abandoned_lease = _abandon_materialized_shift(M, (2,))
+        @test count(M.temps._flagusing) == 1
+        GC.gc(true)
+        @test abandoned_lease.value === nothing
+        @test count(M.temps._flagusing) == 0
+        @test length(M.temps) == initial_pool_size
+
+        @test_throws ArgumentError LatticeMatrix(
+            1, 1, 1, (2 * nprocs,), process_grid; nw=3)
+    end
+
+    @testset "direct multidimensional shifts" begin
+        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        global_size = (4 * nprocs, 3, 4, 5)
+        process_grid = (nprocs, 1, 1, 1)
+        phases = (cis(0.17), cis(-0.31), -1.0 + 0im, im)
+        values = reshape(
+            ComplexF64.(1:(2 * prod(global_size))), 2, 1, global_size...)
+
+        for nw in (0, 1, 2)
+            M = LatticeMatrix(values, 4, process_grid; nw, phases, numtemps=2)
+            C = similar(M)
+            shifts = (
+                (nw + 1, 0, 0, 0),
+                (-nw - 2, nw + 1, 0, 0),
+                (global_size[1], -global_size[2], 2 * global_size[3] + 1, 0),
+                (3 * global_size[1] + 2, -2 * global_size[2] - 1,
+                    global_size[3] + 3, -global_size[4] - 2),
+            )
+            for shift in shifts
+                with_shifted_lattice(M, shift) do shifted
+                    @test isopen(shifted)
+                    substitute!(C, shifted)
+                end
+                @test count(M.temps._flagusing) == 0
+                @test length(M.temps) == 2
+                result = gather_matrix(C)
+                if rank == 0
+                    @test result ≈ _reference_direct_shift(values, shift, phases)
+                end
             end
         end
     end
@@ -127,16 +212,22 @@ function regressiontests()
         A = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)
 
         for nw in (0, 1)
-            M = LatticeMatrix(A, 1, process_grid; nw, phases=(im,))
+            M = LatticeMatrix(A, 1, process_grid; nw, phases=(im,), numtemps=2)
             shifted = similar(M)
             restored = similar(M)
-            substitute!(shifted, Shifted_Lattice(M, (1,)))
+            with_shifted_lattice(M, (1,)) do view
+                substitute!(shifted, view)
+            end
             set_halo!(shifted)
-            substitute!(restored, Shifted_Lattice(shifted, (-1,)))
+            with_shifted_lattice(shifted, (-1,)) do view
+                substitute!(restored, view)
+            end
             result = gather_matrix(restored)
             if rank == 0
                 @test result == A
             end
+            @test count(M.temps._flagusing) == 0
+            @test count(shifted.temps._flagusing) == 0
         end
     end
 
@@ -406,6 +497,7 @@ function regressiontests()
         S = similar(M)
         @test M.buf !== S.buf
         @test M.buf_host !== S.buf_host
+        @test M.shift_buf_host !== S.shift_buf_host
         @test all(M.buf[i] !== S.buf[i] for i in eachindex(M.buf))
         @test all(M.buf_host[i] !== S.buf_host[i] for i in eachindex(M.buf_host))
     end

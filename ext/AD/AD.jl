@@ -8,6 +8,10 @@ using MPI
 
 const ER = Enzyme.EnzymeRules
 
+# A lease is ownership metadata, not a differentiable value.
+ER.inactive_type(::Type{<:LatticeMatrices.ShiftLease}) = true
+ER.inactive_type(::Type{<:LatticeMatrices.DirectShiftHostBuffers}) = true
+
 const _LM_AD_TRACE = get(ENV, "LM_AD_TRACE", "0") == "1"
 @inline _adtrace(msg) = (_LM_AD_TRACE ? println("[LM-AD] " * msg) : nothing)
 const _LM_TRAP_MUL_REVERSE_FALLBACK = get(ENV, "LM_TRAP_MUL_REVERSE_FALLBACK", "0") == "1"
@@ -66,17 +70,18 @@ end
 
 
 
-# Allow Shifted/Adjoint wrappers to carry mixed activity when Enzyme supports it.
-@static if isdefined(Enzyme, :MixedDuplicated)
+# Shifted_Lattice is mutable so Enzyme can keep its lattice shadow and inactive
+# ownership metadata together as a regular duplicated object.
+@static if isdefined(Enzyme, :Duplicated)
     if isdefined(Enzyme.EnzymeRules, :activity)
         import Enzyme.EnzymeRules: activity
-        activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.MixedDuplicated
-        activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.MixedDuplicated
+        activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.Duplicated
+        activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.Duplicated
     end
     if isdefined(Enzyme, :activity)
         import Enzyme: activity
-        activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.MixedDuplicated
-        activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.MixedDuplicated
+        activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.Duplicated
+        activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.Duplicated
     end
 end
 
@@ -2636,7 +2641,7 @@ function ER.reverse(cfg::ER.RevConfig,
     elseif C.val.NC1 == 3 && C.val.NC2 == 3
         JACC.parallel_for(
             prod(C.val.PN),
-            kernel_expt_TA_rev_su3!,
+            kernel_expt_TA_rev_su3_ch_fd!,
             dAval, dCval, Aval,
             C.val.indexer, Val(C.val.nw),
             tval, _expt_ta_eps_q
@@ -3204,6 +3209,169 @@ end
     return nothing
 end
 
+@inline function _exp_iQ_su3_ch_from_raw_A(
+    a11, a12, a13, a21, a22, a23, a31, a32, a33, t,
+)
+    RT = typeof(real(zero(typeof(a11))))
+    half = one(RT) / RT(2)
+    third = one(RT) / RT(3)
+    tt = RT(t)
+
+    tri = third * (imag(a11) + imag(a22) + imag(a33))
+    y11 = complex(zero(RT), imag(a11) - tri)
+    y22 = complex(zero(RT), imag(a22) - tri)
+    y33 = complex(zero(RT), imag(a33) - tri)
+    y12 = half * (a12 - conj(a21))
+    y13 = half * (a13 - conj(a31))
+    y23 = half * (a23 - conj(a32))
+    y21 = -conj(y12)
+    y31 = -conj(y13)
+    y32 = -conj(y23)
+
+    return LatticeMatrices._exp_iQ_su3_ch(
+        complex(tt * imag(y11), -tt * real(y11)),
+        complex(tt * imag(y12), -tt * real(y12)),
+        complex(tt * imag(y13), -tt * real(y13)),
+        complex(tt * imag(y21), -tt * real(y21)),
+        complex(tt * imag(y22), -tt * real(y22)),
+        complex(tt * imag(y23), -tt * real(y23)),
+        complex(tt * imag(y31), -tt * real(y31)),
+        complex(tt * imag(y32), -tt * real(y32)),
+        complex(tt * imag(y33), -tt * real(y33)),
+    )
+end
+
+@inline function _expt_ta_rev_su3_ch_fd_accum_one!(
+    dA, indices,
+    a11, a12, a13, a21, a22, a23, a31, a32, a33,
+    t, epsfd,
+    c11, c12, c13, c21, c22, c23, c31, c32, c33,
+    b11, b12, b13, b21, b22, b23, b31, b32, b33,
+)
+    fplus = _exp_iQ_su3_ch_from_raw_A(
+        a11 + epsfd * b11, a12 + epsfd * b12, a13 + epsfd * b13,
+        a21 + epsfd * b21, a22 + epsfd * b22, a23 + epsfd * b23,
+        a31 + epsfd * b31, a32 + epsfd * b32, a33 + epsfd * b33,
+        t,
+    )
+    fminus = _exp_iQ_su3_ch_from_raw_A(
+        a11 - epsfd * b11, a12 - epsfd * b12, a13 - epsfd * b13,
+        a21 - epsfd * b21, a22 - epsfd * b22, a23 - epsfd * b23,
+        a31 - epsfd * b31, a32 - epsfd * b32, a33 - epsfd * b33,
+        t,
+    )
+    inv_two_eps = inv(2 * epsfd)
+    g = real(
+        conj(c11) * ((fplus[1] - fminus[1]) * inv_two_eps) +
+        conj(c12) * ((fplus[2] - fminus[2]) * inv_two_eps) +
+        conj(c13) * ((fplus[3] - fminus[3]) * inv_two_eps) +
+        conj(c21) * ((fplus[4] - fminus[4]) * inv_two_eps) +
+        conj(c22) * ((fplus[5] - fminus[5]) * inv_two_eps) +
+        conj(c23) * ((fplus[6] - fminus[6]) * inv_two_eps) +
+        conj(c31) * ((fplus[7] - fminus[7]) * inv_two_eps) +
+        conj(c32) * ((fplus[8] - fminus[8]) * inv_two_eps) +
+        conj(c33) * ((fplus[9] - fminus[9]) * inv_two_eps)
+    )
+
+    # The eight generators below are mutually orthogonal and each has
+    # Frobenius norm squared equal to two.
+    scale = g / 2
+    dA[1, 1, indices...] += scale * b11
+    dA[1, 2, indices...] += scale * b12
+    dA[1, 3, indices...] += scale * b13
+    dA[2, 1, indices...] += scale * b21
+    dA[2, 2, indices...] += scale * b22
+    dA[2, 3, indices...] += scale * b23
+    dA[3, 1, indices...] += scale * b31
+    dA[3, 2, indices...] += scale * b32
+    dA[3, 3, indices...] += scale * b33
+    return nothing
+end
+
+@inline function kernel_expt_TA_rev_su3_ch_fd!(
+    i, dA, dC, A, dindexer, ::Val{nw}, t, eps_Q,
+) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    @inbounds begin
+        a11 = A[1, 1, indices...]
+        a12 = A[1, 2, indices...]
+        a13 = A[1, 3, indices...]
+        a21 = A[2, 1, indices...]
+        a22 = A[2, 2, indices...]
+        a23 = A[2, 3, indices...]
+        a31 = A[3, 1, indices...]
+        a32 = A[3, 2, indices...]
+        a33 = A[3, 3, indices...]
+
+        c11 = dC[1, 1, indices...]
+        c12 = dC[1, 2, indices...]
+        c13 = dC[1, 3, indices...]
+        c21 = dC[2, 1, indices...]
+        c22 = dC[2, 2, indices...]
+        c23 = dC[2, 3, indices...]
+        c31 = dC[3, 1, indices...]
+        c32 = dC[3, 2, indices...]
+        c33 = dC[3, 3, indices...]
+    end
+
+    RT = typeof(real(zero(eltype(A))))
+    one_r = one(RT)
+    zero_c = zero(eltype(A))
+    im_r = complex(zero(RT), one_r)
+    inv_sqrt_three = inv(sqrt(RT(3)))
+    basescale = max(
+        abs(a11), abs(a12), abs(a13),
+        abs(a21), abs(a22), abs(a23),
+        abs(a31), abs(a32), abs(a33),
+        abs(RT(t)), one_r,
+    )
+    epsfd = cbrt(eps(RT)) * basescale
+
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        im_r, zero_c, zero_c, zero_c, -im_r, zero_c, zero_c, zero_c, zero_c,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        im_r * inv_sqrt_three, zero_c, zero_c,
+        zero_c, im_r * inv_sqrt_three, zero_c,
+        zero_c, zero_c, -RT(2) * im_r * inv_sqrt_three,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        zero_c, one_r, zero_c, -one_r, zero_c, zero_c, zero_c, zero_c, zero_c,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        zero_c, im_r, zero_c, im_r, zero_c, zero_c, zero_c, zero_c, zero_c,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        zero_c, zero_c, one_r, zero_c, zero_c, zero_c, -one_r, zero_c, zero_c,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        zero_c, zero_c, im_r, zero_c, zero_c, zero_c, im_r, zero_c, zero_c,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        zero_c, zero_c, zero_c, zero_c, zero_c, one_r, zero_c, -one_r, zero_c,
+    )
+    _expt_ta_rev_su3_ch_fd_accum_one!(
+        dA, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t, epsfd,
+        c11, c12, c13, c21, c22, c23, c31, c32, c33,
+        zero_c, zero_c, zero_c, zero_c, zero_c, im_r, zero_c, im_r, zero_c,
+    )
+    return nothing
+end
+
 @inline function _expt_ta_rev_su3_pade_fd!(
     dA, dC, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
 )
@@ -3559,58 +3727,163 @@ function ER.reverse(cfg::ER.RevConfig,
     return (nothing, nothing)
 end
 
+@inline function _shift_augmented_return(
+    cfg::C,
+    ::Type{RT},
+    primal,
+    shadow,
+    tape::Tape,
+) where {C<:ER.RevConfig,RT,Tape}
+    return ER.augmented_rule_return_type(cfg, RT, tape)(primal, shadow, tape)
+end
+
+struct _ShiftRuleTape{Dim}
+    primal::Any
+    shadow::Any
+    shift::NTuple{Dim,Int}
+    materialized::Bool
+end
+
+@inline function _shift_rule_tape(
+    primal,
+    shadow,
+    data::LatticeMatrix{D},
+    shift_in,
+    materialized,
+) where {D}
+    shift = LatticeMatrices._as_shift_tuple(shift_in, Val(D))
+    return _ShiftRuleTape{D}(primal, shadow, shift, materialized)
+end
+
+# A source-level release marks the end of the shifted value's forward use. In
+# reverse mode the primal and shadow buffers must remain valid until the
+# consumer pullbacks have run, so the shift rule below performs the actual
+# release at its reverse point.
+function ER.augmented_primal(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.release!)},
+    ::Type{RT},
+    shifted::ER.Annotation{<:Shifted_Lattice},
+) where {RT}
+    return ER.AugmentedReturn(nothing, nothing, nothing)
+end
+
+function ER.reverse(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.release!)},
+    _dout,
+    _tape,
+    shifted::ER.Annotation{<:Shifted_Lattice},
+)
+    return (nothing,)
+end
+
+function ER.augmented_primal(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.release!)},
+    ::Type{RT},
+    shifted::ER.Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}},
+) where {RT}
+    return ER.AugmentedReturn(nothing, nothing, nothing)
+end
+
+function ER.reverse(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LatticeMatrices.release!)},
+    _dout,
+    _tape,
+    shifted::ER.Annotation{<:Adjoint_Lattice{<:Shifted_Lattice}},
+)
+    return (nothing,)
+end
+
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.shift_L)},
     ::Type{RT},
     B::ER.Const{<:LatticeMatrix},
-    sh::NTuple{Dim,Int},
+    sh::ER.Const{<:NTuple{Dim,Int}},
 ) where {RT,Dim}
-    primal = ER.needs_primal(cfg) ? LatticeMatrices.shift_L(B.val, sh) : nothing
+    shift = sh.val
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.shift_L(B.val, shift) : nothing
     shadow = ER.needs_shadow(cfg) ? nothing : nothing
-    return ER.AugmentedReturn(primal, shadow, nothing)
+    materialized = LatticeMatrices._shift_requires_materialization(B.val, shift)
+    tape = _shift_rule_tape(primal, shadow, B.val, shift, materialized)
+    return _shift_augmented_return(cfg, RT, primal, shadow, tape)
 end
 
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.shift_L)},
     ::Type{RT},
     B::ER.Annotation{<:LatticeMatrix},
-    sh::NTuple{Dim,Int},
+    sh::ER.Const{<:NTuple{Dim,Int}},
 ) where {RT,Dim}
+    shift = sh.val
     if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
         println("shift_L augmented_primal (Annotation): B.val=", typeof(B.val),
             " dval=", hasproperty(B, :dval) ? typeof(B.dval) : "no dval",
-            " sh=", sh)
+            " sh=", shift)
     end
-    primal = ER.needs_primal(cfg) ? LatticeMatrices.shift_L(B.val, sh) : nothing
+    materialized = LatticeMatrices._shift_requires_materialization(B.val, shift)
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.shift_L(B.val, shift) : nothing
     shadow = if ER.needs_shadow(cfg)
         dB = _getshadow(B.dval)
-        dB isa LatticeMatrix ? LatticeMatrices.shift_L(dB, sh) : nothing
+        if dB isa LatticeMatrix
+            materialized ?
+                LatticeMatrices._materialized_shift_shadow(dB, shift) :
+                LatticeMatrices.shift_L(dB, shift)
+        else
+            nothing
+        end
     else
         nothing
     end
-    return ER.AugmentedReturn(primal, shadow, nothing)
+    tape = _shift_rule_tape(primal, shadow, B.val, shift, materialized)
+    return _shift_augmented_return(cfg, RT, primal, shadow, tape)
+end
+
+@inline function _release_shift_rule_value!(value)
+    value isa Shifted_Lattice && LatticeMatrices.release!(value)
+    return nothing
+end
+
+function _finish_shift_rule!(tape, destination=nothing, metadata=nothing)
+    tape === nothing && return nothing
+    try
+        if destination isa LatticeMatrix && tape.materialized &&
+           tape.shadow isa Shifted_Lattice
+            LatticeMatrices._accumulate_shift_pullback!(
+                destination, tape.shadow, tape.shift, metadata)
+        end
+    finally
+        _release_shift_rule_value!(tape.shadow)
+        _release_shift_rule_value!(tape.primal)
+    end
+    return nothing
 end
 
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.shift_L)},
-    _dout, _tape,
+    _dout, tape,
     B::ER.Const{<:LatticeMatrix},
-    sh::NTuple{Dim,Int},
+    sh::ER.Const{<:NTuple{Dim,Int}},
 ) where {Dim}
+    _finish_shift_rule!(tape)
     return (nothing, nothing)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.shift_L)},
-    _dout, _tape,
+    _dout, tape,
     B::ER.Annotation{<:LatticeMatrix},
-    sh::NTuple{Dim,Int},
+    sh::ER.Const{<:NTuple{Dim,Int}},
 ) where {Dim}
     if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
         println("shift_L reverse (Annotation): B.val=", typeof(B.val),
             " dval=", hasproperty(B, :dval) ? typeof(B.dval) : "no dval",
-            " sh=", sh)
+            " sh=", sh.val)
     end
+    dB = _getshadow(B.dval)
+    _finish_shift_rule!(tape, dB, B.val)
     return (nothing, nothing)
 end
 
@@ -3618,41 +3891,41 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     ::Type{RT},
     data::ER.Const{<:LatticeMatrix},
-    shift::NTuple{Dim,Int},
-    ::Val{Dim},
+    shift::ER.Const{<:NTuple{Dim,Int}},
+    ::ER.Const{Val{Dim}},
 ) where {RT,Dim}
-    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift, Val(Dim)) : nothing
-    return ER.AugmentedReturn(primal, nothing, nothing)
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift.val, Val(Dim)) : nothing
+    return _shift_augmented_return(cfg, RT, primal, nothing, nothing)
 end
 
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     ::Type{RT},
     data::ER.Annotation{<:LatticeMatrix},
-    shift::NTuple{Dim,Int},
-    ::Val{Dim},
+    shift::ER.Const{<:NTuple{Dim,Int}},
+    ::ER.Const{Val{Dim}},
 ) where {RT,Dim}
     if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
         println("Shifted_Lattice augmented_primal (Annotation, Val): data.val=", typeof(data.val),
             " dval=", hasproperty(data, :dval) ? typeof(data.dval) : "no dval",
-            " shift=", shift)
+            " shift=", shift.val)
     end
-    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift, Val(Dim)) : nothing
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift.val, Val(Dim)) : nothing
     shadow = if ER.needs_shadow(cfg)
         ddata = _getshadow(data.dval)
-        ddata isa LatticeMatrix ? LatticeMatrices.Shifted_Lattice(ddata, shift, Val(Dim)) : nothing
+        ddata isa LatticeMatrix ? LatticeMatrices.Shifted_Lattice(ddata, shift.val, Val(Dim)) : nothing
     else
         nothing
     end
-    return ER.AugmentedReturn(primal, shadow, nothing)
+    return _shift_augmented_return(cfg, RT, primal, shadow, nothing)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     _dout, _tape,
     data::ER.Const{<:LatticeMatrix},
-    shift::NTuple{Dim,Int},
-    ::Val{Dim},
+    shift::ER.Const{<:NTuple{Dim,Int}},
+    ::ER.Const{Val{Dim}},
 ) where {Dim}
     return (nothing, nothing, nothing)
 end
@@ -3661,8 +3934,8 @@ function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     _dout, _tape,
     data::ER.Annotation{<:LatticeMatrix},
-    shift::NTuple{Dim,Int},
-    ::Val{Dim},
+    shift::ER.Const{<:NTuple{Dim,Int}},
+    ::ER.Const{Val{Dim}},
 ) where {Dim}
     return (nothing, nothing, nothing)
 end
@@ -3671,48 +3944,63 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     ::Type{RT},
     data::ER.Const{<:LatticeMatrix},
-    shift_in,
+    shift_in::ER.Const,
 ) where {RT}
-    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift_in) : nothing
-    return ER.AugmentedReturn(primal, nothing, nothing)
+    shift = shift_in.val
+    materialized = LatticeMatrices._shift_requires_materialization(data.val, shift)
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift) : nothing
+    tape = _shift_rule_tape(primal, nothing, data.val, shift, materialized)
+    return _shift_augmented_return(cfg, RT, primal, nothing, tape)
 end
 
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
     ::Type{RT},
     data::ER.Annotation{<:LatticeMatrix},
-    shift_in,
+    shift_in::ER.Const,
 ) where {RT}
+    shift = shift_in.val
     if get(ENV, "LM_DEBUG_SHIFT_L", "") == "1"
         println("Shifted_Lattice augmented_primal (Annotation): data.val=", typeof(data.val),
             " dval=", hasproperty(data, :dval) ? typeof(data.dval) : "no dval",
-            " shift_in=", shift_in)
+            " shift_in=", shift)
     end
-    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift_in) : nothing
+    materialized = LatticeMatrices._shift_requires_materialization(data.val, shift)
+    primal = ER.needs_primal(cfg) ? LatticeMatrices.Shifted_Lattice(data.val, shift) : nothing
     shadow = if ER.needs_shadow(cfg)
         ddata = _getshadow(data.dval)
-        ddata isa LatticeMatrix ? LatticeMatrices.Shifted_Lattice(ddata, shift_in) : nothing
+        if ddata isa LatticeMatrix
+            materialized ?
+                LatticeMatrices._materialized_shift_shadow(ddata, shift) :
+                LatticeMatrices.Shifted_Lattice(ddata, shift)
+        else
+            nothing
+        end
     else
         nothing
     end
-    return ER.AugmentedReturn(primal, shadow, nothing)
+    tape = _shift_rule_tape(primal, shadow, data.val, shift, materialized)
+    return _shift_augmented_return(cfg, RT, primal, shadow, tape)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
-    _dout, _tape,
+    _dout, tape,
     data::ER.Const{<:LatticeMatrix},
-    shift_in,
+    shift_in::ER.Const,
 )
+    _finish_shift_rule!(tape)
     return (nothing, nothing)
 end
 
 function ER.reverse(cfg::ER.RevConfig,
     ::ER.Const{typeof(LatticeMatrices.Shifted_Lattice)},
-    _dout, _tape,
+    _dout, tape,
     data::ER.Annotation{<:LatticeMatrix},
-    shift_in,
+    shift_in::ER.Const,
 )
+    ddata = _getshadow(data.dval)
+    _finish_shift_rule!(tape, ddata, data.val)
     return (nothing, nothing)
 end
 

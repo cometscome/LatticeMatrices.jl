@@ -154,15 +154,137 @@ end
 
 function expt_TA!(C::TC, A::TA, t::S=one(S)) where {
     D,T,AT,NC1,NC2,S<:Number,nw,DI,TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TA<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
-    traceless_antihermitian!(C, A)
-
-    _parallel_for_mutating!(C,
-        prod(C.PN), kernel_4Dexpt_TA!, C.A, C.indexer, Val(nw), t, Val(NC1)
-    )
+    if NC1 == 3 && T <: Complex && S <: Real
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_4Dexpt_TA_su3_ch!,
+            C.A, A.A, C.indexer, Val(nw), t,
+        )
+    else
+        traceless_antihermitian!(C, A)
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_4Dexpt_TA!, C.A, C.indexer, Val(nw), t, Val(NC1)
+        )
+    end
     return
     #set_halo!(C)
 end
 export expt_TA!
+
+@inline function _writeback_exp_iQ_su3_ch!(
+    C, indices,
+    q11, q12, q13, q21, q22, q23, q31, q32, q33,
+)
+    c11, c12, c13, c21, c22, c23, c31, c32, c33 = _exp_iQ_su3_ch(
+        q11, q12, q13,
+        q21, q22, q23,
+        q31, q32, q33,
+    )
+    @inbounds begin
+        C[1, 1, indices...] = c11
+        C[1, 2, indices...] = c12
+        C[1, 3, indices...] = c13
+        C[2, 1, indices...] = c21
+        C[2, 2, indices...] = c22
+        C[2, 3, indices...] = c23
+        C[3, 1, indices...] = c31
+        C[3, 2, indices...] = c32
+        C[3, 3, indices...] = c33
+    end
+    return nothing
+end
+
+@inline function kernel_4Dexpt_TA_su3_ch!(
+    i, C, A, dindexer, ::Val{nw}, t,
+) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    RT = typeof(real(zero(eltype(C))))
+    zero_r = zero(RT)
+    half = one(RT) / RT(2)
+    third = one(RT) / RT(3)
+    tt = RT(t)
+
+    @inbounds begin
+        a11 = A[1, 1, indices...]
+        a12 = A[1, 2, indices...]
+        a13 = A[1, 3, indices...]
+        a21 = A[2, 1, indices...]
+        a22 = A[2, 2, indices...]
+        a23 = A[2, 3, indices...]
+        a31 = A[3, 1, indices...]
+        a32 = A[3, 2, indices...]
+        a33 = A[3, 3, indices...]
+    end
+
+    tri = third * (imag(a11) + imag(a22) + imag(a33))
+    y11 = complex(zero_r, imag(a11) - tri)
+    y22 = complex(zero_r, imag(a22) - tri)
+    y33 = complex(zero_r, imag(a33) - tri)
+    y12 = half * (a12 - conj(a21))
+    y13 = half * (a13 - conj(a31))
+    y23 = half * (a23 - conj(a32))
+    y21 = -conj(y12)
+    y31 = -conj(y13)
+    y32 = -conj(y23)
+
+    # Q = -i*t*Y is Hermitian and exp(tY) = exp(iQ).
+    q11 = complex(tt * imag(y11), -tt * real(y11))
+    q12 = complex(tt * imag(y12), -tt * real(y12))
+    q13 = complex(tt * imag(y13), -tt * real(y13))
+    q21 = complex(tt * imag(y21), -tt * real(y21))
+    q22 = complex(tt * imag(y22), -tt * real(y22))
+    q23 = complex(tt * imag(y23), -tt * real(y23))
+    q31 = complex(tt * imag(y31), -tt * real(y31))
+    q32 = complex(tt * imag(y32), -tt * real(y32))
+    q33 = complex(tt * imag(y33), -tt * real(y33))
+
+    _writeback_exp_iQ_su3_ch!(
+        C, indices,
+        q11, q12, q13,
+        q21, q22, q23,
+        q31, q32, q33,
+    )
+    return nothing
+end
+
+@inline function kernel_4Dexpt_TA_basis_su3_ch!(
+    i, C, A, dindexer, ::Val{nw}, t, ::Val{nw2},
+) where {nw,nw2}
+    indices = delinearize(dindexer, i, nw)
+    indices2 = delinearize(dindexer, i, nw2)
+    RT = typeof(real(zero(eltype(C))))
+    zero_r = zero(RT)
+    half_t = RT(t) / RT(2)
+    inv_sqrt_three = inv(sqrt(RT(3)))
+
+    @inbounds begin
+        c1 = half_t * RT(A[1, 1, indices2...])
+        c2 = half_t * RT(A[2, 1, indices2...])
+        c3 = half_t * RT(A[3, 1, indices2...])
+        c4 = half_t * RT(A[4, 1, indices2...])
+        c5 = half_t * RT(A[5, 1, indices2...])
+        c6 = half_t * RT(A[6, 1, indices2...])
+        c7 = half_t * RT(A[7, 1, indices2...])
+        c8 = half_t * RT(A[8, 1, indices2...])
+    end
+
+    q11 = complex(c3 + inv_sqrt_three * c8, zero_r)
+    q12 = complex(c1, -c2)
+    q13 = complex(c4, -c5)
+    q21 = conj(q12)
+    q22 = complex(-c3 + inv_sqrt_three * c8, zero_r)
+    q23 = complex(c6, -c7)
+    q31 = conj(q13)
+    q32 = conj(q23)
+    q33 = complex(-RT(2) * inv_sqrt_three * c8, zero_r)
+
+    _writeback_exp_iQ_su3_ch!(
+        C, indices,
+        q11, q12, q13,
+        q21, q22, q23,
+        q31, q32, q33,
+    )
+    return nothing
+end
 
 @inline function _writeback_expt3x3_pade!(
     C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
@@ -962,6 +1084,11 @@ function expt!(C::LatticeMatrix{D,T,AT,NC1,NC1,nw,DI}, TA::LatticeMatrix{D,T1,AT
 
     if NC1 > 3
         error("In NC > 3 case, this function should not be used")
+    elseif NC1 == 3 && T <: Complex && S <: Real
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_4Dexpt_TA_basis_su3_ch!,
+            C.A, TA.A, C.indexer, Val(nw), t, Val(nw2),
+        )
     else
         _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt_TA!, C.A, TA.A, C.indexer, Val(nw), t, Val(NC1), Val(nw2)
@@ -1226,6 +1353,7 @@ function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::LatticeMatrix{
         prod(C.PN), kernel_4Dsubstitute!, C.A, A.A, Val(NC1), Val(NC2), Val(nw), C.indexer
     )
     #set_halo!(C)
+    return nothing
 end
 
 @inline function kernel_4Dsubstitute!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
@@ -1243,6 +1371,7 @@ function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattic
         prod(C.PN), kernel_4Dsubstitute_dag!, C.A, A.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer
     )
     #set_halo!(C)
+    return nothing
 end
 
 @inline function kernel_4Dsubstitute_dag!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
@@ -1268,6 +1397,7 @@ function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::TA) where {D,T
         prod(C.PN), kernel_4Dsubstitute_matrix!, C.A, At, Val(NC1), Val(NC2), Val(nw), C.indexer
     )
     #set_halo!(C)
+    return nothing
 end
 
 @inline function kernel_4Dsubstitute_matrix!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
@@ -1290,6 +1420,7 @@ function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Shifted_Lattic
         prod(C.PN), kernel_4Dsubstitute_shift!, C.A, A.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
+    return nothing
 end
 export substitute!
 
@@ -1305,13 +1436,14 @@ export substitute!
     end
 end
 
-function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattice{Shifted_Lattice{L,D}}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
+function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
     shift = get_shift(A)
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_shiftdag!, C.A, A.data.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
+    return nothing
 end
 export substitute!
 
@@ -1528,7 +1660,7 @@ end
 #C = shiftA'*shiftedB
 #C[i,j] = A[k,j]'*B[k,i]
 function mulT!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D}) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC2,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC1,nw,DI}}
 
@@ -1623,7 +1755,7 @@ end
 #C = shiftA'*B'
 #C[i,j] = A[k,j]'*B[i,k]
 function mulT!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC2,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC1,nw,DI}}
 
@@ -2505,7 +2637,7 @@ end
 end
 
 #C = C+ α*shiftAdag
-function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{Shifted_Lattice{L,D}}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
     shift = get_shift(A)
     add_matrix_shiftedAdag!(C, A.data.data, shift, α)
     #set_halo!(C)
@@ -2513,7 +2645,7 @@ end
 
 function add_matrix_evenodd!(
     C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L,D}},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L,D}},
     target_even::Bool,
     α::S=1,
 ) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,

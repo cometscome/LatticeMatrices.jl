@@ -9,7 +9,7 @@ function device_selection_tests()
         selected_ordinals = map(local_ranks) do local_rank
             LatticeMatrices._device_ordinal_for_local_rank(local_rank, 2, 2)
         end
-        @test selected_ordinals == [1, 2, 1, 2]
+        @test selected_ordinals == (1, 2, 1, 2)
         @test_throws ArgumentError LatticeMatrices._device_ordinal_for_local_rank(2, 2, 2)
         @test_throws ArgumentError LatticeMatrices._device_ordinal_for_local_rank(0, 2, 0)
         @test_throws ArgumentError LatticeMatrices._device_ordinal_for_local_rank(0, 3, 2)

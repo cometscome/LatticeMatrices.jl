@@ -49,13 +49,13 @@ function multiplication_reference(A)
     return reference
 end
 
-function shift_reference(A, shift)
+function shift_reference(A, shift, phases=ones(length(shift)))
     reference = similar(A)
     for site in CartesianIndices(GLOBAL_SIZE)
         indices = Tuple(site)
-        source = ntuple(d -> mod(indices[d] + shift[d] - 1, GLOBAL_SIZE[d]) + 1,
-            length(GLOBAL_SIZE))
-        @views reference[:, :, indices...] .= A[:, :, source...]
+        source, factor = LatticeMatrices._shifted_global_indices_and_phase(
+            indices, shift, GLOBAL_SIZE, phases, eltype(A))
+        @views reference[:, :, indices...] .= factor .* A[:, :, source...]
     end
     return reference
 end
@@ -154,6 +154,45 @@ function run_tests()
             @test global_sum ≈ sum(A)
             @info "two-GPU test completed" iterations max_elapsed_seconds = max_elapsed
         end
+    end
+
+    @testset "two-GPU direct long shifts" begin
+        phases = (cis(0.17), cis(-0.31), -1.0 + 0im, im)
+        direct_lattice = LatticeMatrix(
+            A, 4, PROCESS_GRID; nw=HALO_WIDTH, phases, numtemps=2)
+        direct_result = similar(direct_lattice)
+        initial_pool_size = length(direct_lattice.temps)
+        shifts = (
+            (2, 0, 0, 0),
+            (0, -3, 0, 0),
+            (5, -4, 7, -9),
+            (GLOBAL_SIZE[1], -GLOBAL_SIZE[2],
+                2 * GLOBAL_SIZE[3] + 1, -2 * GLOBAL_SIZE[4] - 1),
+            (3 * GLOBAL_SIZE[1] + 2, -2 * GLOBAL_SIZE[2] - 1,
+                GLOBAL_SIZE[3] + 3, -GLOBAL_SIZE[4] - 2),
+        )
+
+        for shift in shifts
+            with_shifted_lattice(direct_lattice, shift) do shifted
+                @test isopen(shifted)
+                @test count(direct_lattice.temps._flagusing) == 1
+                substitute!(direct_result, shifted)
+            end
+            @test count(direct_lattice.temps._flagusing) == 0
+            @test length(direct_lattice.temps) == initial_pool_size
+
+            shifted = gather_matrix(direct_result)
+            if rank == 0
+                @test shifted ≈ shift_reference(A, shift, phases)
+            end
+        end
+
+        @test direct_lattice.shift_buf_host.send !==
+              direct_lattice.shift_buf_host.recv
+        @test length(direct_lattice.shift_buf_host.send) ==
+              NC * NC * prod(direct_lattice.PN)
+        @test length(direct_lattice.shift_buf_host.recv) ==
+              NC * NC * prod(direct_lattice.PN)
     end
 
     @testset "two-GPU staggered Dirac operator" begin

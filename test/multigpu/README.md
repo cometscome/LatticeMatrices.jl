@@ -40,6 +40,19 @@ If `MPIEXEC` points at another MPI installation, update the matching `libmpi` an
 `mpiexec` entries in `LocalPreferences.toml` as well; the launcher and MPI library must
 come from the same implementation.
 
+For the four-GPU direct-shift regression on the global `12×12×12×24` lattice:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+/opt/ompi-cuda/bin/mpirun --bind-to core -np 4 \
+    julia --project=test/multigpu test/multigpu/direct_shift_4gpu.jl
+```
+
+This test covers process grids `(4,1,1,1)`, `(2,2,1,1)`, and `(1,1,2,2)`,
+halo widths `0`, `1`, and `2`, positive/negative diagonal shifts, phase-wrapped
+shifts, lease release, and preallocated-pool reuse. It also reports synchronized
+rank-maximum median timings for an in-halo shift and a direct long shift.
+
 For a single-GPU correctness check and steady-state staggered benchmark:
 
 ```bash

@@ -26,6 +26,20 @@ end
 
 HaloEpoch() = HaloEpoch(0, 0)
 
+mutable struct DirectShiftHostBuffers{T}
+    send::Vector{T}
+    recv::Vector{T}
+end
+
+DirectShiftHostBuffers(::Type{T}) where {T} =
+    DirectShiftHostBuffers{T}(Vector{T}(), Vector{T}())
+
+function _ensure_direct_shift_host_buffers!(buffers::DirectShiftHostBuffers, count::Int)
+    length(buffers.send) < count && resize!(buffers.send, count)
+    length(buffers.recv) < count && resize!(buffers.recv, count)
+    return buffers
+end
+
 #struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
 struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
     nw::Int                          # ghost width
@@ -42,6 +56,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
     A::AT                           # main array (NC first)
     buf::Vector{AT}                   # 2D work buffers (minus/plus)
     buf_host::Vector{Array{T}}      # Host array on CPUs to send and to receive 
+    shift_buf_host::DirectShiftHostBuffers{T}
 
     myrank::Int
     PN::NTuple{D,Int}
@@ -113,12 +128,45 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         tA,
         buf,
         buf_host,
+        DirectShiftHostBuffers(T),
         ls.myrank,
         ls.PN,
         ls.comm,
         ls.indexer,
         temps,
         HaloEpoch()
+    )
+end
+
+@inline function _lattice_alias_with_array(
+    ls::TL,
+    A::AT;
+    phases=ls.phases,
+    halo_epoch=HaloEpoch(),
+    temps=ls.temps,
+    shift_buf_host=ls.shift_buf_host,
+) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
+    phase_vector = phases isa typeof(ls.phases) ? phases : typeof(ls.phases)(phases)
+    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(
+        ls.nw,
+        phase_vector,
+        ls.NC1,
+        ls.NC2,
+        ls.gsize,
+        ls.cart,
+        ls.coords,
+        ls.dims,
+        ls.nbr,
+        A,
+        ls.buf,
+        ls.buf_host,
+        shift_buf_host,
+        ls.myrank,
+        ls.PN,
+        ls.comm,
+        ls.indexer,
+        temps,
+        halo_epoch,
     )
 end
 
@@ -166,6 +214,12 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     comm_size = MPI.Comm_size(comm0)
     prod(dims) == comm_size || throw(ArgumentError(
         "process grid $dims contains $(prod(dims)) ranks, but communicator contains $comm_size"))
+    PN = ntuple(i -> gsize[i] ÷ dims[i], dim)
+    for d in 1:dim
+        nw <= PN[d] || throw(ArgumentError(
+            "halo width nw=$nw exceeds local lattice size $(PN[d]) in dimension $d; " *
+            "the nearest-neighbor halo exchange requires nw <= local size"))
+    end
 
     _prepare_backend_device!(comm0, device_mapping)
 
@@ -208,7 +262,6 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     end
 
 
-    PN = ntuple(i -> gsize[i] ÷ dims[i], D)
     #println("LatticeMatrix: $dims, $gsize, $PN, $nw")
     #indexer = DIndexer(gsize)
     indexer = DIndexer(PN)
@@ -221,7 +274,8 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
     return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, buf_host, MPI.Comm_rank(cart), PN, comm0, indexer, temps, HaloEpoch())
+        A, buf, buf_host, DirectShiftHostBuffers(T), MPI.Comm_rank(cart), PN, comm0,
+        indexer, temps, HaloEpoch())
 end
 
 function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,

@@ -47,8 +47,10 @@ function nw0test()
         A = reshape(ComplexF64.(1:(NC * NC * prod(global_size))),
             NC, NC, global_size...)
         B = reverse(A; dims=1)
-        M = LatticeMatrix(A, dim, process_grid; nw=0, phases)
-        M2 = LatticeMatrix(B, dim, process_grid; nw=0, phases)
+        # Two materialized views of M coexist below.  MPI direct materialization
+        # also needs one transient receive block, hence three pool blocks.
+        M = LatticeMatrix(A, dim, process_grid; nw=0, phases, numtemps=3)
+        M2 = LatticeMatrix(B, dim, process_grid; nw=0, phases, numtemps=2)
 
         @test size(M.A) == (NC, NC, M.PN...)
         @test isempty(M.buf)
@@ -68,11 +70,14 @@ function nw0test()
         shifts = ((1, 0), (-1, 0),
             (global_size[1] + 1, -global_size[2] - 1))
         for shift in shifts
-            substitute!(C, Shifted_Lattice(M, shift))
+            with_shifted_lattice(M, shift) do shifted
+                substitute!(C, shifted)
+            end
             result = gather_matrix(C)
             if rank == 0
                 @test result ≈ _reference_periodic_shift(A, shift, phases)
             end
+            @test count(M.temps._flagusing) == 0
         end
 
         shift_A = (1, -1)
@@ -147,7 +152,8 @@ function nw0test()
             @test result ≈ reference_Adag
         end
 
-        snapshot_source = LatticeMatrix(A, dim, process_grid; nw=0, phases)
+        snapshot_source = LatticeMatrix(
+            A, dim, process_grid; nw=0, phases, numtemps=2)
         snapshot = Shifted_Lattice(snapshot_source, shift_A)
         snapshot_source.A .= 0
         substitute!(C, snapshot)
@@ -194,6 +200,14 @@ function nw0test()
         else
             @test_throws ArgumentError LatticeMatrices._lazy_shift_nowing(M, shift_A)
         end
+
+        release!(snapshot)
+        release!(shifted_via_function)
+        release!(shifted_A)
+        release!(shifted_B)
+        @test count(M.temps._flagusing) == 0
+        @test count(M2.temps._flagusing) == 0
+        @test count(snapshot_source.temps._flagusing) == 0
     end
 
     @testset "nw=0 Wilson operators" begin

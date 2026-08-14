@@ -16,14 +16,29 @@ include("device_selection.jl")
 #include("1D/1Dlatticevector.jl")
 #include("1D/1Dlatticematrix.jl")
 
-struct Shifted_Lattice{D,Dim} <: AbstractLattice
+mutable struct ShiftLease{P}
+    # Keep the concrete pool type available to Enzyme. Shifted_Lattice stores
+    # the parametric lease behind the ShiftLease UnionAll, so this internal
+    # detail does not add a type parameter to the public shifted-lattice type.
+    pool::P
+    index::Int
+    active::Bool
+end
+
+mutable struct Shifted_Lattice{D,Dim} <: AbstractLattice
     data::D
     shift::NTuple{Dim,Int64}
+    lease::Union{Nothing,ShiftLease}
 
     @inline function Shifted_Lattice(data, shift, ::Val{Dim}) where {Dim}
-        return new{typeof(data),Dim}(data, shift)
+        return new{typeof(data),Dim}(data, shift, nothing)
     end
 
+    @inline function Shifted_Lattice(
+        data, shift, ::Val{Dim}, lease::ShiftLease,
+    ) where {Dim}
+        return new{typeof(data),Dim}(data, shift, lease)
+    end
 end
 
 # Internal lazy representation used only by halo-free kernels that implement
@@ -42,6 +57,7 @@ export Traceless_AntiHermitian
 export Shifted_Lattice
 export shift_L
 export add_matrix_shiftedA!
+export release!, with_shifted_lattice
 
 struct Adjoint_Lattice{D} <: AbstractLattice
     data::D
@@ -77,12 +93,152 @@ include("ND.jl")
 include("LinearAlgebras/staggered.jl")
 
 
+
+@inline _shift_has_lease(x::Shifted_Lattice) = getfield(x, :lease) !== nothing
+
+@inline function _assert_shift_open(x::Shifted_Lattice)
+    lease = getfield(x, :lease)
+    if lease !== nothing && !lease.active
+        throw(ArgumentError("this materialized Shifted_Lattice has already been released"))
+    end
+    return nothing
+end
+
+@inline _release_lease!(::Nothing) = nothing
+
+function _release_lease!(lease::ShiftLease)
+    if lease.active
+        unused!(lease.pool, lease.index)
+        lease.active = false
+    end
+    return nothing
+end
+
+@inline function _new_shift_lease(pool, index::Integer)
+    lease = ShiftLease(pool, Int(index), true)
+    # Explicit release remains the normal path. The finalizer is a safety net
+    # for callers which drop a materialized shift without returning its slot.
+    finalizer(_release_lease!, lease)
+    return lease
+end
+
+"""
+    release!(shifted)
+
+Return storage borrowed by a materialized long-distance shift to its
+`PreallocatedArray`. The operation is idempotent. Short halo-backed shifts do
+not own storage, so releasing them is a no-op.
+"""
+function release!(shifted::Shifted_Lattice)
+    _release_lease!(getfield(shifted, :lease))
+    return nothing
+end
+
+function release!(shifted::Adjoint_Lattice{<:Shifted_Lattice})
+    release!(getfield(shifted, :data))
+    return nothing
+end
+
+Base.close(shifted::Shifted_Lattice) = release!(shifted)
+Base.close(shifted::Adjoint_Lattice{<:Shifted_Lattice}) = release!(shifted)
+
+function Base.isopen(shifted::Shifted_Lattice)
+    lease = getfield(shifted, :lease)
+    return lease === nothing || lease.active
+end
+
+Base.isopen(shifted::Adjoint_Lattice{<:Shifted_Lattice}) =
+    isopen(getfield(shifted, :data))
+
+"""
+    with_shifted_lattice(f, data, shift)
+
+Construct a shifted lattice, call `f` with it, and deterministically release
+any borrowed long-shift storage when `f` returns or throws.
+"""
+function with_shifted_lattice(f::F, data, shift) where {F}
+    shifted = Shifted_Lattice(data, shift)
+    try
+        return f(shifted)
+    finally
+        release!(shifted)
+    end
+end
+
+@inline function _shift_requires_materialization(
+    data::LatticeMatrix{D,T,AT,NC1,NC2,nw},
+    shift_in,
+) where {D,T,AT,NC1,NC2,nw}
+    shift = _as_shift_tuple(shift_in, Val(D))
+    return any(s -> abs(s) > nw, shift)
+end
+
+function _borrow_shift_storage(data::LatticeMatrix{D}) where {D}
+    array, index = get_block(data.temps)
+    lease = _new_shift_lease(data.temps, index)
+    try
+        storage = _lattice_alias_with_array(data, array)
+        clear_matrix!(storage)
+        zeroshift = ntuple(_ -> 0, D)
+        return Shifted_Lattice(storage, zeroshift, Val(D), lease)
+    catch
+        _release_lease!(lease)
+        rethrow()
+    end
+end
+
+function _materialized_shift_shadow(data::LatticeMatrix, shift)
+    return _borrow_shift_storage(data)
+end
+
+@inline function _adjoint_shift_phases(data::LatticeMatrix)
+    return typeof(data.phases)(map(phase -> inv(conj(phase)), data.phases))
+end
+
+function _accumulate_shift_pullback!(
+    destination::LatticeMatrix{D,T,AT,NC1,NC2,nw},
+    shadow::Shifted_Lattice,
+    shift_in,
+    metadata::LatticeMatrix=destination,
+) where {D,T,AT,NC1,NC2,nw}
+    _assert_shift_open(shadow)
+    shift = _as_shift_tuple(shift_in, Val(D))
+    inverse_shift = map(-, shift)
+    source_data = getfield(shadow, :data)
+    source_lease = getfield(shadow, :lease)
+    source_lease isa ShiftLease || throw(ArgumentError(
+        "the materialized shift pullback requires borrowed shadow storage"))
+
+    # Enzyme shadows may poison non-differentiable metadata fields, including
+    # the phase vector of the destination cotangent. Use only shadow arrays;
+    # communicator, topology, buffers, and phases come from the primal input.
+    phases = _adjoint_shift_phases(metadata)
+    source = _lattice_alias_with_array(
+        metadata,
+        source_data.A;
+        phases,
+        halo_epoch=HaloEpoch(UInt64(1), UInt64(0)),
+        temps=destination.temps,
+        shift_buf_host=metadata.shift_buf_host,
+    )
+    shifted = nothing
+    try
+        shifted = _materialize_direct_shift_reusing_source(
+            source, inverse_shift, source_lease)
+        add_matrix!(destination, getfield(shifted, :data))
+        return nothing
+    finally
+        shifted === nothing || release!(shifted)
+    end
+end
+
+
 @inline function get_shift(x::Shifted_Lattice{Tx,D}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     ensure_halo!(x)
     return x.shift
 end
 
-@inline function get_shift(x::Adjoint_Lattice{Shifted_Lattice{Tx,D}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
+@inline function get_shift(x::Adjoint_Lattice{<:Shifted_Lattice{Tx,D}}) where {D,T,AT,NC1,NC2,nw,Tx<:LatticeMatrix{D,T,AT,NC1,NC2,nw}}
     ensure_halo!(x)
     return x.data.shift
 end
@@ -213,9 +369,373 @@ end
     factor = one(T)
     @inbounds for d in 1:D
         _, wraps = _periodic_shift_index(indices[d], shift[d], global_size[d])
-        factor *= phases[d]^wraps
+        factor *= convert(T, phases[d])^wraps
     end
     return shifted_indices, factor
+end
+
+struct _DirectShiftSegment
+    source_start::Int
+    destination_start::Int
+    length::Int
+    destination_coord::Int
+end
+
+struct _DirectShiftFragment{D,T}
+    source_start::NTuple{D,Int}
+    destination_start::NTuple{D,Int}
+    lengths::NTuple{D,Int}
+    peer::Int
+    factor::T
+    buffer_offset::Int
+end
+
+struct _DirectShiftPlan{D,T}
+    send_fragments::Vector{_DirectShiftFragment{D,T}}
+    recv_fragments::Vector{_DirectShiftFragment{D,T}}
+    send_counts::Vector{Cint}
+    recv_counts::Vector{Cint}
+    send_displacements::Vector{Cint}
+    recv_displacements::Vector{Cint}
+    element_count::Int
+end
+
+function _direct_shift_segments(source_coord, local_size, global_size, shift)
+    first_destination_global = mod(source_coord * local_size - shift, global_size) + 1
+    destination_coord = (first_destination_global - 1) ÷ local_size
+    destination_start = mod(first_destination_global - 1, local_size) + 1
+    first_length = min(local_size, local_size - destination_start + 1)
+
+    segments = _DirectShiftSegment[
+        _DirectShiftSegment(1, destination_start, first_length, destination_coord),
+    ]
+    remaining = local_size - first_length
+    if !iszero(remaining)
+        push!(segments, _DirectShiftSegment(
+            first_length + 1,
+            1,
+            remaining,
+            mod(destination_coord + 1, global_size ÷ local_size),
+        ))
+    end
+    return segments
+end
+
+@inline _direct_fragment_element_count(fragment::_DirectShiftFragment, colors::Int) =
+    colors * prod(fragment.lengths)
+
+function _direct_outgoing_fragments(
+    data::LatticeMatrix{D,T}, source_coords_in, shift::NTuple{D,Int}
+) where {D,T}
+    source_coords = ntuple(d -> Int(source_coords_in[d]), D)
+    segments = ntuple(d -> _direct_shift_segments(
+        source_coords[d], data.PN[d], data.gsize[d], shift[d]), D)
+    fragments = _DirectShiftFragment{D,T}[]
+
+    for selected in Iterators.product(segments...)
+        source_start = ntuple(d -> selected[d].source_start, D)
+        destination_start = ntuple(d -> selected[d].destination_start, D)
+        lengths = ntuple(d -> selected[d].length, D)
+        destination_coords = ntuple(d -> selected[d].destination_coord, D)
+        destination_rank = MPI.Cart_rank(data.cart, destination_coords)
+
+        factor = one(T)
+        @inbounds for d in 1:D
+            source_global = source_coords[d] * data.PN[d] + source_start[d]
+            destination_global =
+                destination_coords[d] * data.PN[d] + destination_start[d]
+            wraps = div(destination_global + shift[d] - source_global, data.gsize[d])
+            factor *= data.phases[d]^wraps
+        end
+        push!(fragments, _DirectShiftFragment(
+            source_start, destination_start, lengths,
+            destination_rank, factor, 0))
+    end
+
+    sort!(fragments; by=fragment ->
+        (fragment.peer, fragment.source_start, fragment.destination_start))
+    return fragments
+end
+
+function _direct_fragments_with_offsets(fragments, nranks, colors)
+    counts_int = zeros(Int, nranks)
+    @inbounds for fragment in fragments
+        counts_int[fragment.peer + 1] +=
+            _direct_fragment_element_count(fragment, colors)
+    end
+    total = sum(counts_int)
+    total <= typemax(Cint) || throw(ArgumentError(
+        "direct shift buffer contains $total elements, exceeding MPI Cint capacity"))
+    counts = Cint.(counts_int)
+    displacements = Vector{Cint}(undef, nranks)
+    displacement = 0
+    @inbounds for rank_index in 1:nranks
+        displacements[rank_index] = Cint(displacement)
+        displacement += counts_int[rank_index]
+    end
+
+    cursors = Int.(displacements) .+ 1
+    with_offsets = similar(fragments, 0)
+    @inbounds for fragment in fragments
+        rank_index = fragment.peer + 1
+        offset = cursors[rank_index]
+        push!(with_offsets, _DirectShiftFragment(
+            fragment.source_start,
+            fragment.destination_start,
+            fragment.lengths,
+            fragment.peer,
+            fragment.factor,
+            offset,
+        ))
+        cursors[rank_index] += _direct_fragment_element_count(fragment, colors)
+    end
+    return with_offsets, counts, displacements, total
+end
+
+function _direct_shift_plan(
+    data::LatticeMatrix{D,T,AT,NC1,NC2}, shift::NTuple{D,Int}
+) where {D,T,AT,NC1,NC2}
+    nranks = MPI.Comm_size(data.cart)
+    colors = NC1 * NC2
+    outgoing = _direct_outgoing_fragments(data, data.coords, shift)
+    send_fragments, send_counts, send_displacements, send_total =
+        _direct_fragments_with_offsets(outgoing, nranks, colors)
+
+    incoming = _DirectShiftFragment{D,T}[]
+    for source_rank in 0:(nranks-1)
+        source_coords = MPI.Cart_coords(data.cart, source_rank)
+        source_fragments = _direct_outgoing_fragments(data, source_coords, shift)
+        @inbounds for fragment in source_fragments
+            if fragment.peer == data.myrank
+                push!(incoming, _DirectShiftFragment(
+                    fragment.source_start,
+                    fragment.destination_start,
+                    fragment.lengths,
+                    source_rank,
+                    fragment.factor,
+                    0,
+                ))
+            end
+        end
+    end
+    sort!(incoming; by=fragment ->
+        (fragment.peer, fragment.source_start, fragment.destination_start))
+    recv_fragments, recv_counts, recv_displacements, recv_total =
+        _direct_fragments_with_offsets(incoming, nranks, colors)
+
+    expected = colors * prod(data.PN)
+    send_total == expected || error(
+        "internal direct-shift send plan covers $send_total of $expected elements")
+    recv_total == expected || error(
+        "internal direct-shift receive plan covers $recv_total of $expected elements")
+    return _DirectShiftPlan(
+        send_fragments, recv_fragments,
+        send_counts, recv_counts,
+        send_displacements, recv_displacements,
+        expected,
+    )
+end
+
+@inline function _kernel_pack_direct_shift_fragment!(
+    site, packed, source, source_start, fragment_indexer,
+    ::Val{NC1}, ::Val{NC2}, ::Val{nw}, buffer_offset,
+) where {NC1,NC2,nw}
+    relative = delinearize(fragment_indexer, site, 0)
+    source_indices = ntuple(d -> source_start[d] + relative[d] - 1 + nw,
+        length(source_start))
+    color_offset = buffer_offset + (site - 1) * NC1 * NC2 - 1
+    @inbounds for jc in 1:NC2
+        for ic in 1:NC1
+            packed[color_offset + (jc - 1) * NC1 + ic] =
+                source[ic, jc, source_indices...]
+        end
+    end
+    return nothing
+end
+
+@inline function _kernel_unpack_direct_shift_fragment!(
+    site, destination, packed, destination_start, fragment_indexer,
+    ::Val{NC1}, ::Val{NC2}, ::Val{nw}, buffer_offset, factor,
+) where {NC1,NC2,nw}
+    relative = delinearize(fragment_indexer, site, 0)
+    destination_indices = ntuple(
+        d -> destination_start[d] + relative[d] - 1 + nw,
+        length(destination_start))
+    color_offset = buffer_offset + (site - 1) * NC1 * NC2 - 1
+    @inbounds for jc in 1:NC2
+        for ic in 1:NC1
+            destination[ic, jc, destination_indices...] = factor *
+                packed[color_offset + (jc - 1) * NC1 + ic]
+        end
+    end
+    return nothing
+end
+
+@inline function _kernel_direct_shift_local!(
+    site, destination, source, indexer, shift, coords, local_size,
+    global_size, phases, ::Val{NC1}, ::Val{NC2}, ::Val{nw},
+) where {NC1,NC2,nw}
+    destination_local = delinearize(indexer, site, 0)
+    destination_global = _global_core_indices(destination_local, coords, local_size)
+    source_global, factor = _shifted_global_indices_and_phase(
+        destination_global, shift, global_size, phases, eltype(destination))
+    source_local = ntuple(
+        d -> mod(source_global[d] - 1, local_size[d]) + 1 + nw,
+        length(local_size))
+    destination_indices = ntuple(
+        d -> destination_local[d] + nw, length(local_size))
+    @inbounds for jc in 1:NC2
+        for ic in 1:NC1
+            destination[ic, jc, destination_indices...] =
+                factor * source[ic, jc, source_local...]
+        end
+    end
+    return nothing
+end
+
+function _pack_direct_shift!(
+    packed,
+    source::LatticeMatrix{D,T,AT,NC1,NC2,nw},
+    fragments,
+) where {D,T,AT,NC1,NC2,nw}
+    for fragment in fragments
+        fragment_sites = prod(fragment.lengths)
+        JACC.parallel_for(
+            fragment_sites,
+            _kernel_pack_direct_shift_fragment!,
+            packed,
+            source.A,
+            fragment.source_start,
+            DIndexer(fragment.lengths),
+            Val(NC1),
+            Val(NC2),
+            Val(nw),
+            fragment.buffer_offset,
+        )
+    end
+    return nothing
+end
+
+function _unpack_direct_shift!(
+    destination::LatticeMatrix{D,T,AT,NC1,NC2,nw},
+    packed,
+    fragments,
+) where {D,T,AT,NC1,NC2,nw}
+    for fragment in fragments
+        fragment_sites = prod(fragment.lengths)
+        JACC.parallel_for(
+            fragment_sites,
+            _kernel_unpack_direct_shift_fragment!,
+            destination.A,
+            packed,
+            fragment.destination_start,
+            DIndexer(fragment.lengths),
+            Val(NC1),
+            Val(NC2),
+            Val(nw),
+            fragment.buffer_offset,
+            fragment.factor,
+        )
+    end
+    mark_halo_dirty!(destination)
+    return nothing
+end
+
+function _exchange_direct_shift!(receive, send, data::LatticeMatrix, plan::_DirectShiftPlan)
+    if send isa Array && receive isa Array
+        send_buffer = reshape(send, :)
+        receive_buffer = reshape(receive, :)
+        MPI.Alltoallv!(
+            MPI.VBuffer(send_buffer, plan.send_counts, plan.send_displacements),
+            MPI.VBuffer(receive_buffer, plan.recv_counts, plan.recv_displacements),
+            data.cart,
+        )
+    else
+        buffers = _ensure_direct_shift_host_buffers!(
+            data.shift_buf_host, plan.element_count)
+        copyto!(buffers.send, 1, send, 1, plan.element_count)
+        MPI.Alltoallv!(
+            MPI.VBuffer(buffers.send, plan.send_counts, plan.send_displacements),
+            MPI.VBuffer(buffers.recv, plan.recv_counts, plan.recv_displacements),
+            data.cart,
+        )
+        copyto!(receive, 1, buffers.recv, 1, plan.element_count)
+    end
+    return nothing
+end
+
+function _direct_shift_local!(destination, source::LatticeMatrix{D,T,AT,NC1,NC2,nw},
+    shift::NTuple{D,Int}) where {D,T,AT,NC1,NC2,nw}
+    _parallel_for_mutating!(
+        destination,
+        prod(source.PN),
+        _kernel_direct_shift_local!,
+        destination.A,
+        source.A,
+        source.indexer,
+        shift,
+        source.coords,
+        source.PN,
+        source.gsize,
+        source.phases,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+    )
+    return nothing
+end
+
+function _materialize_direct_shift(data::LatticeMatrix{D}, shift::NTuple{D,Int}) where {D}
+    result_array, result_index = get_block(data.temps)
+    result_lease = _new_shift_lease(data.temps, result_index)
+    receive_lease = nothing
+    try
+        result = _lattice_alias_with_array(data, result_array)
+        if MPI.Comm_size(data.cart) == 1
+            _direct_shift_local!(result, data, shift)
+        else
+            receive_array, receive_index = get_block(data.temps)
+            # This communication scratch never escapes this function and is
+            # already covered by the catch path, so it needs no finalizer.
+            receive_lease = ShiftLease(data.temps, receive_index, true)
+            plan = _direct_shift_plan(data, shift)
+            _pack_direct_shift!(result_array, data, plan.send_fragments)
+            _exchange_direct_shift!(receive_array, result_array, data, plan)
+            _unpack_direct_shift!(result, receive_array, plan.recv_fragments)
+            _release_lease!(receive_lease)
+        end
+        zeroshift = ntuple(_ -> 0, D)
+        return Shifted_Lattice(result, zeroshift, Val(D), result_lease)
+    catch
+        _release_lease!(result_lease)
+        _release_lease!(receive_lease)
+        rethrow()
+    end
+end
+
+function _materialize_direct_shift_reusing_source(
+    data::LatticeMatrix{D}, shift::NTuple{D,Int}, source_lease::ShiftLease,
+) where {D}
+    result_array, result_index = get_block(data.temps)
+    result_lease = _new_shift_lease(data.temps, result_index)
+    try
+        result = _lattice_alias_with_array(data, result_array)
+        if MPI.Comm_size(data.cart) == 1
+            _direct_shift_local!(result, data, shift)
+        else
+            plan = _direct_shift_plan(data, shift)
+            _pack_direct_shift!(result_array, data, plan.send_fragments)
+            _exchange_direct_shift!(data.A, result_array, data, plan)
+            _unpack_direct_shift!(result, data.A, plan.recv_fragments)
+        end
+        _release_lease!(source_lease)
+        zeroshift = ntuple(_ -> 0, D)
+        return Shifted_Lattice(result, zeroshift, Val(D), result_lease)
+    catch
+        _release_lease!(source_lease)
+        _release_lease!(result_lease)
+        rethrow()
+    end
 end
 
 @inline function kernel_periodic_shift_nowing!(i, C, A, ::Val{NC1}, ::Val{NC2},
@@ -327,9 +847,8 @@ end
     TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI},TS
 }
     shift = _as_shift_tuple(shift_in, Val(D))
-    shifted = _materialize_periodic_shift(data, shift)
-    zero_shift = ntuple(_ -> 0, D)
-    return Shifted_Lattice(shifted, zero_shift, Val(D))
+    all(iszero, shift) && return Shifted_Lattice(data, shift, Val(D))
+    return _materialize_direct_shift(data, shift)
 end
 
 @inline function _lazy_shift_nowing(data::TL, shift_in) where {
@@ -363,26 +882,7 @@ Base.@noinline function Shifted_Lattice_construct(data::TL, shift_in::TS) where 
         end
     end
 
-    sl0 = similar(data)
-    sl1 = similar(data)
-    substitute!(sl0, data)
-    set_halo!(sl0)
-
-    @inbounds for i in 1:D
-        remaining = shift[i]
-        while !iszero(remaining)
-            amount = clamp(remaining, -nw, nw)
-            step = make_step(i, amount, Val(D))
-            sls = Shifted_Lattice(sl0, step, Val(D))
-            substitute!(sl1, sls)
-            set_halo!(sl1)
-            sl0, sl1 = sl1, sl0
-            remaining -= amount
-        end
-    end
-
-    zeroshift = ntuple(_ -> 0, D)
-    return Shifted_Lattice(sl0, zeroshift, Val(D))
+    return _materialize_direct_shift(data, shift)
 end
 
 #Base.@noinline function shift_L(A::LatticeMatrix, shift)
@@ -485,6 +985,7 @@ function get_matrix(a::Adjoint_Lattice{T}) where {T<:Shifted_Lattice}
 end
 
 @inline function ensure_halo!(a::Shifted_Lattice)
+    _assert_shift_open(a)
     shift = getfield(a, :shift)
     any(s -> !iszero(s), shift) && ensure_halo!(getfield(a, :data))
     return nothing

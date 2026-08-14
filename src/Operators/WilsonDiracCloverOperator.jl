@@ -241,9 +241,12 @@ end
 """
     update_clover!(field, U)
     update_clover!(operator)
+    update_clover!(operator, U)
 
 Recompute the six clover field-strength components.  Call this after modifying
-the gauge links stored by a `WilsonDiracCloverOperator4D`.
+the gauge links stored by a `WilsonDiracCloverOperator4D`.  The two-argument
+operator method also replaces the four Wilson-link references before refreshing
+the cache.
 """
 function update_clover!(field::CloverFieldStrength4D{T}, U::Vector{T}) where T
     _validate_clover_gauge(U)
@@ -266,23 +269,49 @@ D = D_W - kappa*cSW*sum(gamma_mu*gamma_nu*F_mu_nu, mu < nu),
 F_mu_nu = (Q_mu_nu - Q_mu_nu')/8.
 ```
 
-The field strength is cached.  After mutating `U`, call `update_clover!(D)`.
+The field strength is cached.  Direct `mul!` callers must call
+`update_clover!(D)` after mutating `U`; the explicit-link
+`mul_cached_clover!` entry point detects link changes and refreshes it
+automatically.
 """
-struct WilsonDiracCloverOperator4D{W,C} <: OperatorOnKernel
+mutable struct CloverCacheState{T}
+    source_links::NTuple{4,T}
+    core_epochs::NTuple{4,UInt64}
+end
+
+@inline _clover_source_links(U) = ntuple(mu -> U[mu], Val(4))
+
+@inline _clover_core_epochs(U) =
+    ntuple(mu -> U[mu].halo_epoch.core, Val(4))
+
+@inline function _record_clover_cache_state!(operator, U)
+    operator.cache_state.source_links = _clover_source_links(U)
+    operator.cache_state.core_epochs = _clover_core_epochs(U)
+    return operator
+end
+
+struct WilsonDiracCloverOperator4D{W,C,S} <: OperatorOnKernel
     wilson::W
     cSW::Float64
     clover::C
+    cache_state::S
 
-    function WilsonDiracCloverOperator4D{W,C}(wilson::W, cSW, clover::C) where {W,C}
-        return new{W,C}(wilson, cSW, clover)
+    function WilsonDiracCloverOperator4D{W,C,S}(
+        wilson::W, cSW, clover::C, cache_state::S,
+    ) where {W,C,S<:CloverCacheState}
+        return new{W,C,S}(wilson, cSW, clover, cache_state)
     end
 end
 
 function WilsonDiracCloverOperator4D(U::Vector{T}, kappa, cSW) where {T<:LatticeMatrix{4}}
     wilson = WilsonDiracOperator4D(U, kappa)
     clover = CloverFieldStrength4D(U)
-    return WilsonDiracCloverOperator4D{typeof(wilson),typeof(clover)}(
-        wilson, cSW, clover)
+    source_links = _clover_source_links(U)
+    cache_state = CloverCacheState(source_links, _clover_core_epochs(U))
+    return WilsonDiracCloverOperator4D{
+        typeof(wilson),typeof(clover),typeof(cache_state)
+    }(
+        wilson, cSW, clover, cache_state)
 end
 
 export WilsonDiracCloverOperator4D
@@ -297,7 +326,15 @@ Base.adjoint(operator::Adjoint_WilsonDiracCloverOperator4D) = operator.parent
 
 function update_clover!(operator::WilsonDiracCloverOperator4D)
     update_clover!(operator.clover, operator.wilson.U)
-    return operator
+    return _record_clover_cache_state!(operator, operator.wilson.U)
+end
+
+function update_clover!(operator::WilsonDiracCloverOperator4D, U::Vector)
+    _validate_clover_gauge(U)
+    length(operator.wilson.U) == 4 || throw(ArgumentError(
+        "WilsonDiracCloverOperator4D must contain four gauge links"))
+    operator.wilson.U .= U
+    return update_clover!(operator)
 end
 
 @inline function kernel_add_clover_term!(site, result,
@@ -421,6 +458,75 @@ function LinearAlgebra.mul!(result::T,
         Val(NC), Val(nw), result.indexer)
     return result
 end
+
+@inline function _clover_cache_is_current(
+    operator::WilsonDiracCloverOperator4D,
+    U1, U2, U3, U4,
+)
+    U = (U1, U2, U3, U4)
+    source_links = operator.cache_state.source_links
+    epochs = operator.cache_state.core_epochs
+    for mu in 1:4
+        source_links[mu] === U[mu] || return false
+        epochs[mu] == U[mu].halo_epoch.core || return false
+    end
+    return true
+end
+
+@inline function _ensure_clover_cache_current!(
+    operator::WilsonDiracCloverOperator4D,
+    U1::T, U2::T, U3::T, U4::T,
+) where {T<:LatticeMatrix{4}}
+    _clover_cache_is_current(operator, U1, U2, U3, U4) && return operator
+    return update_clover!(operator, T[U1, U2, U3, U4])
+end
+
+"""
+    mul_cached_clover!(result, cache, U1, U2, U3, U4, psi)
+
+Apply a Wilson--clover operator using the field-strength cache stored in
+`cache`, while taking the Wilson links explicitly from `U1`, ..., `U4`.
+
+This entry point is intended for repeated applications such as a Krylov solve.
+It compares the identity and core-data epoch of each explicit link with the
+links used to construct the field-strength cache.  The cache is refreshed
+automatically on the first application after a link changes and is reused by
+subsequent applications.  Mutations through `link.A` must be followed by
+`mark_halo_dirty!(link)` so that the change is observable.
+
+Its Enzyme reverse rule treats the cached field strength as derived from the
+four explicit links and accumulates both the Wilson and clover link cotangents
+without differentiating through the cache construction.
+"""
+function mul_cached_clover!(
+    result::T,
+    cache::WilsonDiracCloverOperator4D,
+    U1::G, U2::G, U3::G, U4::G,
+    psi::T,
+) where {ET,AT,NC,nw,DI,
+    T<:LatticeMatrix{4,ET,AT,NC,4,nw,DI},G<:LatticeMatrix{4}}
+    _ensure_clover_cache_current!(cache, U1, U2, U3, U4)
+    return LinearAlgebra.mul!(result, cache, psi)
+end
+
+"""
+    mul_cached_clover_adjoint!(result, cache, U1, U2, U3, U4, psi)
+
+Apply the adjoint of `mul_cached_clover!`.  The same refreshed field-strength
+cache is shared by the forward and adjoint applications.
+"""
+function mul_cached_clover_adjoint!(
+    result::T,
+    cache::WilsonDiracCloverOperator4D,
+    U1::G, U2::G, U3::G, U4::G,
+    psi::T,
+) where {ET,AT,NC,nw,DI,
+    T<:LatticeMatrix{4,ET,AT,NC,4,nw,DI},G<:LatticeMatrix{4}}
+    _ensure_clover_cache_current!(cache, U1, U2, U3, U4)
+    return LinearAlgebra.mul!(result, adjoint(cache), psi)
+end
+
+export mul_cached_clover!, mul_cached_clover_adjoint!
 
 # Without halo cells the Wilson part has to materialize each periodic shift.
 # Keep that established path and add the local clover term in a second kernel.

@@ -62,3 +62,46 @@ set_target_properties(simulateqcd_hisq_level1_reference PROPERTIES
     CUDA_ARCHITECTURES "${ARCHITECTURE}"
     CUDA_SEPARABLE_COMPILATION ON
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reference")
+
+set(FULL_REFERENCE_SOURCE "${CMAKE_CURRENT_LIST_DIR}/hisq_full_reference.cpp")
+set_source_files_properties(
+    "${FULL_REFERENCE_SOURCE}" PROPERTIES LANGUAGE CUDA)
+add_executable(simulateqcd_hisq_full_reference
+    "${FULL_REFERENCE_SOURCE}"
+    "${HISQ_SMEARING_SOURCE}")
+target_link_libraries(simulateqcd_hisq_full_reference PRIVATE
+    CodeBase MPI::MPI_CXX CUDA::cudart)
+target_include_directories(simulateqcd_hisq_full_reference PRIVATE
+    "${SIMULATEQCD_SOURCE_DIR}/src"
+    "${MPI_INCLUDE_PATH}"
+    "${MPI_CXX_INCLUDE_DIRS}"
+    "${CUDAToolkit_INCLUDE_DIRS}")
+target_compile_definitions(simulateqcd_hisq_full_reference PRIVATE
+    USE_CUDA
+    ARCHITECTURE=${ARCHITECTURE}
+    GIT_HASH="external-reference"
+    HALODEPTH_0=1
+    DOUBLEPREC=1
+    COMP_R18=1)
+if(USE_GPU_AWARE_MPI)
+    target_compile_definitions(
+        simulateqcd_hisq_full_reference PRIVATE USE_GPU_AWARE_MPI)
+endif()
+if(USE_GPU_P2P)
+    target_compile_definitions(
+        simulateqcd_hisq_full_reference PRIVATE USE_GPU_P2P)
+endif()
+if(COMMS_STREAMS)
+    target_compile_definitions(
+        simulateqcd_hisq_full_reference PRIVATE COMMS_STREAMS)
+endif()
+if(USE_TILED_MULTIRHS)
+    target_compile_definitions(
+        simulateqcd_hisq_full_reference PRIVATE USE_TILED_MULTIRHS)
+endif()
+set_target_properties(simulateqcd_hisq_full_reference PROPERTIES
+    CXX_STANDARD 17
+    CUDA_STANDARD 17
+    CUDA_ARCHITECTURES "${ARCHITECTURE}"
+    CUDA_SEPARABLE_COMPILATION ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reference")

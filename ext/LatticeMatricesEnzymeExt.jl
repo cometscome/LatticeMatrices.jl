@@ -12,6 +12,7 @@ include("./AD/WilsonDiracOperator.jl")
 include("./AD/StaggeredDiracOperator.jl")
 include("./AD/HISQDiracOperator.jl")
 include("./AD/HISQSmearing.jl")
+include("./AD/HISQFullSmearing.jl")
 include("./AD/WilsonDiracCloverOperator.jl")
 include("./AD/DomainwallDiracOperator.jl")
 

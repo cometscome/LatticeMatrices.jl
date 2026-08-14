@@ -9,7 +9,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 - **MPI** domain decomposition via a Cartesian communicator (halo width `nw`, periodic BCs).
 - **GPU-ready** through **[JACC.jl](https://github.com/JuliaORNL/JACC.jl)** (portable CPU/GPU kernels; CUDA/ROCm/Threads).
 - Fast, allocation-free **indexing helpers** for kernels: `DIndexer`, `linearize`, `delinearize`, `shiftindices`.
-- Lattice-QCD fermion operators including Wilson, clover, staggered, and a **HISQ stencil with level-1 Fat7 smearing**.
+- Lattice-QCD fermion operators including Wilson, clover, staggered, and a **complete HISQ thin-link smearing and Dirac pipeline**.
 
 > This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.
 
@@ -257,7 +257,7 @@ fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 | `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
 | `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
-| `HISQDiracOperator4D(X, L, mass; naik_epsilon)` | HISQ stencil for precomputed corrected fat links `X` and forward-anchored Naik transporters `L` | `nw=0` or `nw>=3` |
+| `HISQDiracOperator4D(X, L, mass; naik_epsilon)` or `HISQDiracOperator4D(U, mass; naik_epsilon)` | HISQ stencil for precomputed links, or complete construction from thin links `U` | `nw=0` or `nw>=3` |
 | `D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)` | Five-dimensional Möbius/domain-wall operator with a four-dimensional gauge field | `nw>=1` only |
 
 All of these operators support both `mul!(out, D, psi)` and
@@ -412,7 +412,7 @@ fixed numerical fingerprints generated directly by Bridge++ 2.1.3.  The
 Bridge++ oracle source is
 [`test/reference/bridgepp_staggered_reference.cpp`](test/reference/bridgepp_staggered_reference.cpp).
 
-#### HISQ Fat7 level 1 and stencil (SIMULATeQCD convention)
+#### Complete HISQ smearing and stencil (SIMULATeQCD convention)
 
 The first HISQ smearing level can be constructed directly from periodic thin
 links. It sums the 1-, 3-, 5-, and 7-link paths with the SIMULATeQCD
@@ -428,8 +428,37 @@ hisq_fat7_level1!(V_preallocated, U)
 
 `V` is the unprojected level-1 field. This builder accepts `nw>=1`; a slower
 `nw=0` compatibility path is also provided. Input and output gauge links are
-periodic and do not contain staggered or fermion boundary phases. Its numerical
-results have been cross-checked against SIMULATeQCD.
+periodic and do not contain staggered or fermion boundary phases.
+
+The complete thin-link builder applies level-1 Fat7, U(3) polar
+reunitarization, level-2 Fat7 with the Lepage correction, and the Naik
+three-link product:
+
+```julia
+epsilon_N = -0.083
+hisq_links = hisq_links_from_thin(U; naik_epsilon=epsilon_N)
+D_hisq = HISQDiracOperator4D(
+    hisq_links, mass; naik_epsilon=epsilon_N)
+
+# Equivalent convenience constructor.
+D_hisq_from_U = HISQDiracOperator4D(
+    U, mass; naik_epsilon=epsilon_N)
+```
+
+For repeated construction, all output and work storage can be caller-owned:
+
+```julia
+V = [similar(link) for link in U] # level-1 work
+W = [similar(link) for link in U] # reunitarized work
+X = [similar(link) for link in U] # corrected fat links
+L = [similar(link) for link in U] # forward-anchored Naik links
+
+hisq_links_from_thin!(X, L, V, W, U; naik_epsilon=epsilon_N)
+```
+
+The complete unphased `X` and forward-anchored `L` results, including their
+layout-sensitive numerical fingerprints, have been cross-checked against
+SIMULATeQCD `HisqSmearing::SmearAll`.
 
 The Dirac stencil remains separate from smearing. Supply the corrected fat
 links `X[mu]`, which connect `x` to `x+mu`, and the forward-anchored Naik
@@ -444,7 +473,6 @@ psi_hisq = LatticeMatrix(psi_staggered_host, 4, PEs;
     nw=nw_hisq, phases=(1, 1, 1, -1))
 out_hisq = similar(psi_hisq)
 
-epsilon_N = 0.0
 hisq_links = HISQLinks4D(X, L)
 D_hisq = HISQDiracOperator4D(
     hisq_links, mass; naik_epsilon=epsilon_N)
@@ -464,12 +492,9 @@ The normalization follows SIMULATeQCD `HisqDSlash`:
 \right\}.
 ```
 
-The fused path requires a halo width of at least three and each local lattice
-extent must be at least that width. A halo-free `nw=0` compatibility path is
-also available. Construction of the final `X` and `L` is not yet one call:
-U(3) reunitarization, the second corrected smearing with its Lepage term, and
-the Naik product remain separate implementation stages after the available
-level-1 Fat7 builder.
+The fused path and complete halo-based builder require a halo width of at
+least three and each local lattice extent must be at least that width. A
+halo-free `nw=0` compatibility path is also available.
 
 #### Five-dimensional Möbius/domain-wall example
 
@@ -686,6 +711,14 @@ Note: the AD result here follows Enzyme's complex differentiation convention. Fo
 `Enzyme_derivative!` requires `nw >= 1` for every lattice argument and work buffer.
 Halo-free (`nw=0`) lattices can be used for ordinary calculations, but are rejected before AD starts.
 
+Custom reverse rules are provided for the staggered and HISQ Dirac stencils
+and for every complete HISQ smearing stage: level-1 Fat7, U(3) projection,
+level-2 Fat7/Lepage, and Naik links. Consequently a real action can be
+differentiated from `HISQDiracOperator4D` all the way back to the thin links.
+The complete HISQ AD path requires `nw >= 3`; pass the caller-owned `V`, `W`,
+`X`, and `L` work vectors as `Enzyme.Duplicated` arguments when differentiating
+through `hisq_links_from_thin!`.
+
 
 ---
 
@@ -769,8 +802,17 @@ WilsonDiracCloverOperator4D(U, kappa, cSW)
 StaggeredDiracOperator4D(U, mass)
 hisq_fat7_level1(U)
 hisq_fat7_level1!(V, U)
+hisq_project_u3(V)
+hisq_project_u3!(W, V)
+hisq_fat7_level2(W; naik_epsilon=0)
+hisq_fat7_level2!(X, W; naik_epsilon=0)
+hisq_naik_links(W)
+hisq_naik_links!(L, W)
+hisq_links_from_thin(U; naik_epsilon=0)
+hisq_links_from_thin!(X, L, V, W, U; naik_epsilon=0)
 HISQLinks4D(X, L)
 HISQDiracOperator4D(X, L, mass; naik_epsilon=0)
+HISQDiracOperator4D(U, mass; naik_epsilon=0)
 CloverFieldStrength4D(U)
 update_clover!(field_strength, U)
 update_clover!(clover_operator)

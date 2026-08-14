@@ -2,7 +2,8 @@ using StaticArrays: SMatrix
 
 import LatticeMatrices: WilsonDiracCloverOperator4D, HaloEpoch,
     clover_gamma_products, clover_plane_pairs,
-    kernel_adjoint_WilsonDiracCloverOperator4D!
+    kernel_adjoint_WilsonDiracCloverOperator4D!, mul_cached_clover!,
+    _record_clover_cache_state!
 
 @inline function _clover_operator_shadow(operator)
     hasproperty(operator, :dval) || return nothing
@@ -356,4 +357,140 @@ function ER.reverse(
     _zero_shadow!(dresult)
     zero_halo_region!(dresult)
     return (nothing, nothing, nothing)
+end
+
+@inline function _explicit_clover_link_shadow(annotation)
+    hasproperty(annotation, :dval) || return nothing
+    shadow = _getshadow(getproperty(annotation, :dval))
+    return shadow isa LatticeMatrix ? shadow : nothing
+end
+
+function ER.augmented_primal(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul_cached_clover!)},
+    ::Type{RT},
+    result::ER.Annotation{<:LatticeMatrix},
+    cache::ER.Annotation{<:WilsonDiracCloverOperator4D},
+    U1::ER.Annotation{<:LatticeMatrix},
+    U2::ER.Annotation{<:LatticeMatrix},
+    U3::ER.Annotation{<:LatticeMatrix},
+    U4::ER.Annotation{<:LatticeMatrix},
+    psi::ER.Annotation{<:LatticeMatrix},
+) where RT
+    result.val.nw == 0 && throw(ArgumentError(
+        "Enzyme differentiation of mul_cached_clover! requires nw >= 1"))
+    primal_return = mul_cached_clover!(
+        result.val, cache.val, U1.val, U2.val, U3.val, U4.val, psi.val)
+
+    link_shadows = (
+        _explicit_clover_link_shadow(U1),
+        _explicit_clover_link_shadow(U2),
+        _explicit_clover_link_shadow(U3),
+        _explicit_clover_link_shadow(U4),
+    )
+    any_link_active = any(link -> link isa LatticeMatrix, link_shadows)
+    all_links_active = all(link -> link isa LatticeMatrix, link_shadows)
+    any_link_active == all_links_active || throw(ArgumentError(
+        "mul_cached_clover! requires all four links to be active together"))
+    scratch_tape = all_links_active ?
+                   _reserve_clover_pullback_scratch(cache.val) : nothing
+
+    primal = ER.needs_primal(cfg) ? primal_return : nothing
+    shadow = ER.needs_shadow(cfg) ? _getshadow(result.dval) : nothing
+    RetT = ER.augmented_rule_return_type(cfg, RT, scratch_tape)
+    return RetT(primal, shadow, scratch_tape)
+end
+
+function ER.reverse(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(mul_cached_clover!)},
+    dresult_out, scratch_tape,
+    result::ER.Annotation{<:LatticeMatrix},
+    cache::ER.Annotation{<:WilsonDiracCloverOperator4D},
+    U1::ER.Annotation{<:LatticeMatrix},
+    U2::ER.Annotation{<:LatticeMatrix},
+    U3::ER.Annotation{<:LatticeMatrix},
+    U4::ER.Annotation{<:LatticeMatrix},
+    psi::ER.Annotation{<:LatticeMatrix},
+)
+    dresult = _getshadow_out(dresult_out, result)
+    dresult isa LatticeMatrix || (dresult = _getshadow(result.dval))
+    if !(dresult isa LatticeMatrix)
+        scratch_tape === nothing ||
+            _release_clover_pullback_scratch!(cache.val, scratch_tape[2])
+        return (nothing, nothing, nothing, nothing, nothing, nothing, nothing)
+    end
+
+    zero_halo_region!(dresult)
+    set_halo!(_wilson_shadow_lattice(dresult, result.val))
+
+    dU = (
+        _explicit_clover_link_shadow(U1),
+        _explicit_clover_link_shadow(U2),
+        _explicit_clover_link_shadow(U3),
+        _explicit_clover_link_shadow(U4),
+    )
+    links_active = all(link -> link isa LatticeMatrix, dU)
+    U = (U1.val, U2.val, U3.val, U4.val)
+    primal = cache.val
+
+    if links_active
+        for mu in 1:4
+            dU[mu].A === U[mu].A && throw(ArgumentError(
+                "mul_cached_clover! link shadow aliases its primal link"))
+        end
+        Uv1, Uv2, Uv3, Uv4 = U
+        JACC.parallel_for(
+            prod(result.val.PN), _kernel_wilson_link_pullback!,
+            dU[1].A, dU[2].A, dU[3].A, dU[4].A,
+            dresult.A, psi.val.A, -primal.wilson.κ,
+            Val(result.val.NC1), Val(result.val.nw), result.val.indexer,
+        )
+
+        dF, scratch_indices = scratch_tape
+        for field in dF
+            _zero_shadow!(field)
+            zero_halo_region!(field)
+        end
+        coefficient = -primal.wilson.κ * primal.cSW
+        JACC.parallel_for(
+            prod(result.val.PN), _kernel_clover_field_cotangent!,
+            dF[1].A, dF[2].A, dF[3].A, dF[4].A, dF[5].A, dF[6].A,
+            dresult.A, psi.val.A, coefficient,
+            Val(result.val.NC1), Val(result.val.nw), result.val.indexer,
+        )
+        for field in dF
+            mark_halo_dirty!(field)
+            set_halo!(field)
+        end
+        _clover_links_pullback!(dU, U, dF, result.val)
+        _release_clover_pullback_scratch!(primal, scratch_indices)
+    end
+
+    dpsi = hasproperty(psi, :dval) ? _getshadow(psi.dval) : nothing
+    if dpsi isa LatticeMatrix
+        temporary, temporary_index = get_block(psi.val.temps)
+        Uv1, Uv2, Uv3, Uv4 = U
+        F12, F13, F14, F23, F24, F34 = primal.clover.components
+        coefficient = -primal.wilson.κ * primal.cSW
+        JACC.parallel_for(
+            prod(psi.val.PN), kernel_adjoint_WilsonDiracCloverOperator4D!,
+            temporary, Uv1.A, Uv2.A, Uv3.A, Uv4.A,
+            primal.wilson.κ, dresult.A,
+            F12.A, F13.A, F14.A, F23.A, F24.A, F34.A, coefficient,
+            Val(psi.val.NC1), Val(psi.val.nw), psi.val.indexer,
+        )
+        JACC.parallel_for(
+            prod(psi.val.PN), kernel_add_4D!,
+            dpsi.A, temporary, dpsi.indexer,
+            Val(dpsi.NC1), Val(dpsi.NC2), one(eltype(dpsi.A)), Val(dpsi.nw),
+        )
+        unused!(psi.val.temps, temporary_index)
+        mark_halo_dirty!(dpsi)
+    end
+
+    _zero_shadow!(dresult)
+    zero_halo_region!(dresult)
+    _record_clover_cache_state!(primal, U)
+    return (nothing, nothing, nothing, nothing, nothing, nothing, nothing)
 end

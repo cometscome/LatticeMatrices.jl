@@ -58,6 +58,7 @@ end
 @inline function kernel_hisq_fat7!(
     site_index, fat_link, U1, U2, U3, U4,
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+    coefficient_lepage,
     ::Val{mu}, ::Val{NC}, ::Val{nw}, indexer,
 ) where {mu,NC,nw}
     origin = delinearize(indexer, site_index, nw)
@@ -82,6 +83,14 @@ end
             _hisq_accumulate_path!(
                 accumulator, product, link, scratch,
                 U1, U2, U3, U4, origin, path3, coefficient_3, Val(NC))
+            if !iszero(coefficient_lepage)
+                lepage_path = (
+                    signed_nu, signed_nu, mu, -signed_nu, -signed_nu)
+                _hisq_accumulate_path!(
+                    accumulator, product, link, scratch,
+                    U1, U2, U3, U4, origin, lepage_path,
+                    coefficient_lepage, Val(NC))
+            end
         end
 
         for rho in 1:4
@@ -205,8 +214,9 @@ function _hisq_accumulate_path_nowing!(
     return nothing
 end
 
-function _hisq_fat7_level1_nowing!(fat_links, thin_links, coefficients)
-    coefficient_1, coefficient_3, coefficient_5, coefficient_7 = coefficients
+function _hisq_fat7_nowing!(fat_links, thin_links, coefficients)
+    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+        coefficient_lepage = coefficients
     for mu in 1:4
         fat_link = fat_links[mu]
         clear_matrix!(fat_link)
@@ -222,6 +232,13 @@ function _hisq_fat7_level1_nowing!(fat_links, thin_links, coefficients)
                     fat_link, thin_links,
                     (signed_nu, mu, -signed_nu), coefficient_3,
                     product, scratch)
+                if !iszero(coefficient_lepage)
+                    _hisq_accumulate_path_nowing!(
+                        fat_link, thin_links,
+                        (signed_nu, signed_nu, mu,
+                         -signed_nu, -signed_nu), coefficient_lepage,
+                        product, scratch)
+                end
             end
 
             for rho in 1:4
@@ -285,6 +302,7 @@ function hisq_fat7_level1!(
         one(real_type) / 16,
         one(real_type) / 64,
         one(real_type) / 384,
+        zero(real_type),
     )
 
     return _hisq_fat7!(fat_links, thin_links, coefficients)
@@ -294,7 +312,7 @@ function _hisq_fat7!(fat_links, thin_links, coefficients)
     _validate_hisq_smearing_output(fat_links, thin_links)
 
     if iszero(thin_links[1].nw)
-        return _hisq_fat7_level1_nowing!(
+        return _hisq_fat7_nowing!(
             fat_links, thin_links, coefficients)
     end
 
@@ -302,13 +320,15 @@ function _hisq_fat7!(fat_links, thin_links, coefficients)
         ensure_halo!(link)
     end
     U1, U2, U3, U4 = thin_links
-    coefficient_1, coefficient_3, coefficient_5, coefficient_7 = coefficients
+    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+        coefficient_lepage = coefficients
     for mu in 1:4
         fat_link = fat_links[mu]
         _parallel_for_mutating!(fat_link,
             prod(fat_link.PN), kernel_hisq_fat7!, fat_link.A,
             U1.A, U2.A, U3.A, U4.A,
             coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+            coefficient_lepage,
             Val(mu), Val(fat_link.NC1), Val(fat_link.nw), fat_link.indexer)
     end
     return fat_links
@@ -321,3 +341,49 @@ function hisq_fat7_level1(thin_links::Vector{T}) where {T<:LatticeMatrix{4}}
 end
 
 export hisq_fat7_level1!, hisq_fat7_level1
+
+"""
+    hisq_fat7_level2!(fat_links, reunitarized_links, naik_epsilon=0)
+    hisq_fat7_level2(reunitarized_links, naik_epsilon=0)
+
+Construct the level-2 HISQ Fat7 links, including the five-link Lepage
+correction.  The SIMULATeQCD coefficients are
+`(1 + naik_epsilon/8, 1/16, 1/64, 1/384, -1/8)` for the one-link,
+three-link, five-link, seven-link, and Lepage paths respectively.
+
+The halo kernel requires `nw >= 2`; `nw=0` uses the periodic
+shift-materializing fallback.
+"""
+function hisq_fat7_level2!(
+    fat_links::Vector{TO}, reunitarized_links::Vector{TI}, naik_epsilon,
+) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
+    nw = reunitarized_links[1].nw
+    !iszero(nw) && nw < 2 && throw(ArgumentError(
+        "HISQ level-2 Fat7 smearing requires nw >= 2 or nw == 0"))
+    real_type = typeof(real(zero(eltype(reunitarized_links[1].A))))
+    epsilon = convert(real_type, naik_epsilon)
+    coefficients = (
+        one(real_type) + epsilon / 8,
+        one(real_type) / 16,
+        one(real_type) / 64,
+        one(real_type) / 384,
+        -one(real_type) / 8,
+    )
+    return _hisq_fat7!(fat_links, reunitarized_links, coefficients)
+end
+
+hisq_fat7_level2!(fat_links, reunitarized_links; naik_epsilon=0) =
+    hisq_fat7_level2!(fat_links, reunitarized_links, naik_epsilon)
+
+function hisq_fat7_level2(
+    reunitarized_links::Vector{T}, naik_epsilon,
+) where {T<:LatticeMatrix{4}}
+    fat_links = [similar(link) for link in reunitarized_links]
+    return hisq_fat7_level2!(
+        fat_links, reunitarized_links, naik_epsilon)
+end
+
+hisq_fat7_level2(reunitarized_links; naik_epsilon=0) =
+    hisq_fat7_level2(reunitarized_links, naik_epsilon)
+
+export hisq_fat7_level2!, hisq_fat7_level2

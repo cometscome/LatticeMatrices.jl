@@ -1,4 +1,5 @@
-import LatticeMatrices: hisq_fat7_level1!, mark_halo_dirty!,
+import LatticeMatrices: hisq_fat7_level1!, hisq_fat7_level2!,
+    mark_halo_dirty!,
     _hisq_link_element, _hisq_shift_site, _hisq_load_oriented_link!,
     _hisq_transverse_signs, MMatrix, eye!, gemm!
 
@@ -101,6 +102,7 @@ end
     dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
     target, output_direction,
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+    coefficient_lepage,
     left, right, work, link, temporary,
     ::Val{axis}, ::Val{NC},
 ) where {axis,NC}
@@ -120,6 +122,16 @@ end
                 coefficient_3, output_direction,
                 left, right, work, link, temporary,
                 Val(axis), Val(NC))
+            if !iszero(coefficient_lepage)
+                _hisq_fat7_path_pullback_for_link!(
+                    dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                    target,
+                    (signed_nu, signed_nu, output_direction,
+                     -signed_nu, -signed_nu),
+                    coefficient_lepage, output_direction,
+                    left, right, work, link, temporary,
+                    Val(axis), Val(NC))
+            end
         end
 
         for rho in 1:4
@@ -169,6 +181,7 @@ end
 @inline function _kernel_hisq_fat7_pullback!(
     site_index, dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+    coefficient_lepage,
     ::Val{axis}, ::Val{NC}, ::Val{nw}, indexer,
 ) where {axis,NC,nw}
     target = delinearize(indexer, site_index, nw)
@@ -182,6 +195,7 @@ end
             dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
             target, output_direction,
             coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+            coefficient_lepage,
             left, right, work, link, temporary,
             Val(axis), Val(NC))
     end
@@ -213,32 +227,48 @@ function ER.reverse(
     fat_links::ER.Annotation{<:Vector},
     thin_links::ER.Annotation{<:Vector},
 )
+    real_type = typeof(real(zero(eltype(thin_links.val[1].A))))
+    coefficients = (
+        one(real_type) / 8,
+        one(real_type) / 16,
+        one(real_type) / 64,
+        one(real_type) / 384,
+        zero(real_type),
+    )
+    _hisq_fat7_reverse!(
+        fat_links, thin_links, coefficients, "hisq_fat7_level1!")
+    return (nothing, nothing)
+end
+
+function _hisq_fat7_reverse!(
+    fat_links, thin_links, coefficients, operation_name,
+)
     dV = _hisq_smearing_vector_shadow(fat_links)
-    dV isa AbstractVector || return (nothing, nothing)
+    dV isa AbstractVector || return nothing
+    dU = _hisq_smearing_vector_shadow(thin_links)
+    return _hisq_fat7_pullback!(
+        dU, dV, thin_links.val, fat_links.val,
+        coefficients, operation_name)
+end
+
+function _hisq_fat7_pullback!(
+    dU, dV, U, V, coefficients, operation_name,
+)
     length(dV) == 4 && all(link -> link isa LatticeMatrix, dV) ||
         throw(ArgumentError(
-            "hisq_fat7_level1! output shadow must contain four lattice fields"))
+            "$operation_name output shadow must contain four lattice fields"))
 
     dV_views = ntuple(
-        mu -> _staggered_shadow_lattice(dV[mu], fat_links.val[mu]), 4)
+        mu -> _staggered_shadow_lattice(dV[mu], V[mu]), 4)
     for mu in 1:4
         zero_halo_region!(dV[mu])
         set_halo!(dV_views[mu])
     end
 
-    dU = _hisq_smearing_vector_shadow(thin_links)
-    if dU isa AbstractVector
+    if dU isa Union{AbstractVector,Tuple}
         length(dU) == 4 && all(link -> link isa LatticeMatrix, dU) ||
             throw(ArgumentError(
-                "hisq_fat7_level1! input shadow must contain four lattice fields"))
-        U = thin_links.val
-        real_type = typeof(real(zero(eltype(U[1].A))))
-        coefficients = (
-            one(real_type) / 8,
-            one(real_type) / 16,
-            one(real_type) / 64,
-            one(real_type) / 384,
-        )
+                "$operation_name input shadow must contain four lattice fields"))
         for axis in 1:4
             JACC.parallel_for(
                 prod(U[axis].PN), _kernel_hisq_fat7_pullback!,
@@ -257,5 +287,61 @@ function ER.reverse(
         _zero_shadow!(link)
         zero_halo_region!(link)
     end
-    return (nothing, nothing)
+    return nothing
+end
+
+function ER.augmented_primal(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(hisq_fat7_level2!)},
+    ::Type{RT},
+    fat_links::ER.Annotation{<:Vector},
+    reunitarized_links::ER.Annotation{<:Vector},
+    naik_epsilon::ER.Annotation,
+) where RT
+    reunitarized_links.val[1].nw < 2 && throw(ArgumentError(
+        "Enzyme differentiation of hisq_fat7_level2! requires nw >= 2"))
+    primal_return = hisq_fat7_level2!(
+        fat_links.val, reunitarized_links.val, naik_epsilon.val)
+    tape = nothing
+    primal = ER.needs_primal(cfg) ? primal_return : nothing
+    shadow = ER.needs_shadow(cfg) ?
+        _hisq_smearing_vector_shadow(fat_links) : nothing
+    RetT = ER.augmented_rule_return_type(cfg, RT, tape)
+    return RetT(primal, shadow, tape)
+end
+
+function ER.reverse(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(hisq_fat7_level2!)},
+    _dresult_out, _tape,
+    fat_links::ER.Annotation{<:Vector},
+    reunitarized_links::ER.Annotation{<:Vector},
+    naik_epsilon::ER.Annotation,
+)
+    real_type = typeof(real(zero(eltype(reunitarized_links.val[1].A))))
+    epsilon = convert(real_type, naik_epsilon.val)
+    coefficients = (
+        one(real_type) + epsilon / 8,
+        one(real_type) / 16,
+        one(real_type) / 64,
+        one(real_type) / 384,
+        -one(real_type) / 8,
+    )
+    epsilon_cotangent = nothing
+    if naik_epsilon isa ER.Active
+        dV = _hisq_smearing_vector_shadow(fat_links)
+        epsilon_cotangent = if dV isa AbstractVector
+            real(
+                dot(dV[1], reunitarized_links.val[1]) +
+                dot(dV[2], reunitarized_links.val[2]) +
+                dot(dV[3], reunitarized_links.val[3]) +
+                dot(dV[4], reunitarized_links.val[4])) / 8
+        else
+            zero(epsilon)
+        end
+    end
+    _hisq_fat7_reverse!(
+        fat_links, reunitarized_links, coefficients,
+        "hisq_fat7_level2!")
+    return (nothing, nothing, epsilon_cotangent)
 end

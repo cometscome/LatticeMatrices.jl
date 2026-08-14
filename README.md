@@ -548,11 +548,13 @@ The fused path and complete halo-based builder require a halo width of at
 least three and each local lattice extent must be at least that width. A
 halo-free `nw=0` compatibility path is also available.
 
-#### Five-dimensional Möbius/domain-wall example
+#### Five-dimensional Möbius and generalized domain-wall examples
 
 The gauge field remains four-dimensional, while the fermion field has a fifth
 extent `L5`.  Keeping the fifth process-grid dimension equal to one is the
-recommended setup.
+recommended setup.  Both the conventional Möbius operator and a generalized
+operator with independently selectable slice coefficients `a_s`, `b_s`, and
+`c_s` are available.
 
 ```julia
 # Continue with U, gsize, PEs, and NC from the previous example.

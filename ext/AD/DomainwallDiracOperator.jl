@@ -1,7 +1,11 @@
 import LatticeMatrices: D5DW_MobiusDomainwallOperator5D,
-    Adjoint_D5DW_MobiusDomainwallOperator5D, mark_halo_dirty!,
+    Adjoint_D5DW_MobiusDomainwallOperator5D,
+    D5DW_GeneralizedDomainwallOperator5D,
+    Adjoint_D5DW_GeneralizedDomainwallOperator5D, mark_halo_dirty!,
     kernel_D5DW_MobiusDomainwallOperator5D!,
-    kernel_adjoint_D5DW_MobiusDomainwallOperator5D!, kernel_add_4D!,
+    kernel_adjoint_D5DW_MobiusDomainwallOperator5D!,
+    kernel_D5DW_GeneralizedDomainwallOperator5D!,
+    kernel_adjoint_D5DW_GeneralizedDomainwallOperator5D!, kernel_add_4D!,
     mul_op, mul_op_1pg5, mul_op_1mg5
 using StaticArrays: MMatrix
 
@@ -11,12 +15,25 @@ using StaticArrays: MMatrix
     shadow isa Base.RefValue && (shadow = shadow[])
     shadow isa Adjoint_D5DW_MobiusDomainwallOperator5D &&
         (shadow = shadow.parent)
-    return shadow isa D5DW_MobiusDomainwallOperator5D ? shadow : nothing
+    shadow isa Adjoint_D5DW_GeneralizedDomainwallOperator5D &&
+        (shadow = shadow.parent)
+    return shadow isa Union{
+        D5DW_MobiusDomainwallOperator5D,
+        D5DW_GeneralizedDomainwallOperator5D,
+    } ? shadow : nothing
 end
 
 @inline _domainwall_parent(operator::D5DW_MobiusDomainwallOperator5D) = operator
 @inline _domainwall_parent(operator::Adjoint_D5DW_MobiusDomainwallOperator5D) =
     operator.parent
+@inline _domainwall_parent(operator::D5DW_GeneralizedDomainwallOperator5D) =
+    operator
+@inline _domainwall_parent(
+    operator::Adjoint_D5DW_GeneralizedDomainwallOperator5D) = operator.parent
+
+@inline _domainwall_slice_coefficient(coefficient::Real, _) = coefficient
+@inline _domainwall_slice_coefficient(coefficient::AbstractVector, s) =
+    coefficient[s]
 
 # Enzyme's structural shadow has zero cotangents in numeric metadata such as
 # the boundary phases.  Halo exchange must therefore use the primal metadata
@@ -76,6 +93,15 @@ function _validate_domainwall_shadow(parent, shadow)
             shadow_link.NC2 == primal_link.NC2 || throw(DimensionMismatch(
             "domain-wall link shadow $mu has incompatible matrix dimensions"))
     end
+    if parent isa D5DW_GeneralizedDomainwallOperator5D
+        shadow isa D5DW_GeneralizedDomainwallOperator5D || throw(ArgumentError(
+            "a generalized domain-wall operator requires a generalized shadow"))
+        L5 = typeof(parent).parameters[2]
+        for name in (:a, :b, :c)
+            length(getproperty(shadow, name)) == L5 || throw(DimensionMismatch(
+                "domain-wall coefficient shadow $name must have length $L5"))
+        end
+    end
     return nothing
 end
 
@@ -109,7 +135,7 @@ end
 
 @inline function _kernel_domainwall_link_pullback_direction_matrix!(
     dU, left, source, x, xplus_shift,
-    coeff_diagonal, coeff_fifth, mass,
+    coeff_scale, coeff_diagonal, coeff_fifth, mass,
     ::Val{NC}, ::Val{L5}, ::Val{nw}, op_plus, op_minus,
 ) where {NC,L5,nw}
     values = MMatrix{NC,NC,eltype(dU)}(undef)
@@ -117,13 +143,16 @@ end
         values[row, col] = zero(eltype(dU))
     end
     @inbounds for s in 1:L5
+        left_scale = _domainwall_slice_coefficient(coeff_scale, s)
+        diagonal = _domainwall_slice_coefficient(coeff_diagonal, s)
+        fifth = _domainwall_slice_coefficient(coeff_fifth, s)
         indices = (x[1], x[2], x[3], x[4], s + nw)
         indices_plus = shiftindices(indices, xplus_shift)
         plus_sources = MMatrix{4,NC,eltype(dU)}(undef)
         for col in 1:NC
             plus_source = _domainwall_effective_mul_op(
                 op_plus, source, col, indices_plus,
-                coeff_diagonal, coeff_fifth, mass, Val(L5), Val(nw))
+                diagonal, fifth, mass, Val(L5), Val(nw))
             for spin in 1:4
                 plus_sources[spin, col] = plus_source[spin]
             end
@@ -131,15 +160,15 @@ end
         for row in 1:NC
             minus_source = _domainwall_effective_mul_op(
                 op_minus, source, row, indices,
-                coeff_diagonal, coeff_fifth, mass, Val(L5), Val(nw))
+                diagonal, fifth, mass, Val(L5), Val(nw))
             for col in 1:NC
                 value = values[row, col]
                 for spin in 1:4
                     # Forward occurrence U_mu(x) in D_W at x, and the
                     # conjugated occurrence in the backward hop at x+mu.
-                    value += left[row, spin, indices...] *
+                    value += left_scale * left[row, spin, indices...] *
                              conj(plus_sources[spin, col])
-                    value += minus_source[spin] *
+                    value += left_scale * minus_source[spin] *
                              conj(left[col, spin, indices_plus...])
                 end
                 values[row, col] = value
@@ -154,7 +183,7 @@ end
 
 @inline function _kernel_domainwall_link_pullback_matrix!(
     item, dU1, dU2, dU3, dU4, left, source,
-    coeff_diagonal, coeff_fifth, mass,
+    coeff_scale, coeff_diagonal, coeff_fifth, mass,
     ::Val{NC}, ::Val{L5}, ::Val{nw}, gauge_indexer,
 ) where {NC,L5,nw}
     item0 = item - 1
@@ -165,28 +194,144 @@ end
     if direction == 1
         _kernel_domainwall_link_pullback_direction_matrix!(
             dU1, left, source, x, LatticeMatrices.shift_1p5D,
-            coeff_diagonal, coeff_fifth, mass,
+            coeff_scale, coeff_diagonal, coeff_fifth, mass,
             Val(NC), Val(L5), Val(nw),
             LatticeMatrices.oneminusγ1, LatticeMatrices.oneplusγ1)
     elseif direction == 2
         _kernel_domainwall_link_pullback_direction_matrix!(
             dU2, left, source, x, LatticeMatrices.shift_2p5D,
-            coeff_diagonal, coeff_fifth, mass,
+            coeff_scale, coeff_diagonal, coeff_fifth, mass,
             Val(NC), Val(L5), Val(nw),
             LatticeMatrices.oneminusγ2, LatticeMatrices.oneplusγ2)
     elseif direction == 3
         _kernel_domainwall_link_pullback_direction_matrix!(
             dU3, left, source, x, LatticeMatrices.shift_3p5D,
-            coeff_diagonal, coeff_fifth, mass,
+            coeff_scale, coeff_diagonal, coeff_fifth, mass,
             Val(NC), Val(L5), Val(nw),
             LatticeMatrices.oneminusγ3, LatticeMatrices.oneplusγ3)
     else
         _kernel_domainwall_link_pullback_direction_matrix!(
             dU4, left, source, x, LatticeMatrices.shift_4p5D,
-            coeff_diagonal, coeff_fifth, mass,
+            coeff_scale, coeff_diagonal, coeff_fifth, mass,
             Val(NC), Val(L5), Val(nw),
             LatticeMatrices.oneminusγ4, LatticeMatrices.oneplusγ4)
     end
+    return nothing
+end
+
+# `temporary` contains either I-F+D_W or I-F+D_W F applied to `source`.
+# Packing the base and Wilson inner products into one complex reduction keeps
+# the coefficient pullback to two accelerator reductions per fifth slice.
+@inline function _kernel_domainwall_coefficient_inner(
+    item, left, source, temporary, s,
+    mass, ::Val{NC}, ::Val{L5}, ::Val{nw}, gauge_indexer,
+) where {NC,L5,nw}
+    x = delinearize(gauge_indexer, item, nw)
+    indices = (x[1], x[2], x[3], x[4], s + nw)
+    indices_5p = shiftindices(indices, LatticeMatrices.shift_5p5D)
+    indices_5m = shiftindices(indices, LatticeMatrices.shift_5m5D)
+    boundary_5p = ifelse(s == L5, -mass, one(mass))
+    boundary_5m = ifelse(s == 1, -mass, one(mass))
+    base_inner = zero(real(eltype(source)))
+    wilson_inner = zero(real(eltype(source)))
+
+    @inbounds for color in 1:NC
+        for spin in 1:4
+            fifth_source = if spin <= 2
+                boundary_5m * source[color, spin, indices_5m...]
+            else
+                boundary_5p * source[color, spin, indices_5p...]
+            end
+            base = source[color, spin, indices...] - fifth_source
+            wilson = temporary[color, spin, indices...] - base
+            left_value = left[color, spin, indices...]
+            base_inner += real(conj(left_value) * base)
+            wilson_inner += real(conj(left_value) * wilson)
+        end
+    end
+    return complex(base_inner, wilson_inner)
+end
+
+@inline function _kernel_add_domainwall_coefficient_shadows!(
+    s, da, db, dc, delta_a, delta_b, delta_c,
+)
+    @inbounds begin
+        da[s] += delta_a[s]
+        db[s] += delta_b[s]
+        dc[s] += delta_c[s]
+    end
+    return nothing
+end
+
+function _accumulate_domainwall_coefficient_shadows!(
+    shadow, gradient, ::Val{L5},
+) where L5
+    delta_a = ntuple(s -> gradient[s], Val(L5))
+    delta_b = ntuple(s -> gradient[L5 + s], Val(L5))
+    delta_c = ntuple(s -> gradient[2L5 + s], Val(L5))
+    JACC.parallel_for(
+        L5, _kernel_add_domainwall_coefficient_shadows!,
+        shadow.a, shadow.b, shadow.c, delta_a, delta_b, delta_c)
+    return nothing
+end
+
+function _domainwall_coefficient_pullback!(
+    shadow, parent, left, source, prototype, ::Val{L5},
+) where L5
+    temporary, temporary_index = get_block(prototype.temps)
+    U1, U2, U3, U4 = parent.U
+    NC = prototype.NC1
+    nw = prototype.nw
+    n4 = prod(prototype.PN[1:4])
+    R = typeof(parent.mass)
+    local_gradient = zeros(R, 3L5)
+
+    # K_b source = (I-F+D_W) source.
+    JACC.parallel_for(
+        prod(prototype.PN), kernel_D5DW_MobiusDomainwallOperator5D!,
+        temporary, U1.A, U2.A, U3.A, U4.A,
+        parent.mass, parent.wilson_params, source.A,
+        Val(NC), Val(nw), prototype.indexer,
+        Val(L5), one(R), zero(R))
+    for s in 1:L5
+        pair = JACC.parallel_reduce(
+            n4, _kernel_domainwall_coefficient_inner,
+            left.A, source.A, temporary, s,
+            parent.mass, Val(NC), Val(L5), Val(nw), U1.indexer;
+            init=zero(eltype(source.A)), op=+)
+        local_gradient[s] = real(pair)
+        local_gradient[L5 + s] = imag(pair)
+    end
+
+    # K_c source = (I-F+D_W F) source.
+    JACC.parallel_for(
+        prod(prototype.PN), kernel_D5DW_MobiusDomainwallOperator5D!,
+        temporary, U1.A, U2.A, U3.A, U4.A,
+        parent.mass, parent.wilson_params, source.A,
+        Val(NC), Val(nw), prototype.indexer,
+        Val(L5), zero(R), -one(R))
+    for s in 1:L5
+        pair = JACC.parallel_reduce(
+            n4, _kernel_domainwall_coefficient_inner,
+            left.A, source.A, temporary, s,
+            parent.mass, Val(NC), Val(L5), Val(nw), U1.indexer;
+            init=zero(eltype(source.A)), op=+)
+        local_gradient[2L5 + s] = imag(pair)
+    end
+    unused!(prototype.temps, temporary_index)
+
+    global_gradient = MPI.Allreduce(local_gradient, MPI.SUM, prototype.comm)
+    a_host, b_host, c_host = Array(parent.a), Array(parent.b), Array(parent.c)
+    @inbounds for s in 1:L5
+        base = global_gradient[s]
+        gb = global_gradient[L5 + s]
+        gc = global_gradient[2L5 + s]
+        global_gradient[s] = base + b_host[s] * gb + c_host[s] * gc
+        global_gradient[L5 + s] = a_host[s] * gb
+        global_gradient[2L5 + s] = a_host[s] * gc
+    end
+    _accumulate_domainwall_coefficient_shadows!(
+        shadow, global_gradient, Val(L5))
     return nothing
 end
 
@@ -217,6 +362,41 @@ function ER.augmented_primal(
     ::ER.Const{typeof(LinearAlgebra.mul!)},
     ::Type{RT},
     result::ER.Annotation{<:LatticeMatrix},
+    operator::ER.Annotation{<:D5DW_GeneralizedDomainwallOperator5D},
+    psi::ER.Annotation{<:LatticeMatrix},
+) where RT
+    return _domainwall_augmented_primal(cfg, RT, result, operator, psi)
+end
+
+function ER.augmented_primal(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LinearAlgebra.mul!)},
+    ::Type{RT},
+    result::ER.Annotation{<:LatticeMatrix},
+    operator::ER.Annotation{<:Adjoint_D5DW_GeneralizedDomainwallOperator5D},
+    psi::ER.Annotation{<:LatticeMatrix},
+) where RT
+    return _domainwall_augmented_primal(cfg, RT, result, operator, psi)
+end
+
+@inline function _domainwall_pullback_coefficients(
+    parent::D5DW_MobiusDomainwallOperator5D,
+)
+    return one(parent.mass), (parent.b + parent.c) / 2,
+        (parent.b - parent.c) / 2
+end
+
+@inline function _domainwall_pullback_coefficients(
+    parent::D5DW_GeneralizedDomainwallOperator5D,
+)
+    return parent.a, parent.b, parent.c
+end
+
+function ER.augmented_primal(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LinearAlgebra.mul!)},
+    ::Type{RT},
+    result::ER.Annotation{<:LatticeMatrix},
     operator::ER.Annotation{<:Adjoint_D5DW_MobiusDomainwallOperator5D},
     psi::ER.Annotation{<:LatticeMatrix},
 ) where RT
@@ -233,9 +413,8 @@ function _domainwall_reverse!(
     parent = _domainwall_parent(operator.val)
     _validate_domainwall_ad_fields(parent, result.val, psi.val)
     L5 = typeof(parent).parameters[2]
-    coeff_diagonal = (parent.b + parent.c) / 2
-    coeff_fifth = (parent.b - parent.c) / 2
-    coeff_minus = -coeff_fifth
+    coeff_scale, coeff_diagonal, coeff_fifth =
+        _domainwall_pullback_coefficients(parent)
 
     # Both the fermion input pullback and the link pullback read neighboring
     # output cotangents.  Rebuild the shadow lattice with primal metadata so
@@ -259,29 +438,41 @@ function _domainwall_reverse!(
             _kernel_domainwall_link_pullback_matrix!,
             dU[1].A, dU[2].A, dU[3].A, dU[4].A,
             left.A, source.A,
-            coeff_diagonal, coeff_fifth, parent.mass,
+            coeff_scale, coeff_diagonal, coeff_fifth, parent.mass,
             Val(NC), Val(L5), Val(result.val.nw), dU[1].indexer,
         )
         mark_halo_dirty!.(dU)
+        if parent isa D5DW_GeneralizedDomainwallOperator5D
+            _domainwall_coefficient_pullback!(
+                operator_shadow, parent, left, source, psi.val, Val(L5))
+        end
     end
 
     dpsi = hasproperty(psi, :dval) ? _getshadow(psi.dval) : nothing
     if dpsi isa LatticeMatrix
         temporary, temporary_index = get_block(psi.val.temps)
         U1, U2, U3, U4 = parent.U
-        if adjoint_mode
+        if parent isa D5DW_GeneralizedDomainwallOperator5D
+            kernel = adjoint_mode ?
+                kernel_D5DW_GeneralizedDomainwallOperator5D! :
+                kernel_adjoint_D5DW_GeneralizedDomainwallOperator5D!
             JACC.parallel_for(
                 prod(psi.val.PN),
-                kernel_D5DW_MobiusDomainwallOperator5D!,
+                kernel,
                 temporary, U1.A, U2.A, U3.A, U4.A,
                 parent.mass, parent.wilson_params, dresult.A,
+                parent.a, parent.b, parent.c,
                 Val(psi.val.NC1), Val(psi.val.nw), psi.val.indexer,
-                Val(L5), coeff_diagonal, coeff_minus,
+                Val(L5),
             )
         else
+            coeff_minus = -coeff_fifth
+            kernel = adjoint_mode ?
+                kernel_D5DW_MobiusDomainwallOperator5D! :
+                kernel_adjoint_D5DW_MobiusDomainwallOperator5D!
             JACC.parallel_for(
                 prod(psi.val.PN),
-                kernel_adjoint_D5DW_MobiusDomainwallOperator5D!,
+                kernel,
                 temporary, U1.A, U2.A, U3.A, U4.A,
                 parent.mass, parent.wilson_params, dresult.A,
                 Val(psi.val.NC1), Val(psi.val.nw), psi.val.indexer,
@@ -312,6 +503,30 @@ function ER.reverse(
     psi::ER.Annotation{<:LatticeMatrix},
 )
     _domainwall_reverse!(false, dresult_out, result, operator, psi)
+    return (nothing, nothing, nothing)
+end
+
+function ER.reverse(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LinearAlgebra.mul!)},
+    dresult_out, _tape,
+    result::ER.Annotation{<:LatticeMatrix},
+    operator::ER.Annotation{<:D5DW_GeneralizedDomainwallOperator5D},
+    psi::ER.Annotation{<:LatticeMatrix},
+)
+    _domainwall_reverse!(false, dresult_out, result, operator, psi)
+    return (nothing, nothing, nothing)
+end
+
+function ER.reverse(
+    cfg::ER.RevConfig,
+    ::ER.Const{typeof(LinearAlgebra.mul!)},
+    dresult_out, _tape,
+    result::ER.Annotation{<:LatticeMatrix},
+    operator::ER.Annotation{<:Adjoint_D5DW_GeneralizedDomainwallOperator5D},
+    psi::ER.Annotation{<:LatticeMatrix},
+)
+    _domainwall_reverse!(true, dresult_out, result, operator, psi)
     return (nothing, nothing, nothing)
 end
 

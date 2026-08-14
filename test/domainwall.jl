@@ -3,6 +3,12 @@ function _domainwall_test_shift4(x, direction, amount, lattice_size)
         mod1(x[d] + amount, lattice_size[d]) : x[d], 4)
 end
 
+function _domainwall_test_core(field)
+    ranges = ntuple(
+        d -> (field.nw + 1):(field.nw + field.PN[d]), length(field.PN))
+    return @view field.A[:, :, ranges...]
+end
+
 function _domainwall_test_fermion_shift4(
     x, direction, amount, lattice_size, phases,
 )
@@ -98,6 +104,28 @@ function _domainwall_test_reference(
     return psi .- Fpsi .+ _domainwall_test_DW(links, effective, M, phases)
 end
 
+function _domainwall_test_generalized_reference(
+    links, psi, mass, M, a, b, c, phases; adjoint_operator=false,
+)
+    L5 = size(psi, 7)
+    reshape5(coefficients) = reshape(coefficients, 1, 1, 1, 1, 1, 1, L5)
+    A, B, C = reshape5(a), reshape5(b), reshape5(c)
+    if adjoint_operator
+        q = A .* psi
+        Fdag_q = _domainwall_test_F(q, mass; adjoint_operator=true)
+        DWdag_q = _domainwall_test_DW(
+            links, q, M, phases; adjoint_operator=true)
+        Fdag_C_DWdag_q = _domainwall_test_F(
+            C .* DWdag_q, mass; adjoint_operator=true)
+        return q .- Fdag_q .+ B .* DWdag_q .+ Fdag_C_DWdag_q
+    end
+
+    Fpsi = _domainwall_test_F(psi, mass)
+    effective = B .* psi .+ C .* Fpsi
+    return A .* (psi .- Fpsi .+
+        _domainwall_test_DW(links, effective, M, phases))
+end
+
 function domainwall_tests()
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -148,6 +176,53 @@ function domainwall_tests()
         end
     end
 
+
+    @testset "generalized domain-wall dense reference" begin
+        a = [0.83, 1.17, 1.31]
+        b5 = [1.2, 0.91, 1.47]
+        c5 = [-0.18, 0.37, 0.22]
+        operator = D5DW_GeneralizedDomainwallOperator5D(
+            links, L5, mass, M, a, b5, c5)
+        reference = _domainwall_test_generalized_reference(
+            link_arrays, psi_array, mass, M, a, b5, c5, phases)
+        reference_dag = _domainwall_test_generalized_reference(
+            link_arrays, left_array, mass, M, a, b5, c5, phases;
+            adjoint_operator=true)
+
+        mul!(result, operator, psi)
+        mul!(adjoint_result, adjoint(operator), left)
+        global_result = gather_matrix(result)
+        global_adjoint = gather_matrix(adjoint_result)
+        if rank == 0
+            @test global_result ≈ reference atol=8e-12 rtol=8e-12
+            @test global_adjoint ≈ reference_dag atol=8e-12 rtol=8e-12
+            @test dot(vec(left_array), vec(global_result)) ≈
+                dot(vec(global_adjoint), vec(psi_array)) atol=2e-10 rtol=2e-11
+        end
+        @test adjoint(adjoint(operator)) === operator
+    end
+
+    @testset "generalized domain-wall Möbius compatibility" begin
+        for (legacy_b, legacy_c) in ((1.0, 1.0), (2.0, 0.0), (2.0, 1.0))
+            b5 = fill((legacy_b + legacy_c) / 2, L5)
+            c5 = fill((legacy_b - legacy_c) / 2, L5)
+            generalized = D5DW_GeneralizedDomainwallOperator5D(
+                links, L5, mass, M, ones(L5), b5, c5)
+            mobius = D5DW_MobiusDomainwallOperator5D(
+                links, L5, mass, M, legacy_b, legacy_c)
+            generalized_result = similar(psi)
+            mobius_result = similar(psi)
+            mul!(generalized_result, generalized, psi)
+            mul!(mobius_result, mobius, psi)
+            @test _domainwall_test_core(generalized_result) ≈
+                _domainwall_test_core(mobius_result) atol=8e-12 rtol=8e-12
+            mul!(generalized_result, adjoint(generalized), psi)
+            mul!(mobius_result, adjoint(mobius), psi)
+            @test _domainwall_test_core(generalized_result) ≈
+                _domainwall_test_core(mobius_result) atol=8e-12 rtol=8e-12
+        end
+    end
+
     @testset "domain-wall parameter precision and validation" begin
         operator32 = D5DW_MobiusDomainwallOperator5D(
             links, L5, 0.13f0, -1.0f0, 2.0f0, 1.0f0)
@@ -161,5 +236,16 @@ function domainwall_tests()
             links, 0, mass, M, 1.0, 1.0)
         @test_throws ArgumentError D5DW_MobiusDomainwallOperator5D(
             links, 3.0, mass, M, 1.0, 1.0)
+
+        generalized32 = D5DW_GeneralizedDomainwallOperator5D(
+            links, L5, 0.13f0, -1.0f0,
+            ones(Float32, L5), fill(1.5f0, L5), fill(0.5f0, L5))
+        @test generalized32.mass isa Float32
+        @test eltype(generalized32.a) === Float32
+        @test Array(generalized32.b) == fill(1.5f0, L5)
+        @test_throws DimensionMismatch D5DW_GeneralizedDomainwallOperator5D(
+            links, L5, mass, M, ones(L5 - 1), ones(L5), zeros(L5))
+        @test_throws ArgumentError D5DW_GeneralizedDomainwallOperator5D(
+            links, L5, mass, M, ones(L5), fill(Inf, L5), zeros(L5))
     end
 end

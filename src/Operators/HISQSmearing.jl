@@ -1,4 +1,12 @@
+using StaticArrays: SVector
+
 const _hisq_transverse_signs = (-1, 1)
+
+@inline function _hisq_parallel_for(args...)
+    threads = JACC.backend == "cuda" ? 128 : 0
+    specification = JACC.launch_spec(threads=threads, shmem_size=0)
+    return JACC.parallel_for(specification, args...)
+end
 
 @inline function _hisq_link_element(
     U1, U2, U3, U4, direction, row, column, site,
@@ -19,123 +27,283 @@ end
     return ntuple(d -> site[d] + ifelse(d == axis, amount, 0), 4)
 end
 
-@inline function _hisq_load_oriented_link!(
-    link, U1, U2, U3, U4, site, direction, ::Val{NC},
+@inline function _hisq_oriented_row(
+    U1, U2, U3, U4, site, direction, row, ::Val{NC},
 ) where NC
     if direction > 0
-        @inbounds for column in 1:NC, row in 1:NC
-            link[row, column] = _hisq_link_element(
+        values = SVector{NC}(ntuple(Val(NC)) do column
+            _hisq_link_element(
                 U1, U2, U3, U4, direction, row, column, site)
-        end
-        return _hisq_shift_site(site, direction)
+        end)
+        return values, _hisq_shift_site(site, direction)
     end
 
     previous_site = _hisq_shift_site(site, direction)
     axis = -direction
-    @inbounds for column in 1:NC, row in 1:NC
-        link[row, column] = conj(_hisq_link_element(
+    values = SVector{NC}(ntuple(Val(NC)) do column
+        conj(_hisq_link_element(
             U1, U2, U3, U4, axis, column, row, previous_site))
-    end
-    return previous_site
+    end)
+    return values, previous_site
 end
 
-@inline function _hisq_accumulate_path!(
-    accumulator, product, link, scratch,
-    U1, U2, U3, U4, origin, path, coefficient, ::Val{NC},
+@inline function _hisq_row_times_oriented_link(
+    row_values, U1, U2, U3, U4, site, direction, ::Val{NC},
 ) where NC
-    eye!(product)
-    site = origin
-    @inbounds for step in path
-        site = _hisq_load_oriented_link!(
-            link, U1, U2, U3, U4, site, step, Val(NC))
-        gemm!(scratch, product, link)
-        product, scratch = scratch, product
+    matrix_site = ifelse(
+        direction > 0, site, _hisq_shift_site(site, direction))
+    axis = abs(direction)
+    values = SVector{NC}(ntuple(Val(NC)) do column
+        value = zero(eltype(row_values))
+        @inbounds for contracted in 1:NC
+            link_element = if direction > 0
+                _hisq_link_element(
+                    U1, U2, U3, U4, axis,
+                    contracted, column, matrix_site)
+            else
+                conj(_hisq_link_element(
+                    U1, U2, U3, U4, axis,
+                    column, contracted, matrix_site))
+            end
+            value += row_values[contracted] * link_element
+        end
+        value
+    end)
+    next_site = ifelse(
+        direction > 0, _hisq_shift_site(site, direction), matrix_site)
+    return values, next_site
+end
+
+@inline function _hisq_path_row(
+    U1, U2, U3, U4, origin, path, row, ::Val{NC},
+) where NC
+    product, site = _hisq_oriented_row(
+        U1, U2, U3, U4, origin, path[1], row, Val(NC))
+    @inbounds for path_index in 2:length(path)
+        product, site = _hisq_row_times_oriented_link(
+            product, U1, U2, U3, U4, site,
+            path[path_index], Val(NC))
     end
-    axpy!(coefficient, product, accumulator)
+    return product
+end
+
+@inline _hisq_five_signs(::Val{1}) = (1, 1)
+@inline _hisq_five_signs(::Val{2}) = (-1, -1)
+@inline _hisq_five_signs(::Val{3}) = (1, -1)
+@inline _hisq_five_signs(::Val{4}) = (-1, 1)
+
+@inline _hisq_seven_signs(::Val{1}) = (1, 1, 1)
+@inline _hisq_seven_signs(::Val{2}) = (-1, -1, -1)
+@inline _hisq_seven_signs(::Val{3}) = (-1, 1, 1)
+@inline _hisq_seven_signs(::Val{4}) = (1, -1, 1)
+@inline _hisq_seven_signs(::Val{5}) = (1, 1, -1)
+@inline _hisq_seven_signs(::Val{6}) = (-1, -1, 1)
+@inline _hisq_seven_signs(::Val{7}) = (-1, 1, -1)
+@inline _hisq_seven_signs(::Val{8}) = (1, -1, -1)
+
+@inline function _hisq_staple3_row(
+    U1, U2, U3, U4, origin, mu, row, ::Val{NC},
+) where NC
+    direct, _ = _hisq_oriented_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    accumulator = zero(direct)
+    @inbounds for nu in 1:4
+        nu == mu && continue
+        accumulator += _hisq_path_row(
+            U1, U2, U3, U4, origin, (nu, mu, -nu), row, Val(NC))
+        accumulator += _hisq_path_row(
+            U1, U2, U3, U4, origin, (-nu, mu, nu), row, Val(NC))
+    end
+    return accumulator
+end
+
+@inline function _hisq_staple5_row(
+    U1, U2, U3, U4, origin, mu, row, part::Val{P}, ::Val{NC},
+) where {P,NC}
+    direct, _ = _hisq_oriented_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    accumulator = zero(direct)
+    sign_nu, sign_rho = _hisq_five_signs(part)
+    @inbounds for nu in 1:4
+        nu == mu && continue
+        for rho in 1:4
+            (rho == mu || rho == nu) && continue
+            signed_nu = sign_nu * nu
+            signed_rho = sign_rho * rho
+            accumulator += _hisq_path_row(
+                U1, U2, U3, U4, origin,
+                (signed_nu, signed_rho, mu, -signed_rho, -signed_nu),
+                row, Val(NC))
+        end
+    end
+    return accumulator
+end
+
+@inline function _hisq_staple7_row(
+    U1, U2, U3, U4, origin, mu, row, part::Val{P}, ::Val{NC},
+) where {P,NC}
+    direct, _ = _hisq_oriented_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    accumulator = zero(direct)
+    sign_nu, sign_rho, sign_sigma = _hisq_seven_signs(part)
+    @inbounds for nu in 1:4
+        nu == mu && continue
+        for rho in 1:4
+            (rho == mu || rho == nu) && continue
+            sigma = 10 - mu - nu - rho
+            signed_nu = sign_nu * nu
+            signed_rho = sign_rho * rho
+            signed_sigma = sign_sigma * sigma
+            accumulator += _hisq_path_row(
+                U1, U2, U3, U4, origin,
+                (signed_nu, signed_rho, signed_sigma, mu,
+                 -signed_sigma, -signed_rho, -signed_nu),
+                row, Val(NC))
+        end
+    end
+    return accumulator
+end
+
+@inline function _hisq_lepage_row(
+    U1, U2, U3, U4, origin, mu, row, ::Val{NC},
+) where NC
+    direct, _ = _hisq_oriented_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    accumulator = zero(direct)
+    @inbounds for nu in 1:4
+        nu == mu && continue
+        accumulator += _hisq_path_row(
+            U1, U2, U3, U4, origin,
+            (nu, nu, mu, -nu, -nu), row, Val(NC))
+        accumulator += _hisq_path_row(
+            U1, U2, U3, U4, origin,
+            (-nu, -nu, mu, nu, nu), row, Val(NC))
+    end
+    return accumulator
+end
+
+@inline function _hisq_store_row!(
+    V1, V2, V3, V4, mu, site, row, values, coefficient, ::Val{NC},
+) where NC
+    if mu == 1
+        @inbounds for column in 1:NC
+            V1[row, column, site...] = coefficient * values[column]
+        end
+    elseif mu == 2
+        @inbounds for column in 1:NC
+            V2[row, column, site...] = coefficient * values[column]
+        end
+    elseif mu == 3
+        @inbounds for column in 1:NC
+            V3[row, column, site...] = coefficient * values[column]
+        end
+    else
+        @inbounds for column in 1:NC
+            V4[row, column, site...] = coefficient * values[column]
+        end
+    end
     return nothing
 end
 
-@inline function kernel_hisq_fat7!(
-    site_index, fat_link, U1, U2, U3, U4,
-    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
-    coefficient_lepage,
-    ::Val{mu}, ::Val{NC}, ::Val{nw}, indexer,
-) where {mu,NC,nw}
+@inline function _hisq_add_row!(
+    V1, V2, V3, V4, mu, site, row, values, coefficient, ::Val{NC},
+) where NC
+    if mu == 1
+        @inbounds for column in 1:NC
+            V1[row, column, site...] += coefficient * values[column]
+        end
+    elseif mu == 2
+        @inbounds for column in 1:NC
+            V2[row, column, site...] += coefficient * values[column]
+        end
+    elseif mu == 3
+        @inbounds for column in 1:NC
+            V3[row, column, site...] += coefficient * values[column]
+        end
+    else
+        @inbounds for column in 1:NC
+            V4[row, column, site...] += coefficient * values[column]
+        end
+    end
+    return nothing
+end
+
+@inline function _hisq_combined_row(combined_index, volume, ::Val{NC}) where NC
+    zero_based = combined_index - 1
+    site_index = mod(zero_based, volume) + 1
+    row_and_direction = div(zero_based, volume)
+    row = mod(row_and_direction, NC) + 1
+    mu = div(row_and_direction, NC) + 1
+    return site_index, row, mu
+end
+
+@inline function kernel_hisq_fat7_initialize!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(NC))
     origin = delinearize(indexer, site_index, nw)
-    accumulator = MMatrix{NC,NC,eltype(fat_link)}(undef)
-    product = MMatrix{NC,NC,eltype(fat_link)}(undef)
-    link = MMatrix{NC,NC,eltype(fat_link)}(undef)
-    scratch = MMatrix{NC,NC,eltype(fat_link)}(undef)
+    direct, _ = _hisq_oriented_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    _hisq_store_row!(
+        V1, V2, V3, V4, mu, origin, row, direct, coefficient, Val(NC))
+    return nothing
+end
 
-    @inbounds for column in 1:NC, row in 1:NC
-        accumulator[row, column] = coefficient_1 * _hisq_link_element(
-            U1, U2, U3, U4, mu, row, column, origin)
-    end
+@inline function kernel_hisq_fat7_staple3!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(NC))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_staple3_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    _hisq_add_row!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, Val(NC))
+    return nothing
+end
 
-    # The path sets are exactly the Fat7 3-, 5-, and 7-link staples used by
-    # SIMULATeQCD. Ordered transverse axes account for every path ordering;
-    # the signs account for forward and backward transverse links.
-    for nu in 1:4
-        nu == mu && continue
-        for sign_nu in _hisq_transverse_signs
-            signed_nu = sign_nu * nu
-            path3 = (signed_nu, mu, -signed_nu)
-            _hisq_accumulate_path!(
-                accumulator, product, link, scratch,
-                U1, U2, U3, U4, origin, path3, coefficient_3, Val(NC))
-            if !iszero(coefficient_lepage)
-                lepage_path = (
-                    signed_nu, signed_nu, mu, -signed_nu, -signed_nu)
-                _hisq_accumulate_path!(
-                    accumulator, product, link, scratch,
-                    U1, U2, U3, U4, origin, lepage_path,
-                    coefficient_lepage, Val(NC))
-            end
-        end
+@inline function kernel_hisq_fat7_staple5!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, ::Val{NC}, ::Val{nw}, indexer,
+) where {P,NC,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(NC))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_staple5_row(
+        U1, U2, U3, U4, origin, mu, row, part, Val(NC))
+    _hisq_add_row!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, Val(NC))
+    return nothing
+end
 
-        for rho in 1:4
-            (rho == mu || rho == nu) && continue
-            for sign_nu in _hisq_transverse_signs
-                signed_nu = sign_nu * nu
-                for sign_rho in _hisq_transverse_signs
-                    signed_rho = sign_rho * rho
-                    path5 = (
-                        signed_nu, signed_rho, mu,
-                        -signed_rho, -signed_nu,
-                    )
-                    _hisq_accumulate_path!(
-                        accumulator, product, link, scratch,
-                        U1, U2, U3, U4, origin, path5,
-                        coefficient_5, Val(NC))
-                end
-            end
+@inline function kernel_hisq_fat7_staple7!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, ::Val{NC}, ::Val{nw}, indexer,
+) where {P,NC,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(NC))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_staple7_row(
+        U1, U2, U3, U4, origin, mu, row, part, Val(NC))
+    _hisq_add_row!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, Val(NC))
+    return nothing
+end
 
-            for sigma in 1:4
-                (sigma == mu || sigma == nu || sigma == rho) && continue
-                for sign_nu in _hisq_transverse_signs
-                    signed_nu = sign_nu * nu
-                    for sign_rho in _hisq_transverse_signs
-                        signed_rho = sign_rho * rho
-                        for sign_sigma in _hisq_transverse_signs
-                            signed_sigma = sign_sigma * sigma
-                            path7 = (
-                                signed_nu, signed_rho, signed_sigma, mu,
-                                -signed_sigma, -signed_rho, -signed_nu,
-                            )
-                            _hisq_accumulate_path!(
-                                accumulator, product, link, scratch,
-                                U1, U2, U3, U4, origin, path7,
-                                coefficient_7, Val(NC))
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    @inbounds for column in 1:NC, row in 1:NC
-        fat_link[row, column, origin...] = accumulator[row, column]
-    end
+@inline function kernel_hisq_fat7_lepage!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(NC))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_lepage_row(
+        U1, U2, U3, U4, origin, mu, row, Val(NC))
+    _hisq_add_row!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, Val(NC))
     return nothing
 end
 
@@ -320,17 +488,39 @@ function _hisq_fat7!(fat_links, thin_links, coefficients)
         ensure_halo!(link)
     end
     U1, U2, U3, U4 = thin_links
+    V1, V2, V3, V4 = fat_links
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
         coefficient_lepage = coefficients
-    for mu in 1:4
-        fat_link = fat_links[mu]
-        _parallel_for_mutating!(fat_link,
-            prod(fat_link.PN), kernel_hisq_fat7!, fat_link.A,
-            U1.A, U2.A, U3.A, U4.A,
-            coefficient_1, coefficient_3, coefficient_5, coefficient_7,
-            coefficient_lepage,
-            Val(mu), Val(fat_link.NC1), Val(fat_link.nw), fat_link.indexer)
+    volume = prod(V1.PN)
+    combined_volume = 4 * V1.NC1 * volume
+    common_arguments = (
+        V1.A, V2.A, V3.A, V4.A, U1.A, U2.A, U3.A, U4.A)
+    geometry_arguments = (volume, Val(V1.NC1), Val(V1.nw), V1.indexer)
+
+    _hisq_parallel_for(
+        combined_volume, kernel_hisq_fat7_initialize!, common_arguments...,
+        coefficient_1, geometry_arguments...)
+    _hisq_parallel_for(
+        combined_volume, kernel_hisq_fat7_staple3!, common_arguments...,
+        coefficient_3, geometry_arguments...)
+    for part in 1:4
+        _hisq_parallel_for(
+            combined_volume, kernel_hisq_fat7_staple5!, common_arguments...,
+            coefficient_5, volume, Val(part),
+            Val(V1.NC1), Val(V1.nw), V1.indexer)
     end
+    for part in 1:8
+        _hisq_parallel_for(
+            combined_volume, kernel_hisq_fat7_staple7!, common_arguments...,
+            coefficient_7, volume, Val(part),
+            Val(V1.NC1), Val(V1.nw), V1.indexer)
+    end
+    if !iszero(coefficient_lepage)
+        _hisq_parallel_for(
+            combined_volume, kernel_hisq_fat7_lepage!, common_arguments...,
+            coefficient_lepage, geometry_arguments...)
+    end
+    mark_halo_dirty!.(fat_links)
     return fat_links
 end
 

@@ -133,23 +133,17 @@ end
 export hisq_project_u3!, hisq_project_u3
 
 @inline function kernel_hisq_naik_links!(
-    site_index, long_link, input, ::Val{mu}, ::Val{NC}, ::Val{nw}, indexer,
-) where {mu,NC,nw}
+    combined_index, L1, L2, L3, L4, W1, W2, W3, W4,
+    volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(NC))
     origin = delinearize(indexer, site_index, nw)
-    first_link = MMatrix{NC,NC,eltype(input)}(undef)
-    next_link = MMatrix{NC,NC,eltype(input)}(undef)
-    product = MMatrix{NC,NC,eltype(input)}(undef)
-    site = _hisq_load_oriented_link!(
-        first_link, input, input, input, input, origin, mu, Val(NC))
-    site = _hisq_load_oriented_link!(
-        next_link, input, input, input, input, site, mu, Val(NC))
-    gemm!(product, first_link, next_link)
-    _hisq_load_oriented_link!(
-        next_link, input, input, input, input, site, mu, Val(NC))
-    gemm!(first_link, product, next_link)
-    @inbounds for column in 1:NC, row in 1:NC
-        long_link[row, column, origin...] = first_link[row, column]
-    end
+    path_row = _hisq_path_row(
+        W1, W2, W3, W4, origin, (mu, mu, mu), row, Val(NC))
+    _hisq_store_row!(
+        L1, L2, L3, L4, mu, origin, row,
+        path_row, one(eltype(L1)), Val(NC))
     return nothing
 end
 
@@ -185,14 +179,16 @@ function hisq_naik_links!(
     nw < 2 && throw(ArgumentError(
         "HISQ Naik link construction requires nw >= 2 or nw == 0"))
     ensure_halo!.(reunitarized_links)
-    for mu in 1:4
-        _parallel_for_mutating!(
-            long_links[mu], prod(long_links[mu].PN),
-            kernel_hisq_naik_links!, long_links[mu].A,
-            reunitarized_links[mu].A, Val(mu),
-            Val(long_links[mu].NC1), Val(long_links[mu].nw),
-            long_links[mu].indexer)
-    end
+    volume = prod(long_links[1].PN)
+    NC = long_links[1].NC1
+    _hisq_parallel_for(
+        4 * NC * volume, kernel_hisq_naik_links!,
+        long_links[1].A, long_links[2].A,
+        long_links[3].A, long_links[4].A,
+        reunitarized_links[1].A, reunitarized_links[2].A,
+        reunitarized_links[3].A, reunitarized_links[4].A,
+        volume, Val(NC), Val(long_links[1].nw), long_links[1].indexer)
+    mark_halo_dirty!.(long_links)
     return long_links
 end
 

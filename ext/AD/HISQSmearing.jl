@@ -1,7 +1,9 @@
 import LatticeMatrices: hisq_fat7_level1!, hisq_fat7_level2!,
     mark_halo_dirty!,
-    _hisq_link_element, _hisq_shift_site, _hisq_load_oriented_link!,
-    _hisq_transverse_signs, MMatrix, eye!, gemm!
+    _hisq_link_element, _hisq_shift_site, _hisq_row_times_oriented_link,
+    _hisq_five_signs, _hisq_seven_signs, _hisq_parallel_for
+
+using StaticArrays: SVector
 
 @inline function _hisq_smearing_vector_shadow(annotation)
     hasproperty(annotation, :dval) || return nothing
@@ -22,183 +24,269 @@ end
     return link_offset
 end
 
-# Accumulate the contribution of one path into the gradient of the single
-# thin link owned by this kernel invocation.  Gathering all occurrences into
-# one owner avoids complex-valued atomics when paths overlap on CPU or GPU.
-@inline function _hisq_fat7_path_pullback_for_link!(
-    dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-    target, path, coefficient, output_direction,
-    left_storage, right_storage, work_storage, link_storage,
-    temporary_storage,
-    ::Val{axis}, ::Val{NC},
-) where {axis,NC}
+@inline function _hisq_basis_vector(index, ::Type{T}, ::Val{NC}) where {T,NC}
+    return SVector{NC}(ntuple(
+        component -> ifelse(component == index, one(T), zero(T)),
+        Val(NC)))
+end
+
+@inline function _hisq_path_site_before(origin, path, path_index)
+    site = origin
+    @inbounds for index in 1:(path_index - 1)
+        site = _hisq_shift_site(site, path[index])
+    end
+    return site
+end
+
+@inline function _hisq_oriented_link_times_column(
+    U1, U2, U3, U4, site, direction, column_values, ::Val{NC},
+) where NC
+    matrix_site = ifelse(
+        direction > 0, site, _hisq_shift_site(site, direction))
+    axis = abs(direction)
+    return SVector{NC}(ntuple(Val(NC)) do row
+        value = zero(eltype(column_values))
+        @inbounds for contracted in 1:NC
+            link_element = if direction > 0
+                _hisq_link_element(
+                    U1, U2, U3, U4, axis,
+                    row, contracted, matrix_site)
+            else
+                conj(_hisq_link_element(
+                    U1, U2, U3, U4, axis,
+                    contracted, row, matrix_site))
+            end
+            value += link_element * column_values[contracted]
+        end
+        value
+    end)
+end
+
+@inline function _hisq_path_left_column(
+    U1, U2, U3, U4, origin, path, occurrence, column,
+    ::Type{T}, ::Val{NC},
+) where {T,NC}
+    values = _hisq_basis_vector(column, T, Val(NC))
+    @inbounds for path_index in (occurrence - 1):-1:1
+        site = _hisq_path_site_before(origin, path, path_index)
+        values = _hisq_oriented_link_times_column(
+            U1, U2, U3, U4, site, path[path_index], values, Val(NC))
+    end
+    return values
+end
+
+@inline function _hisq_path_right_row(
+    U1, U2, U3, U4, origin, path, occurrence, row,
+    ::Type{T}, ::Val{NC},
+) where {T,NC}
+    values = _hisq_basis_vector(row, T, Val(NC))
+    site = _hisq_path_site_before(origin, path, occurrence + 1)
+    @inbounds for path_index in (occurrence + 1):length(path)
+        values, site = _hisq_row_times_oriented_link(
+            values, U1, U2, U3, U4, site,
+            path[path_index], Val(NC))
+    end
+    return values
+end
+
+@inline function _hisq_fat7_path_pullback_element(
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    target, path, coefficient, output_direction, axis, row, column,
+    ::Type{T}, ::Val{NC},
+) where {T,NC}
+    gradient = zero(T)
     @inbounds for occurrence in eachindex(path)
         direction = path[occurrence]
         abs(direction) == axis || continue
 
         link_offset = _hisq_fat7_path_link_offset(path, occurrence)
         origin = ntuple(d -> target[d] - link_offset[d], 4)
+        hrow = ifelse(direction > 0, row, column)
+        hcolumn = ifelse(direction > 0, column, row)
+        left_column = _hisq_path_left_column(
+            U1, U2, U3, U4, origin, path, occurrence, hrow,
+            T, Val(NC))
+        right_row = _hisq_path_right_row(
+            U1, U2, U3, U4, origin, path, occurrence, hcolumn,
+            T, Val(NC))
 
-        left = left_storage
-        right = right_storage
-        work = work_storage
-        link = link_storage
-        temporary = temporary_storage
-        eye!(left)
-        eye!(right)
-
-        site = origin
-        for path_index in eachindex(path)
-            site = _hisq_load_oriented_link!(
-                link, U1, U2, U3, U4, site,
-                path[path_index], Val(NC))
-            if path_index < occurrence
-                gemm!(work, left, link)
-                left, work = work, left
-            elseif path_index > occurrence
-                gemm!(work, right, link)
-                right, work = work, right
-            end
-        end
-
-        # For P = left * A * right and output cotangent G, the cotangent of
-        # the oriented factor is H = left' * G * right'.
-        for column in 1:NC, row in 1:NC
-            value = zero(eltype(dU))
-            for contracted in 1:NC
-                value += conj(left[contracted, row]) *
+        value = zero(T)
+        for output_column in 1:NC
+            left_times_output = zero(T)
+            for output_row in 1:NC
+                left_times_output += conj(left_column[output_row]) *
                     _hisq_link_element(
                         dV1, dV2, dV3, dV4, output_direction,
-                        contracted, column, origin)
+                        output_row, output_column, origin)
             end
-            temporary[row, column] = value
+            value += left_times_output * conj(right_row[output_column])
         end
+        gradient += coefficient * ifelse(
+            direction > 0, value, conj(value))
+    end
+    return gradient
+end
 
-        if direction > 0
-            for column in 1:NC, row in 1:NC
-                value = zero(eltype(dU))
-                for contracted in 1:NC
-                    value += temporary[row, contracted] *
-                        conj(right[column, contracted])
-                end
-                dU[row, column, target...] += coefficient * value
-            end
-        else
-            # A = U' for a backward-oriented factor, hence dU = H'.
-            for column in 1:NC, row in 1:NC
-                value = zero(eltype(dU))
-                for contracted in 1:NC
-                    value += temporary[column, contracted] *
-                        conj(right[row, contracted])
-                end
-                dU[row, column, target...] += coefficient * conj(value)
-            end
-        end
+@inline function _hisq_pullback_element_indices(
+    combined_index, volume, ::Val{NC},
+) where NC
+    zero_based = combined_index - 1
+    site_index = mod(zero_based, volume) + 1
+    matrix_element_and_axis = div(zero_based, volume)
+    row = mod(matrix_element_and_axis, NC) + 1
+    column_and_axis = div(matrix_element_and_axis, NC)
+    column = mod(column_and_axis, NC) + 1
+    axis = div(column_and_axis, NC) + 1
+    return site_index, row, column, axis
+end
+
+@inline function _hisq_add_pullback_element!(
+    dU1, dU2, dU3, dU4, axis, row, column, target, value,
+)
+    if axis == 1
+        dU1[row, column, target...] += value
+    elseif axis == 2
+        dU2[row, column, target...] += value
+    elseif axis == 3
+        dU3[row, column, target...] += value
+    else
+        dU4[row, column, target...] += value
     end
     return nothing
 end
 
-@inline function _hisq_fat7_output_pullback_for_link!(
-    dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-    target, output_direction,
-    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
-    coefficient_lepage,
-    left, right, work, link, temporary,
-    ::Val{axis}, ::Val{NC},
-) where {axis,NC}
-    _hisq_fat7_path_pullback_for_link!(
-        dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-        target, (output_direction,), coefficient_1, output_direction,
-        left, right, work, link, temporary,
-        Val(axis), Val(NC))
+@inline function _kernel_hisq_fat7_pullback_one_link!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, column, axis = _hisq_pullback_element_indices(
+        combined_index, volume, Val(NC))
+    target = delinearize(indexer, site_index, nw)
+    T = eltype(dU1)
+    gradient = zero(T)
+    @inbounds for output_direction in 1:4
+        gradient += _hisq_fat7_path_pullback_element(
+            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+            target, (output_direction,), coefficient,
+            output_direction, axis, row, column, T, Val(NC))
+    end
+    _hisq_add_pullback_element!(
+        dU1, dU2, dU3, dU4, axis, row, column, target, gradient)
+    return nothing
+end
 
-    for nu in 1:4
+@inline function _kernel_hisq_fat7_pullback_staple3!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, column, axis = _hisq_pullback_element_indices(
+        combined_index, volume, Val(NC))
+    target = delinearize(indexer, site_index, nw)
+    T = eltype(dU1)
+    gradient = zero(T)
+    @inbounds for output_direction in 1:4, nu in 1:4
         nu == output_direction && continue
-        for sign_nu in _hisq_transverse_signs
-            signed_nu = sign_nu * nu
-            _hisq_fat7_path_pullback_for_link!(
-                dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-                target, (signed_nu, output_direction, -signed_nu),
-                coefficient_3, output_direction,
-                left, right, work, link, temporary,
-                Val(axis), Val(NC))
-            if !iszero(coefficient_lepage)
-                _hisq_fat7_path_pullback_for_link!(
-                    dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-                    target,
-                    (signed_nu, signed_nu, output_direction,
-                     -signed_nu, -signed_nu),
-                    coefficient_lepage, output_direction,
-                    left, right, work, link, temporary,
-                    Val(axis), Val(NC))
-            end
-        end
+        gradient += _hisq_fat7_path_pullback_element(
+            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+            target, (nu, output_direction, -nu), coefficient,
+            output_direction, axis, row, column, T, Val(NC))
+        gradient += _hisq_fat7_path_pullback_element(
+            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+            target, (-nu, output_direction, nu), coefficient,
+            output_direction, axis, row, column, T, Val(NC))
+    end
+    _hisq_add_pullback_element!(
+        dU1, dU2, dU3, dU4, axis, row, column, target, gradient)
+    return nothing
+end
 
+@inline function _kernel_hisq_fat7_pullback_staple5!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, ::Val{NC}, ::Val{nw}, indexer,
+) where {P,NC,nw}
+    site_index, row, column, axis = _hisq_pullback_element_indices(
+        combined_index, volume, Val(NC))
+    target = delinearize(indexer, site_index, nw)
+    T = eltype(dU1)
+    gradient = zero(T)
+    sign_nu, sign_rho = _hisq_five_signs(part)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        nu == output_direction && continue
         for rho in 1:4
             (rho == output_direction || rho == nu) && continue
-            for sign_nu in _hisq_transverse_signs
-                signed_nu = sign_nu * nu
-                for sign_rho in _hisq_transverse_signs
-                    signed_rho = sign_rho * rho
-                    _hisq_fat7_path_pullback_for_link!(
-                        dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-                        target,
-                        (signed_nu, signed_rho, output_direction,
-                         -signed_rho, -signed_nu),
-                        coefficient_5, output_direction,
-                        left, right, work, link, temporary,
-                        Val(axis), Val(NC))
-                end
-            end
-
-            for sigma in 1:4
-                (sigma == output_direction || sigma == nu || sigma == rho) &&
-                    continue
-                for sign_nu in _hisq_transverse_signs
-                    signed_nu = sign_nu * nu
-                    for sign_rho in _hisq_transverse_signs
-                        signed_rho = sign_rho * rho
-                        for sign_sigma in _hisq_transverse_signs
-                            signed_sigma = sign_sigma * sigma
-                            _hisq_fat7_path_pullback_for_link!(
-                                dU, dV1, dV2, dV3, dV4,
-                                U1, U2, U3, U4, target,
-                                (signed_nu, signed_rho, signed_sigma,
-                                 output_direction, -signed_sigma,
-                                 -signed_rho, -signed_nu),
-                                coefficient_7, output_direction,
-                                left, right, work, link, temporary,
-                                Val(axis), Val(NC))
-                        end
-                    end
-                end
-            end
+            signed_nu = sign_nu * nu
+            signed_rho = sign_rho * rho
+            path = (signed_nu, signed_rho, output_direction,
+                    -signed_rho, -signed_nu)
+            gradient += _hisq_fat7_path_pullback_element(
+                dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                target, path, coefficient, output_direction,
+                axis, row, column, T, Val(NC))
         end
     end
+    _hisq_add_pullback_element!(
+        dU1, dU2, dU3, dU4, axis, row, column, target, gradient)
     return nothing
 end
 
-@inline function _kernel_hisq_fat7_pullback!(
-    site_index, dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
-    coefficient_lepage,
-    ::Val{axis}, ::Val{NC}, ::Val{nw}, indexer,
-) where {axis,NC,nw}
+@inline function _kernel_hisq_fat7_pullback_staple7!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, ::Val{NC}, ::Val{nw}, indexer,
+) where {P,NC,nw}
+    site_index, row, column, axis = _hisq_pullback_element_indices(
+        combined_index, volume, Val(NC))
     target = delinearize(indexer, site_index, nw)
-    left = MMatrix{NC,NC,eltype(dU)}(undef)
-    right = MMatrix{NC,NC,eltype(dU)}(undef)
-    work = MMatrix{NC,NC,eltype(dU)}(undef)
-    link = MMatrix{NC,NC,eltype(dU)}(undef)
-    temporary = MMatrix{NC,NC,eltype(dU)}(undef)
-    for output_direction in 1:4
-        _hisq_fat7_output_pullback_for_link!(
-            dU, dV1, dV2, dV3, dV4, U1, U2, U3, U4,
-            target, output_direction,
-            coefficient_1, coefficient_3, coefficient_5, coefficient_7,
-            coefficient_lepage,
-            left, right, work, link, temporary,
-            Val(axis), Val(NC))
+    T = eltype(dU1)
+    gradient = zero(T)
+    sign_nu, sign_rho, sign_sigma = _hisq_seven_signs(part)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        nu == output_direction && continue
+        for rho in 1:4
+            (rho == output_direction || rho == nu) && continue
+            sigma = 10 - output_direction - nu - rho
+            signed_nu = sign_nu * nu
+            signed_rho = sign_rho * rho
+            signed_sigma = sign_sigma * sigma
+            path = (signed_nu, signed_rho, signed_sigma, output_direction,
+                    -signed_sigma, -signed_rho, -signed_nu)
+            gradient += _hisq_fat7_path_pullback_element(
+                dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                target, path, coefficient, output_direction,
+                axis, row, column, T, Val(NC))
+        end
     end
+    _hisq_add_pullback_element!(
+        dU1, dU2, dU3, dU4, axis, row, column, target, gradient)
+    return nothing
+end
+
+@inline function _kernel_hisq_fat7_pullback_lepage!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, column, axis = _hisq_pullback_element_indices(
+        combined_index, volume, Val(NC))
+    target = delinearize(indexer, site_index, nw)
+    T = eltype(dU1)
+    gradient = zero(T)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        nu == output_direction && continue
+        gradient += _hisq_fat7_path_pullback_element(
+            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+            target, (nu, nu, output_direction, -nu, -nu), coefficient,
+            output_direction, axis, row, column, T, Val(NC))
+        gradient += _hisq_fat7_path_pullback_element(
+            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+            target, (-nu, -nu, output_direction, nu, nu), coefficient,
+            output_direction, axis, row, column, T, Val(NC))
+    end
+    _hisq_add_pullback_element!(
+        dU1, dU2, dU3, dU4, axis, row, column, target, gradient)
     return nothing
 end
 
@@ -269,18 +357,42 @@ function _hisq_fat7_pullback!(
         length(dU) == 4 && all(link -> link isa LatticeMatrix, dU) ||
             throw(ArgumentError(
                 "$operation_name input shadow must contain four lattice fields"))
-        for axis in 1:4
-            JACC.parallel_for(
-                prod(U[axis].PN), _kernel_hisq_fat7_pullback!,
-                dU[axis].A,
-                dV[1].A, dV[2].A, dV[3].A, dV[4].A,
-                U[1].A, U[2].A, U[3].A, U[4].A,
-                coefficients...,
-                Val(axis), Val(U[axis].NC1), Val(U[axis].nw),
-                U[axis].indexer,
-            )
-            mark_halo_dirty!(dU[axis])
+        coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+            coefficient_lepage = coefficients
+        volume = prod(U[1].PN)
+        NC = U[1].NC1
+        combined_volume = 4 * NC * NC * volume
+        common_arguments = (
+            dU[1].A, dU[2].A, dU[3].A, dU[4].A,
+            dV[1].A, dV[2].A, dV[3].A, dV[4].A,
+            U[1].A, U[2].A, U[3].A, U[4].A)
+        geometry_arguments = (
+            volume, Val(NC), Val(U[1].nw), U[1].indexer)
+        _hisq_parallel_for(
+            combined_volume, _kernel_hisq_fat7_pullback_one_link!,
+            common_arguments..., coefficient_1, geometry_arguments...)
+        _hisq_parallel_for(
+            combined_volume, _kernel_hisq_fat7_pullback_staple3!,
+            common_arguments..., coefficient_3, geometry_arguments...)
+        for part in 1:4
+            _hisq_parallel_for(
+                combined_volume, _kernel_hisq_fat7_pullback_staple5!,
+                common_arguments..., coefficient_5, volume, Val(part),
+                Val(NC), Val(U[1].nw), U[1].indexer)
         end
+        for part in 1:8
+            _hisq_parallel_for(
+                combined_volume, _kernel_hisq_fat7_pullback_staple7!,
+                common_arguments..., coefficient_7, volume, Val(part),
+                Val(NC), Val(U[1].nw), U[1].indexer)
+        end
+        if !iszero(coefficient_lepage)
+            _hisq_parallel_for(
+                combined_volume, _kernel_hisq_fat7_pullback_lepage!,
+                common_arguments..., coefficient_lepage,
+                geometry_arguments...)
+        end
+        mark_halo_dirty!.(dU)
     end
 
     for link in dV

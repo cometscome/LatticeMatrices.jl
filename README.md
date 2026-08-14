@@ -512,6 +512,56 @@ the squared relative CG residual, so its `precision=1e-13` was compared with
 an ensemble-level physics comparison additionally requires matching gauge
 ensembles, source statistics, and taste normalization.
 
+##### GPU smearing implementation and performance
+
+The halo-based Fat7 and Naik builders use fixed-size row kernels and split the
+5- and 7-link sign combinations into statically specialized launches.  Their
+reverse rules gather every contribution for one thin-link matrix element in a
+single owner thread, avoiding both device-side matrix allocation and
+complex-valued atomics.  No global cache, `CUDA.limit!`, or Enzyme
+`runtime_activity=true` setting is used.  `HISQDiracCache4D` is an ordinary
+caller-owned object; its epoch check transparently refreshes the derived links
+on the first multiply after `U` changes and reuses them in subsequent CG
+iterations.
+
+The complete forward builder (`level 1 -> U(3) -> level 2 -> Naik`) was timed
+in double precision with one MPI rank on one NVIDIA H100 NVL.  The entries are
+three-sample medians with GPU synchronization and exclude the first JIT
+compilation.  The "before" column is the previous device-allocating
+implementation; the SIMULATeQCD column is `HisqSmearing::SmearAll` from the
+same validation build.  These are implementation measurements rather than a
+portable hardware performance guarantee.
+
+| lattice | before (ms) | current (ms) | speedup | SIMULATeQCD (ms) | current / SIMULATeQCD |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| `4^4` | 344.69 | 9.17 | 37.6x | 0.565 | 16.2x |
+| `8^4` | 1132.06 | 20.66 | 54.8x | 0.733 | 28.2x |
+| `16^4` | 28615.26 | 222.10 | 128.8x | 6.791 | 32.7x |
+
+The complete smearing pullback (`Naik -> level 2 -> U(3) -> level 1`) took
+approximately `95`, `215`, and `3272` ms on `4^4`, `8^4`, and `16^4`,
+respectively.  The small-lattice `4^4` samples varied from `51` to `99` ms;
+the two larger cases were stable.  A stress test also completed 1000
+consecutive full `4^4` rebuilds with CUDA's default device heap, without any
+user-side heap configuration.
+
+The cached thin-link force was additionally exercised in a `4^4` HISQ HMC
+trajectory with `m=0.37` and `epsilon_N=-0.083`.  Reducing the molecular
+dynamics step size at fixed trajectory length gave
+
+| MD steps | `dt` | `Delta H` | `Delta H / dt^2` |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.05 | -0.391153 | -156.461 |
+| 2 | 0.025 | -0.0974064 | -155.850 |
+| 4 | 0.0125 | -0.0243280 | -155.699 |
+| 8 | 0.00625 | -0.00608053 | -155.662 |
+
+Successive `|Delta H|` ratios were `4.016`, `4.004`, and `4.001`, corresponding
+to observed orders `2.006`, `2.001`, and `2.000`.  Thus the force gives the
+expected second-order Hamiltonian-error scaling.  Cache refresh counters also
+showed one smearing refresh per gauge update, rather than one per CG
+iteration; the final action evaluation performed one additional refresh.
+
 The Dirac stencil remains separate from smearing. Supply the corrected fat
 links `X[mu]`, which connect `x` to `x+mu`, and the forward-anchored Naik
 transporters `L[mu]`, which connect `x` to `x+3mu`:

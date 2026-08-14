@@ -1,7 +1,7 @@
 import LatticeMatrices: HISQDiracCache4D,
     hisq_project_u3!, hisq_naik_links!, mul_cached_hisq!,
     mark_halo_dirty!, HaloEpoch, _record_hisq_cache_state!,
-    _hisq_u3_project_matrix!, MMatrix, MVector, lu_factor!
+    _hisq_u3_project_matrix!, MMatrix, MVector, lu_factor!, gemm!
 
 @inline function _hisq_lu_solve_vector!(
     LU::MMatrix{N,N,T}, piv::MVector{N,Int}, right_hand_side::MVector{N,T},
@@ -28,19 +28,20 @@ end
 
 
 @inline function _kernel_hisq_naik_pullback!(
-    site_index, dinput, dL1, dL2, dL3, dL4, W1, W2, W3, W4,
-    ::Val{axis}, ::Val{NC}, ::Val{nw}, indexer,
-) where {axis,NC,nw}
+    combined_index, dW1, dW2, dW3, dW4,
+    dL1, dL2, dL3, dL4, W1, W2, W3, W4,
+    volume, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site_index, row, column, axis = _hisq_pullback_element_indices(
+        combined_index, volume, Val(NC))
     target = delinearize(indexer, site_index, nw)
-    left = MMatrix{NC,NC,eltype(dinput)}(undef)
-    right = MMatrix{NC,NC,eltype(dinput)}(undef)
-    work = MMatrix{NC,NC,eltype(dinput)}(undef)
-    link = MMatrix{NC,NC,eltype(dinput)}(undef)
-    temporary = MMatrix{NC,NC,eltype(dinput)}(undef)
-    _hisq_fat7_path_pullback_for_link!(
-        dinput, dL1, dL2, dL3, dL4, W1, W2, W3, W4,
-        target, (axis, axis, axis), one(eltype(dinput)), axis,
-        left, right, work, link, temporary, Val(axis), Val(NC))
+    T = eltype(dW1)
+    gradient = _hisq_fat7_path_pullback_element(
+        dL1, dL2, dL3, dL4, W1, W2, W3, W4,
+        target, (axis, axis, axis), one(T), axis,
+        axis, row, column, T, Val(NC))
+    _hisq_add_pullback_element!(
+        dW1, dW2, dW3, dW4, axis, row, column, target, gradient)
     return nothing
 end
 
@@ -224,16 +225,15 @@ function _hisq_naik_pullback!(dinput, dlong, reunitarized_links, long_links)
             throw(ArgumentError(
                 "hisq_naik_links! input shadow must contain four lattice fields"))
         W = reunitarized_links
-        for axis in 1:4
-            JACC.parallel_for(
-                prod(W[axis].PN), _kernel_hisq_naik_pullback!,
-                dinput[axis].A,
-                dlong[1].A, dlong[2].A, dlong[3].A, dlong[4].A,
-                W[1].A, W[2].A, W[3].A, W[4].A,
-                Val(axis), Val(W[axis].NC1), Val(W[axis].nw),
-                W[axis].indexer)
-            mark_halo_dirty!(dinput[axis])
-        end
+        volume = prod(W[1].PN)
+        NC = W[1].NC1
+        _hisq_parallel_for(
+            4 * NC * NC * volume, _kernel_hisq_naik_pullback!,
+            dinput[1].A, dinput[2].A, dinput[3].A, dinput[4].A,
+            dlong[1].A, dlong[2].A, dlong[3].A, dlong[4].A,
+            W[1].A, W[2].A, W[3].A, W[4].A,
+            volume, Val(NC), Val(W[1].nw), W[1].indexer)
+        mark_halo_dirty!.(dinput)
     end
     for link in dlong
         _zero_shadow!(link)

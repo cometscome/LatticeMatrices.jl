@@ -259,6 +259,7 @@ fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 | `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
 | `HISQDiracOperator4D(X, L, mass; naik_epsilon)` or `HISQDiracOperator4D(U, mass; naik_epsilon)` | HISQ stencil for precomputed links, or complete construction from thin links `U` | `nw=0` or `nw>=3` |
 | `D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)` | Five-dimensional Möbius/domain-wall operator with a four-dimensional gauge field | `nw>=1` only |
+| `D5DW_GeneralizedDomainwallOperator5D(U, L5, mass, M, a, b, c)` | Generalized domain-wall operator with independent slice coefficients `a_s`, `b_s`, and `c_s` | `nw>=1` only |
 
 All of these operators support both `mul!(out, D, psi)` and
 `mul!(out, adjoint(D), psi)`.  Wilson, clover, and domain-wall spinors use the
@@ -477,6 +478,40 @@ The complete unphased `X` and forward-anchored `L` results, including their
 layout-sensitive numerical fingerprints, have been cross-checked against
 SIMULATeQCD `HisqSmearing::SmearAll`.
 
+##### End-to-end SIMULATeQCD validation
+
+The complete cached HISQ path was also cross-checked against an independently
+built, unmodified SIMULATeQCD tree at commit `767a1b1` (double precision,
+CUDA 12.4, NVIDIA H100).  Both codes used the same deterministic, noncommuting
+SU(3) gauge field on a `4^4` lattice, mass `m=0.37`, Naik correction
+`epsilon_N=-0.083`, temporal antiperiodic boundary conditions, and identical
+sources.  The comparison exercised the full two-level smearing and U(3)
+projection, Naik links, staggered phases, `D`, `D' * D`, and CG inversion.
+
+The HMC-related contractions `norm(D*eta)^2/V`,
+`eta'*(D'*D)*eta/V`, and `eta'*inv(D'*D)*eta/V` agreed with relative errors
+no larger than `6.5e-16`.  A point-source Goldstone pseudoscalar correlator,
+using the SIMULATeQCD `measureHadrons` M2 contraction,
+
+```math
+C(t)=\sum_{\vec{x},c,c'}\left|D^{-1}_{cc'}(\vec{x},t;0)\right|^2,
+```
+
+gave the following double-precision values:
+
+| `t` | SIMULATeQCD | LatticeMatrices.jl |
+| ---: | ---: | ---: |
+| 0 | 1.0065142452009632 | 1.0065142452009666 |
+| 1 | 0.12466004270358608 | 0.12466004270358633 |
+| 2 | 0.066499548830371014 | 0.066499548830371125 |
+| 3 | 0.12509337682203300 | 0.12509337682203336 |
+
+The largest relative correlator difference was `3.4e-15`.  SIMULATeQCD tests
+the squared relative CG residual, so its `precision=1e-13` was compared with
+`rtol=sqrt(1e-13)` here.  This is a fixed-configuration implementation check;
+an ensemble-level physics comparison additionally requires matching gauge
+ensembles, source statistics, and taste normalization.
+
 The Dirac stencil remains separate from smearing. Supply the corrected fat
 links `X[mu]`, which connect `x` to `x+mu`, and the forward-anchored Naik
 transporters `L[mu]`, which connect `x` to `x+3mu`:
@@ -555,6 +590,46 @@ pullback uses the same reduction over fifth-dimensional slices as the
 [Bridge++ domain-wall force](https://bridge.kek.jp/Lattice-code/docs/html.2.1.x/force__F__Domainwall_8cpp_source.html).
 Five-dimensional operators reject `nw=0`.
 
+The generalized constructor accepts three real vectors of length `L5` and
+implements
+
+```math
+D_5 = A\left[I-F_m+D_W(B+C F_m)\right],
+```
+
+where `A=diag(a)`, `B=diag(b)`, `C=diag(c)`, and `F_m` is the fifth-direction
+hop including the boundary mass.  This convention is the generalized
+five-dimensional operator used in the
+[Lattice 2025 formulation](https://indico.global/event/14504/contributions/137859/attachments/64183/124021/lattice_2025.pdf).
+For example, the following uses genuinely slice-dependent coefficients:
+
+```julia
+a5 = 1 .+ 0.05 .* sin.(2pi .* (0:L5-1) ./ L5)
+b5 = 1.5 .+ 0.10 .* cos.(2pi .* (0:L5-1) ./ L5)
+c5 = 0.5 .+ 0.08 .* sin.(2pi .* (0:L5-1) ./ L5)
+
+D5general = D5DW_GeneralizedDomainwallOperator5D(
+    U, L5, mass, M, a5, b5, c5)
+mul!(out5, D5general, psi5)
+mul!(out5, adjoint(D5general), psi5)
+```
+
+The coefficient vectors are promoted to a common real type and copied to the
+active JACC backend.  The existing Möbius operator is recovered exactly with
+
+```julia
+a5 = ones(L5)
+b5 = fill((b + c) / 2, L5)
+c5 = fill((b - c) / 2, L5)
+D5general = D5DW_GeneralizedDomainwallOperator5D(
+    U, L5, mass, M, a5, b5, c5)
+```
+
+For nonuniform coefficients the adjoint applies the slice factors in the
+mathematically required shifted order,
+`D5general' = (I-F_m' + (B+F_m'C)D_W')A`; it is not obtained by simply
+reusing the forward slice index.
+
 Loading Enzyme enables reverse rules for both `D5` and `adjoint(D5)`.  The
 following example differentiates `real(dot(left, D5*psi))` with respect to
 the four gauge links and `psi`:
@@ -584,13 +659,34 @@ Enzyme.autodiff(
 For the adjoint operator, pass `adjoint(D5)` and `adjoint(dD5)` as the
 primal and shadow operator annotations, respectively.
 
-The pullback treats `mass`, `M`, `b`, and `c` as constants and accumulates
-cotangents into `dU` and `dpsi`.  It requires `nw>=1`, identical primal and
+For the legacy Möbius type, the pullback treats `mass`, `M`, `b`, and `c` as
+constants and accumulates cotangents into `dU` and `dpsi`.  The generalized
+type additionally accumulates cotangents for all slice coefficients:
+
+```julia
+dD5general = D5DW_GeneralizedDomainwallOperator5D(
+    dU, L5, mass, M, zeros(L5), zeros(L5), zeros(L5))
+
+Enzyme.autodiff(
+    Enzyme.Reverse, Enzyme.Const(loss), Enzyme.Active,
+    Enzyme.Duplicated(D5general, dD5general),
+    Enzyme.Duplicated(psi5, dpsi),
+    Enzyme.Const(left),
+    Enzyme.Duplicated(out5, dout),
+)
+
+da5 = Array(dD5general.a)
+db5 = Array(dD5general.b)
+dc5 = Array(dD5general.c)
+```
+
+Both pullbacks require `nw>=1`, identical primal and
 shadow layouts, and `PEs5[5] == 1`.  The link kernel directly reduces all
 `L5` slices into each four-dimensional link element, uses no atomics, and
-does not allocate a five-dimensional link-gradient temporary.  A CUDA
-correctness/performance driver is available as
-`test/multigpu/domainwall_pullback_bench.jl`.
+does not allocate a five-dimensional link-gradient temporary.  Generalized
+coefficient gradients use accelerator reductions followed by one MPI
+Allreduce of the `3L5` real values.  A CUDA correctness/performance driver is
+available as `test/multigpu/domainwall_pullback_bench.jl`.
 
 #### Generic operator wrappers
 
@@ -842,6 +938,7 @@ CloverFieldStrength4D(U)
 update_clover!(field_strength, U)
 update_clover!(clover_operator)
 D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)
+D5DW_GeneralizedDomainwallOperator5D(U, L5, mass, M, a, b, c)
 
 # Callback-based operator composition and solver helpers
 DiracOp(U, apply, apply_dag, parameters, prototype;

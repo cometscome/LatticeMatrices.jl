@@ -220,7 +220,7 @@ function LinearAlgebra.mul!(C::TC,
         get_matrix(C), U1, U2, U3, U4, get_mass(Dirac),
         get_wilson_params(Dirac), get_matrix(psi), a, b, c,
         Val(NC1), Val(nw), C.indexer, Val(L5))
-    return C
+    return nothing
 end
 
 function kernel_D5DW_GeneralizedDomainwallOperator5D!(
@@ -887,7 +887,7 @@ function LinearAlgebra.mul!(C::TC,
         get_matrix(C), U1, U2, U3, U4, get_mass(parent),
         get_wilson_params(parent), get_matrix(psi), a, b, c,
         Val(NC1), Val(nw), C.indexer, Val(L5))
-    return C
+    return nothing
 end
 
 function kernel_adjoint_D5DW_GeneralizedDomainwallOperator5D!(

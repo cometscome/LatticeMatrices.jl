@@ -87,14 +87,34 @@ function run_domainwall_pullback_benchmark()
         U, L5, realtype(0.01), realtype(-1), realtype(2), realtype(1))
     shadow_operator = D5DW_MobiusDomainwallOperator5D(
         dU, L5, realtype(0.01), realtype(-1), realtype(2), realtype(1))
+    generalized_operator = D5DW_GeneralizedDomainwallOperator5D(
+        U, L5, realtype(0.01), realtype(-1),
+        fill(one(realtype), L5), fill(realtype(1.5), L5),
+        fill(realtype(0.5), L5))
+    generalized_shadow = D5DW_GeneralizedDomainwallOperator5D(
+        dU, L5, realtype(0.01), realtype(-1),
+        zeros(realtype, L5), zeros(realtype, L5), zeros(realtype, L5))
 
     forward!() = mul!(result, operator, psi)
+    generalized_forward!() = mul!(result, generalized_operator, psi)
     function pullback!()
         Enzyme.autodiff(
             Enzyme.Reverse,
             Enzyme.Const(_domainwall_bench_loss),
             Enzyme.Active,
             Enzyme.Duplicated(operator, shadow_operator),
+            Enzyme.Duplicated(psi, dpsi),
+            Enzyme.Const(left),
+            Enzyme.Duplicated(result, dresult),
+        )
+        return nothing
+    end
+    function generalized_pullback!()
+        Enzyme.autodiff(
+            Enzyme.Reverse,
+            Enzyme.Const(_domainwall_bench_loss),
+            Enzyme.Active,
+            Enzyme.Duplicated(generalized_operator, generalized_shadow),
             Enzyme.Duplicated(psi, dpsi),
             Enzyme.Const(left),
             Enzyme.Duplicated(result, dresult),
@@ -115,18 +135,43 @@ function run_domainwall_pullback_benchmark()
 
     clear_matrix!.(dU)
     clear_matrix!.((dpsi, result, dresult))
+    generalized_pullback!()
+    JACC.synchronize()
+    mul!(expected_dpsi, adjoint(generalized_operator), left)
+    JACC.synchronize()
+    @test gather_matrix(dpsi) ≈ gather_matrix(expected_dpsi) atol=tolerance rtol=tolerance
+    @test all(iszero, Array(dresult.A))
+    @test any(!iszero, Array(generalized_shadow.a))
+    @test any(!iszero, Array(generalized_shadow.b))
+    @test any(!iszero, Array(generalized_shadow.c))
+
+    clear_matrix!.(dU)
+    clear_matrix!.((dpsi, result, dresult))
+    fill!(generalized_shadow.a, zero(realtype))
+    fill!(generalized_shadow.b, zero(realtype))
+    fill!(generalized_shadow.c, zero(realtype))
     JACC.synchronize()
     forward_samples = Float64[]
     pullback_samples = Float64[]
+    generalized_forward_samples = Float64[]
+    generalized_pullback_samples = Float64[]
     for sample in 1:samples
         if isodd(sample)
             push!(forward_samples,
                 _domainwall_elapsed_ms(forward!, iterations))
+            push!(generalized_forward_samples,
+                _domainwall_elapsed_ms(generalized_forward!, iterations))
             push!(pullback_samples,
                 _domainwall_elapsed_ms(pullback!, iterations))
+            push!(generalized_pullback_samples,
+                _domainwall_elapsed_ms(generalized_pullback!, iterations))
         else
+            push!(generalized_pullback_samples,
+                _domainwall_elapsed_ms(generalized_pullback!, iterations))
             push!(pullback_samples,
                 _domainwall_elapsed_ms(pullback!, iterations))
+            push!(generalized_forward_samples,
+                _domainwall_elapsed_ms(generalized_forward!, iterations))
             push!(forward_samples,
                 _domainwall_elapsed_ms(forward!, iterations))
         end
@@ -134,12 +179,21 @@ function run_domainwall_pullback_benchmark()
 
     forward_ms = _domainwall_median(forward_samples)
     pullback_ms = _domainwall_median(pullback_samples)
+    generalized_forward_ms = _domainwall_median(generalized_forward_samples)
+    generalized_pullback_ms = _domainwall_median(generalized_pullback_samples)
     five_dimensional_sites = prod(lattice_size) * L5
     println("GPU=", CUDA.name(CUDA.device()))
     println("lattice=", join(lattice_size, "x"), "x", L5,
         " NC=", NC, " precision=", elementtype)
     println("domainwall_apply_ms=", forward_ms)
+    println("generalized_domainwall_apply_ms=", generalized_forward_ms)
+    println("generalized_over_mobius_apply_ratio=",
+        generalized_forward_ms / forward_ms)
     println("domainwall_loss_and_pullback_ms=", pullback_ms)
+    println("generalized_domainwall_loss_and_pullback_ms=",
+        generalized_pullback_ms)
+    println("generalized_pullback_over_apply_ratio=",
+        generalized_pullback_ms / generalized_forward_ms)
     println("pullback_over_apply_ratio=", pullback_ms / forward_ms)
     println("apply_5d_Msites_per_second=",
         five_dimensional_sites / (forward_ms * 1_000))

@@ -9,6 +9,7 @@ using LinearAlgebra
 using Test
 
 include("../staggered_dirac.jl")
+include("../domainwall.jl")
 include("../cg.jl")
 
 const EXPECTED_RANKS = 2
@@ -206,6 +207,10 @@ function run_tests()
             @info "two-GPU staggered test completed" iterations max_elapsed_seconds=staggered_max_elapsed
         end
     end
+
+    # Includes the independent dense oracle, nonuniform a_s/b_s/c_s adjoint
+    # check, and exact compatibility with the scalar Möbius specialization.
+    domainwall_tests()
 
     # The same backend-independent solver tests exercise CUDA kernels for
     # axpby!, mul!, dot/Allreduce, explicit DdagD storage, and the legacy pool

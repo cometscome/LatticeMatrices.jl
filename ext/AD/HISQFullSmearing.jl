@@ -156,8 +156,9 @@ function _hisq_project_u3_pullback!(dfat, dprojected, fat_links)
         throw(ArgumentError(
             "hisq_project_u3! output shadow must contain four lattice fields"))
     if dfat isa Union{AbstractVector,Tuple}
-        length(dfat) == 4 || throw(ArgumentError(
-            "hisq_project_u3! input shadow must contain four lattice fields"))
+        length(dfat) == 4 && all(link -> link isa LatticeMatrix, dfat) ||
+            throw(ArgumentError(
+                "hisq_project_u3! input shadow must contain four lattice fields"))
         for mu in 1:4
             JACC.parallel_for(
                 prod(fat_links[mu].PN),

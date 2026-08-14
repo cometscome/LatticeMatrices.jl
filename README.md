@@ -456,6 +456,23 @@ L = [similar(link) for link in U] # forward-anchored Naik links
 hisq_links_from_thin!(X, L, V, W, U; naik_epsilon=epsilon_N)
 ```
 
+For a Krylov solve, retain all four smearing stages in a transparent cache:
+
+```julia
+cache = HISQDiracCache4D(U, mass; naik_epsilon=epsilon_N)
+result = similar(psi)
+
+mul_cached_hisq!(
+    result, cache, U[1], U[2], U[3], U[4], psi)
+mul_cached_hisq_adjoint!(
+    result, cache, U[1], U[2], U[3], U[4], psi)
+```
+
+The first call after a thin link changes rebuilds level-1, reunitarized, fat,
+and Naik links; later calls reuse them. Public lattice mutations advance the
+epoch used by this check. After writing through `link.A` directly, call
+`mark_halo_dirty!(link)`.
+
 The complete unphased `X` and forward-anchored `L` results, including their
 layout-sensitive numerical fingerprints, have been cross-checked against
 SIMULATeQCD `HisqSmearing::SmearAll`.
@@ -719,6 +736,10 @@ The complete HISQ AD path requires `nw >= 3`; pass the caller-owned `V`, `W`,
 `X`, and `L` work vectors as `Enzyme.Duplicated` arguments when differentiating
 through `hisq_links_from_thin!`.
 
+`mul_cached_hisq!` has a dedicated static Enzyme reverse rule for the complete
+Dirac → Naik/level-2 → U(3) → level-1 → thin-link force chain. The cache is
+treated as derived storage, so `runtime_activity=true` is not required and
+smearing is not rebuilt on each CG iteration.
 
 ---
 
@@ -813,6 +834,10 @@ hisq_links_from_thin!(X, L, V, W, U; naik_epsilon=0)
 HISQLinks4D(X, L)
 HISQDiracOperator4D(X, L, mass; naik_epsilon=0)
 HISQDiracOperator4D(U, mass; naik_epsilon=0)
+HISQDiracCache4D(U, mass; naik_epsilon=0)
+update_hisq_cache!(cache, U)
+mul_cached_hisq!(out, cache, U1, U2, U3, U4, psi)
+mul_cached_hisq_adjoint!(out, cache, U1, U2, U3, U4, psi)
 CloverFieldStrength4D(U)
 update_clover!(field_strength, U)
 update_clover!(clover_operator)

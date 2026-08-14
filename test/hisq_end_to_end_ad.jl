@@ -32,6 +32,13 @@ function _hisq_end_to_end_loss(
     return real(dot(left, result))
 end
 
+function _hisq_cached_end_to_end_loss(
+    U1, U2, U3, U4, cache, psi, left, result,
+)
+    mul_cached_hisq!(result, cache, U1, U2, U3, U4, psi)
+    return real(dot(left, result))
+end
+
 function _hisq_end_to_end_core(field)
     ranges = ntuple(
         d -> (field.nw + 1):(field.nw + field.PN[d]), 4)
@@ -139,5 +146,116 @@ function hisq_end_to_end_ad_tests()
         @test all(link -> all(iszero, link.A), dfat)
         @test all(link -> all(iszero, link.A), dlong)
         @test all(iszero, dresult.A)
+    end
+
+    @testset "transparent cached HISQ Enzyme pullback" begin
+        cache = HISQDiracCache4D(
+            thin, mass; naik_epsilon)
+        cached_result = similar(psi)
+        cached_dresult = similar(psi)
+        cached_dpsi = similar(psi)
+        cached_dthin = [similar(link) for link in thin]
+        clear_matrix!.((cached_result, cached_dresult, cached_dpsi))
+        clear_matrix!.(cached_dthin)
+
+        initial_loss = _hisq_cached_end_to_end_loss(
+            thin[1], thin[2], thin[3], thin[4],
+            cache, psi, left, cached_result)
+        @test initial_loss ≈ _hisq_end_to_end_loss(
+            thin, mass, naik_epsilon, psi, left) atol=2e-12 rtol=2e-12
+
+        Enzyme.autodiff(
+            Enzyme.Reverse,
+            Enzyme.Const(_hisq_cached_end_to_end_loss),
+            Enzyme.Active,
+            Enzyme.Duplicated(thin[1], cached_dthin[1]),
+            Enzyme.Duplicated(thin[2], cached_dthin[2]),
+            Enzyme.Duplicated(thin[3], cached_dthin[3]),
+            Enzyme.Duplicated(thin[4], cached_dthin[4]),
+            Enzyme.Const(cache),
+            Enzyme.Duplicated(psi, cached_dpsi),
+            Enzyme.Const(left),
+            Enzyme.Duplicated(cached_result, cached_dresult),
+        )
+
+        expected_dpsi = similar(psi)
+        mul!(expected_dpsi, cache.operator', left)
+        @test _hisq_end_to_end_core(cached_dpsi) ≈
+            _hisq_end_to_end_core(expected_dpsi) atol=8e-11 rtol=8e-11
+
+        epsilon = 2e-7
+        thin_plus = deepcopy(thin)
+        thin_minus = deepcopy(thin)
+        for mu in 1:4
+            add_matrix!(thin_plus[mu], thin_direction[mu], epsilon)
+            add_matrix!(thin_minus[mu], thin_direction[mu], -epsilon)
+        end
+        plus_cache = HISQDiracCache4D(
+            thin_plus, mass; naik_epsilon)
+        minus_cache = HISQDiracCache4D(
+            thin_minus, mass; naik_epsilon)
+        loss_plus = _hisq_cached_end_to_end_loss(
+            thin_plus[1], thin_plus[2], thin_plus[3], thin_plus[4],
+            plus_cache, psi, left, similar(psi))
+        loss_minus = _hisq_cached_end_to_end_loss(
+            thin_minus[1], thin_minus[2], thin_minus[3], thin_minus[4],
+            minus_cache, psi, left, similar(psi))
+        finite_difference = (loss_plus - loss_minus) / (2epsilon)
+        enzyme_directional = real(sum(
+            dot(cached_dthin[mu], thin_direction[mu]) for mu in 1:4))
+        @test enzyme_directional ≈ finite_difference atol=8e-5 rtol=5e-6
+        @test all(iszero, cached_dresult.A)
+
+        cache_epoch_after_ad = halo_epochs(cache.fat_links[1]).core
+        mul_cached_hisq!(
+            cached_result, cache,
+            thin[1], thin[2], thin[3], thin[4], psi)
+        @test halo_epochs(cache.fat_links[1]).core == cache_epoch_after_ad
+
+        cache_epoch_before_replacement =
+            halo_epochs(cache.fat_links[1]).core
+        updated_result = similar(psi)
+        mul_cached_hisq!(
+            updated_result, cache,
+            thin_plus[1], thin_plus[2], thin_plus[3], thin_plus[4], psi)
+        cache_epoch_after_replacement =
+            halo_epochs(cache.fat_links[1]).core
+        direct_updated_result = similar(psi)
+        mul!(direct_updated_result, plus_cache.operator, psi)
+        @test cache_epoch_after_replacement > cache_epoch_before_replacement
+        @test _hisq_end_to_end_core(updated_result) ≈
+            _hisq_end_to_end_core(direct_updated_result) atol=2e-12 rtol=2e-12
+
+        mul_cached_hisq!(
+            updated_result, cache,
+            thin_plus[1], thin_plus[2], thin_plus[3], thin_plus[4], psi)
+        @test halo_epochs(cache.fat_links[1]).core ==
+            cache_epoch_after_replacement
+
+        add_matrix!(thin_plus[1], thin_direction[1], epsilon)
+        mul_cached_hisq!(
+            updated_result, cache,
+            thin_plus[1], thin_plus[2], thin_plus[3], thin_plus[4], psi)
+        cache_epoch_after_mutation = halo_epochs(cache.fat_links[1]).core
+        mutated_cache = HISQDiracCache4D(
+            thin_plus, mass; naik_epsilon)
+        mul!(direct_updated_result, mutated_cache.operator, psi)
+        @test cache_epoch_after_mutation > cache_epoch_after_replacement
+        @test _hisq_end_to_end_core(updated_result) ≈
+            _hisq_end_to_end_core(direct_updated_result) atol=2e-12 rtol=2e-12
+
+        adjoint_cache = HISQDiracCache4D(
+            thin, mass; naik_epsilon)
+        adjoint_epoch_before = halo_epochs(adjoint_cache.fat_links[1]).core
+        cached_adjoint_result = similar(psi)
+        direct_adjoint_result = similar(psi)
+        mul_cached_hisq_adjoint!(
+            cached_adjoint_result, adjoint_cache,
+            thin_minus[1], thin_minus[2], thin_minus[3], thin_minus[4], psi)
+        mul!(direct_adjoint_result, minus_cache.operator', psi)
+        @test halo_epochs(adjoint_cache.fat_links[1]).core >
+            adjoint_epoch_before
+        @test _hisq_end_to_end_core(cached_adjoint_result) ≈
+            _hisq_end_to_end_core(direct_adjoint_result) atol=2e-12 rtol=2e-12
     end
 end

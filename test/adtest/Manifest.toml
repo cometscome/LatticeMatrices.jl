@@ -290,10 +290,13 @@ deps = ["InteractiveUtils", "JACC", "LinearAlgebra", "MPI", "MPIPreferences", "P
 path = "../.."
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
 version = "0.3.3"
-weakdeps = ["Enzyme"]
+weakdeps = ["AMDGPU", "CUDA", "Enzyme", "oneAPI"]
 
     [deps.LatticeMatrices.extensions]
+    LatticeMatricesAMDGPUExt = "AMDGPU"
+    LatticeMatricesCUDAExt = "CUDA"
     LatticeMatricesEnzymeExt = "Enzyme"
+    LatticeMatricesoneAPIExt = "oneAPI"
 
 [[deps.LazyArtifacts]]
 deps = ["Artifacts", "Pkg"]

@@ -1801,7 +1801,15 @@ end
 =#
 
 function partial_trace(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, μ::Int, position::Int=1) where {D,T1,AT1,NC1,NC2,nw,DI}
-    s = JACC.parallel_reduce(prod(C.PN), kernel_partial_trace_D, C.A, NC1, C.indexer, μ, position, Val(nw); init=zero(eltype(C.A)), op=+)
+    # `position` is a global, one-based coordinate. Only ranks that own the
+    # requested hyperplane contribute to the collective reduction.
+    local_position = position - C.coords[μ] * C.PN[μ]
+    s = if 1 <= local_position <= C.PN[μ]
+        JACC.parallel_reduce(prod(C.PN), kernel_partial_trace_D, C.A, NC1,
+            C.indexer, μ, local_position, Val(nw); init=zero(eltype(C.A)), op=+)
+    else
+        zero(eltype(C.A))
+    end
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
     return s
 end

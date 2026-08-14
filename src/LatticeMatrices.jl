@@ -10,6 +10,7 @@ abstract type AbstractLattice end
 
 abstract type Lattice{D,T,AT,NC1,NC2,NW} <: AbstractLattice end
 
+include("device_selection.jl")
 
 #include("HaloComm.jl")
 #include("1D/1Dlatticevector.jl")

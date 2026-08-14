@@ -126,19 +126,22 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
-    comm0=MPI.COMM_WORLD, numtemps=1)
-    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0, numtemps)
+    comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
+    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs;
+        nw, elementtype, phases, comm0, numtemps, device_mapping)
 end
 
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
-    return LatticeMatrix_standard(A, dim, PEs; nw, phases, comm0, numtemps)
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+    device_mapping=:auto)
+    return LatticeMatrix_standard(A, dim, PEs;
+        nw, phases, comm0, numtemps, device_mapping)
 end
 
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD,
-    numtemps=1)
+    numtemps=1, device_mapping=:auto)
 
     nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
     dim > 0 || throw(ArgumentError("dim must be positive, got $dim"))
@@ -163,6 +166,8 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     comm_size = MPI.Comm_size(comm0)
     prod(dims) == comm_size || throw(ArgumentError(
         "process grid $dims contains $(prod(dims)) ranks, but communicator contains $comm_size"))
+
+    _prepare_backend_device!(comm0, device_mapping)
 
     # Cartesian grid
     D = dim
@@ -219,7 +224,8 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
         A, buf, buf_host, MPI.Comm_rank(cart), PN, comm0, indexer, temps, HaloEpoch())
 end
 
-function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
+function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+    device_mapping=:auto)
 
     NC1, NC2, NN... = size(A)
     #println(NN)
@@ -233,7 +239,8 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
     #end
     gsize = NN
 
-    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs; elementtype, nw, phases, comm0, numtemps)
+    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs;
+        elementtype, nw, phases, comm0, numtemps, device_mapping)
     MPI.Bcast!(A, ls.cart)
     Acpu = Array(ls.A)
 
@@ -276,7 +283,9 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
 end
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
-    return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims; nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1)
+    return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims;
+        nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1,
+        device_mapping=:current)
 end
 
 

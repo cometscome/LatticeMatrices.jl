@@ -14,12 +14,20 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [weakdeps]
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
 
 [extensions]
+LatticeMatricesAMDGPUExt = "AMDGPU"
+LatticeMatricesCUDAExt = "CUDA"
 LatticeMatricesEnzymeExt = "Enzyme"
+LatticeMatricesoneAPIExt = "oneAPI"
 
 [compat]
+AMDGPU = "2"
+CUDA = "5,6"
 Enzyme = "0.13"
 InteractiveUtils = "1.11"
 JACC = "0.6,1.0"
@@ -30,6 +38,7 @@ PreallocatedArrays = "0.0.1,0.1"
 StaticArrays = "1.9"
 Test = "1.11"
 julia = "1.11"
+oneAPI = "2.4"
 
 [extras]
 Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"

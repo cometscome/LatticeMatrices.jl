@@ -1,6 +1,6 @@
 # LatticeMatrices.jl
 
-[![Build Status](https://github.com/cometscome/MPILattice.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/MPILattice.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![Build Status](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
@@ -13,7 +13,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 > This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.
 
-**Applications**: This package is designed to support large-scale simulations on structured lattices. A key application area is lattice QCD, where gauge fields and fermion fields are represented as matrix-valued objects on a multi-dimensional lattice. In future developments, LatticeMatrices.jl is planned to be integrated into [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl), providing the underlying data structures and linear algebra kernels for gauge and fermion dynamics.
+**Applications**: This package is designed to support large-scale simulations on structured lattices. A key application area is lattice QCD, where gauge fields and fermion fields are represented as matrix-valued objects on a multi-dimensional lattice. LatticeMatrices.jl provides the MPI/JACC lattice backend used by [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl), including distributed storage, halo synchronization, linear algebra kernels, and optional Enzyme AD support for gauge and fermion calculations. The same infrastructure can also be used for non-QCD structured-lattice problems; a distributed classical Heisenberg spin-model example is included below.
 
 
 
@@ -106,24 +106,40 @@ Gall = gather_and_bcast_matrix(M; root=0)   # all ranks receive the same Array
 
 **Key type**
 ```julia
-struct LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT}
-    nw::Int
-    phases::SVector{D,T}         # per-direction phase (applied at wrap boundaries)
+abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <:
+    Lattice{D,T,AT,NC1,NC2,nw}
+
+mutable struct HaloEpoch
+    core::UInt64
+    halo::UInt64
+end
+
+struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <:
+       LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}
+    nw::Int                       # ghost width
+    phases::SVector{D,T}          # per-direction phase
     NC1::Int
     NC2::Int
     gsize::NTuple{D,Int}
-    cart::MPI.Comm               # Cartesian communicator
-    coords::NTuple{D,Int}        # 0-based Cartesian coords
-    dims::NTuple{D,Int}          # process grid (PEs)
-    nbr::NTuple{D,NTuple{2,Int}} # neighbors (minus, plus)
-    A::AT                        # local array (NC1, NC2, X, Y, Z, …) with halos
-    buf::Vector{AT}              # four face buffers per spatial dim
+    cart::MPI.Comm                # Cartesian communicator
+    coords::NTuple{D,Int}         # 0-based Cartesian coordinates
+    dims::NTuple{D,Int}           # process grid (PEs)
+    nbr::NTuple{D,NTuple{2,Int}}  # neighbors (minus, plus)
+    A::AT                         # local halo-padded array
+    buf::Vector{AT}               # device-side communication buffers
+    buf_host::Vector{Array{T}}    # host-side communication buffers
     myrank::Int
-    PN::NTuple{D,Int}            # local interior size per dim (no halos)
-    comm::MPI.Comm               # original communicator
-    indexer::DI                  # DIndexer for global sizes
+    PN::NTuple{D,Int}             # local interior size per dimension
+    comm::MPI.Comm                # original communicator
+    indexer::DI                   # DIndexer for global sizes
+    temps::PreallocatedArray{AT,Union{Nothing,String},false}
+    halo_epoch::HaloEpoch
 end
 ```
+
+`LatticeMatrix` is the abstract interface; the `LatticeMatrix(...)`
+constructors return a `LatticeMatrix_standard`. `HaloEpoch` records the core
+and halo epochs so shifted reads can synchronize stale halo data automatically.
 
 **Constructors**
 ```julia
@@ -244,7 +260,66 @@ s = allsum(M)   # MPI.Reduce to root (returns the global sum on rank 0)
 ```
 
 
-### 4) Dirac operators
+### 4) Non-QCD example: 3D classical Heisenberg model
+
+As an example outside lattice QCD, the repository includes a simulation of
+the classical Heisenberg ferromagnet on a periodic three-dimensional
+simple-cubic lattice,
+
+```math
+H/J=-\sum_{x,\mu=1}^{3}\boldsymbol{s}(x)\cdot
+\boldsymbol{s}(x+\hat\mu), \qquad |\boldsymbol{s}(x)|=1.
+```
+
+Each three-component spin is stored as a `3×1` `LatticeMatrix`. The complete
+[`examples/classical_heisenberg.jl`](examples/classical_heisenberg.jl)
+program uses
+
+- halo exchange for the six nearest neighbors,
+- deterministic global-site Philox streams,
+- parallel even/odd heat-bath updates,
+- optional microcanonical over-relaxation, and
+- MPI reductions for the energy, magnetization, and Binder parameter.
+
+Run the default calculation at the literature critical coupling with
+
+```sh
+julia --project=. examples/classical_heisenberg.jl
+```
+
+For example, a four-rank run can be launched with
+
+```sh
+mpiexec -n 4 julia --project=. examples/classical_heisenberg.jl \
+    --L=16 --pes=2,2,1 --thermalization=10000 --sweeps=50000
+```
+
+The measured Binder parameter is
+
+```math
+U_L=1-\frac{\langle m^4\rangle}{3\langle m^2\rangle^2}.
+```
+
+At the high-precision critical coupling `K_c=0.693002(2)` reported by
+[Deng, Blöte, and Nightingale](https://doi.org/10.1103/PhysRevE.72.016128),
+small validation runs gave
+
+| `L` | `U_L` |
+| ---: | ---: |
+| 8 | `0.6228(23)` |
+| 12 | `0.6232(11)` |
+| 16 | `0.6226(16)` |
+
+These results are consistent, including statistical and finite-size effects,
+with the finite-size-scaling value `U*=0.6217(8)` of
+[Holm and Janke](https://doi.org/10.1016/0375-9601(93)90077-D). A separate
+two-size Binder-crossing check gave `K_cross=0.69276 ± 0.00155`, also
+consistent with the literature critical coupling. Exact checks, run lengths,
+error estimation, and limitations are recorded in
+[`examples/heisenberg_validation.md`](examples/heisenberg_validation.md).
+
+
+### 5) Dirac operators
 
 LatticeMatrices.jl currently provides the following fermion operators.  Gauge
 links are supplied as a four-element `Vector` of four-dimensional
@@ -515,9 +590,14 @@ ensembles, source statistics, and taste normalization.
 ##### GPU smearing implementation and performance
 
 The halo-based Fat7 and Naik builders use fixed-size row kernels and split the
-5- and 7-link sign combinations into statically specialized launches.  Their
-reverse rules gather every contribution for one thin-link matrix element in a
-single owner thread, avoiding both device-side matrix allocation and
+5- and 7-link sign combinations into statically specialized launches.  For the
+physical `NC=3` CUDA case, Fat7 additionally uses flattened arrays and fully
+unrolled three-color path products; other color counts and non-CUDA backends
+retain the generic implementation.  In the 3-, 5-, and 7-link kernels this
+reduced `ptxas`-reported local memory from `2624`, `1752`, and `1768` bytes per
+thread to `32` bytes each; the specialized Lepage kernel uses `128` bytes.
+Their reverse rules gather every contribution for one thin-link matrix element
+in a single owner thread, avoiding both device-side matrix allocation and
 complex-valued atomics.  No global cache, `CUDA.limit!`, or Enzyme
 `runtime_activity=true` setting is used.  `HISQDiracCache4D` is an ordinary
 caller-owned object; its epoch check transparently refreshes the derived links
@@ -525,23 +605,28 @@ on the first multiply after `U` changes and reuses them in subsequent CG
 iterations.
 
 The complete forward builder (`level 1 -> U(3) -> level 2 -> Naik`) was timed
-in double precision with one MPI rank on one NVIDIA H100 NVL.  The entries are
-three-sample medians with GPU synchronization and exclude the first JIT
-compilation.  The "before" column is the previous device-allocating
-implementation; the SIMULATeQCD column is `HisqSmearing::SmearAll` from the
-same validation build.  These are implementation measurements rather than a
-portable hardware performance guarantee.
+in double precision with one MPI rank on one NVIDIA H100 NVL.  The new `NC=3`
+CUDA entries are seven-sample medians with GPU synchronization and exclude the
+first JIT compilation.  The allocating baseline, preceding generic row-kernel,
+and SIMULATeQCD columns are retained from the earlier three-sample measurement;
+the latter is `HisqSmearing::SmearAll` from the same validation build.  These
+are implementation measurements rather than a portable hardware performance
+guarantee.
 
-| lattice | before (ms) | current (ms) | speedup | SIMULATeQCD (ms) | current / SIMULATeQCD |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| `4^4` | 344.69 | 9.17 | 37.6x | 0.565 | 16.2x |
-| `8^4` | 1132.06 | 20.66 | 54.8x | 0.733 | 28.2x |
-| `16^4` | 28615.26 | 222.10 | 128.8x | 6.791 | 32.7x |
+| lattice | allocating baseline (ms) | generic row kernel (ms) | `NC=3` CUDA (ms) | speedup vs row kernel | SIMULATeQCD (ms) | `NC=3` / SIMULATeQCD |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `4^4` | 344.69 | 9.17 | 1.780 | 5.15x | 0.565 | 3.15x |
+| `8^4` | 1132.06 | 20.66 | 3.443 | 6.00x | 0.733 | 4.70x |
+| `16^4` | 28615.26 | 222.10 | 36.278 | 6.12x | 6.791 | 5.34x |
 
-The complete smearing pullback (`Naik -> level 2 -> U(3) -> level 1`) took
-approximately `95`, `215`, and `3272` ms on `4^4`, `8^4`, and `16^4`,
-respectively.  The small-lattice `4^4` samples varied from `51` to `99` ms;
-the two larger cases were stable.  A stress test also completed 1000
+On the larger `24^4` check, level-1 Fat7 decreased from `427.08` to `69.44`
+ms and the complete forward builder from `885.99` to `148.24` ms.  The
+SIMULATeQCD level-1 time was `17.08` ms, or a remaining factor of `4.07`.
+
+The unchanged complete smearing pullback
+(`Naik -> level 2 -> U(3) -> level 1`) had seven-sample medians of `51.48`,
+`216.53`, and `3270.27` ms on `4^4`, `8^4`, and `16^4`, respectively.  A
+stress test also completed 1000
 consecutive full `4^4` rebuilds with CUDA's default device heap, without any
 user-side heap configuration.
 

@@ -1,7 +1,8 @@
 # Two-H100 multi-GPU test
 
 This is an opt-in integration test. It launches two MPI ranks on one node, binds rank 0
-to CUDA device 0 and rank 1 to CUDA device 1, and requires both devices to be NVIDIA
+to CUDA device 0 and rank 1 to CUDA device 1 through
+`select_device_by_mpi_rank!`, and requires both devices to be NVIDIA
 H100 GPUs (compute capability 9.0).
 
 The test checks:
@@ -71,3 +72,17 @@ as required by the complete reverse-mode evaluation.  The driver reports the
 generalized forward overhead relative to the legacy Möbius specialization and
 times the generalized pullback including gradients of all `a_s`, `b_s`, and
 `c_s` coefficients.
+
+## MPI device mapping on multiple nodes
+
+`LatticeMatrix` uses `device_mapping=:auto` by default.  It creates a temporary
+MPI shared-memory communicator and assigns devices by the rank within the local
+node, not by `MPI.COMM_WORLD` rank.  For example, with two MPI ranks and two
+visible GPUs on every node, local ranks 0 and 1 select devices 0 and 1 on every
+node independently.  The same mapping supports CUDA, AMDGPU, and oneAPI through
+the JACC backend selected before loading `LatticeMatrices`.
+
+If a scheduler exposes exactly one physical GPU to each rank, every rank selects
+the sole device visible in its process instead.  Pass `device_mapping=:current`
+to `LatticeMatrix` only when the application or launcher has already selected
+the device and the automatic mapping should be skipped.

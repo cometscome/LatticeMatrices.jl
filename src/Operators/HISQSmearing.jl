@@ -101,6 +101,320 @@ end
 @inline _hisq_seven_signs(::Val{7}) = (-1, 1, -1)
 @inline _hisq_seven_signs(::Val{8}) = (1, -1, -1)
 
+# CUDA's register allocator spills the generic SVector/path-loop implementation
+# heavily for the physical NC=3 case.  These helpers keep the same row-per-thread
+# decomposition, but make the three color components and each path length
+# explicit.  Flattening the existing NC-first arrays also lets a link address be
+# formed once per matrix instead of once per scalar access.  The generic path
+# below remains the fallback for other color counts and non-CUDA backends.
+@inline function _hisq_flat_site_index3(site, padded_size)
+    return site[1] + padded_size[1] * ((site[2] - 1) +
+        padded_size[2] * ((site[3] - 1) +
+        padded_size[3] * (site[4] - 1)))
+end
+
+@inline function _hisq_flat_link_element3(
+    U1, U2, U3, U4, direction, row, column, site_index,
+)
+    element_index = row + 3 * (column - 1) + 9 * (site_index - 1)
+    @inbounds if direction == 1
+        return U1[element_index]
+    elseif direction == 2
+        return U2[element_index]
+    elseif direction == 3
+        return U3[element_index]
+    end
+    return U4[element_index]
+end
+
+@inline function _hisq_oriented_row3_flat(
+    U1, U2, U3, U4, site, direction, row, padded_size,
+)
+    if direction > 0
+        site_index = _hisq_flat_site_index3(site, padded_size)
+        values = (
+            _hisq_flat_link_element3(
+                U1, U2, U3, U4, direction, row, 1, site_index),
+            _hisq_flat_link_element3(
+                U1, U2, U3, U4, direction, row, 2, site_index),
+            _hisq_flat_link_element3(
+                U1, U2, U3, U4, direction, row, 3, site_index),
+        )
+        return values, _hisq_shift_site(site, direction)
+    end
+
+    previous_site = _hisq_shift_site(site, direction)
+    site_index = _hisq_flat_site_index3(previous_site, padded_size)
+    axis = -direction
+    values = (
+        conj(_hisq_flat_link_element3(
+            U1, U2, U3, U4, axis, 1, row, site_index)),
+        conj(_hisq_flat_link_element3(
+            U1, U2, U3, U4, axis, 2, row, site_index)),
+        conj(_hisq_flat_link_element3(
+            U1, U2, U3, U4, axis, 3, row, site_index)),
+    )
+    return values, previous_site
+end
+
+@inline function _hisq_row_times_oriented3_flat(
+    row_values, U1, U2, U3, U4, site, direction, padded_size,
+)
+    matrix_site = ifelse(
+        direction > 0, site, _hisq_shift_site(site, direction))
+    site_index = _hisq_flat_site_index3(matrix_site, padded_size)
+    axis = abs(direction)
+    r1, r2, r3 = row_values
+
+    if direction > 0
+        values = (
+            muladd(r1, _hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 1, site_index),
+                muladd(r2, _hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 1, site_index),
+                    r3 * _hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 3, 1, site_index))),
+            muladd(r1, _hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 2, site_index),
+                muladd(r2, _hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 2, site_index),
+                    r3 * _hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 3, 2, site_index))),
+            muladd(r1, _hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 3, site_index),
+                muladd(r2, _hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 3, site_index),
+                    r3 * _hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 3, 3, site_index))),
+        )
+        return values, _hisq_shift_site(site, direction)
+    end
+
+    values = (
+        muladd(r1, conj(_hisq_flat_link_element3(
+            U1, U2, U3, U4, axis, 1, 1, site_index)),
+            muladd(r2, conj(_hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 2, site_index)),
+                r3 * conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 1, 3, site_index)))),
+        muladd(r1, conj(_hisq_flat_link_element3(
+            U1, U2, U3, U4, axis, 2, 1, site_index)),
+            muladd(r2, conj(_hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 2, 2, site_index)),
+                r3 * conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 3, site_index)))),
+        muladd(r1, conj(_hisq_flat_link_element3(
+            U1, U2, U3, U4, axis, 3, 1, site_index)),
+            muladd(r2, conj(_hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 3, 2, site_index)),
+                r3 * conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 3, 3, site_index)))),
+    )
+    return values, matrix_site
+end
+
+@inline function _hisq_path3_row3_flat(
+    U1, U2, U3, U4, origin, d1, d2, d3, row, padded_size,
+)
+    product, site = _hisq_oriented_row3_flat(
+        U1, U2, U3, U4, origin, d1, row, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d2, padded_size)
+    product, _ = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d3, padded_size)
+    return product
+end
+
+@inline function _hisq_path5_row3_flat(
+    U1, U2, U3, U4, origin, d1, d2, d3, d4, d5, row, padded_size,
+)
+    product, site = _hisq_oriented_row3_flat(
+        U1, U2, U3, U4, origin, d1, row, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d2, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d3, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d4, padded_size)
+    product, _ = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d5, padded_size)
+    return product
+end
+
+@inline function _hisq_path7_row3_flat(
+    U1, U2, U3, U4, origin, d1, d2, d3, d4, d5, d6, d7, row,
+    padded_size,
+)
+    product, site = _hisq_oriented_row3_flat(
+        U1, U2, U3, U4, origin, d1, row, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d2, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d3, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d4, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d5, padded_size)
+    product, site = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d6, padded_size)
+    product, _ = _hisq_row_times_oriented3_flat(
+        product, U1, U2, U3, U4, site, d7, padded_size)
+    return product
+end
+
+@inline function _hisq_add_tuple3(accumulator, value)
+    return (
+        accumulator[1] + value[1],
+        accumulator[2] + value[2],
+        accumulator[3] + value[3],
+    )
+end
+
+@inline function _hisq_staple3_row3_flat(
+    U1, U2, U3, U4, origin, mu, row, padded_size,
+)
+    z = zero(eltype(U1))
+    accumulator = (z, z, z)
+    @inbounds for nu in 1:4
+        if nu != mu
+            accumulator = _hisq_add_tuple3(accumulator,
+                _hisq_path3_row3_flat(
+                    U1, U2, U3, U4, origin,
+                    nu, mu, -nu, row, padded_size))
+            accumulator = _hisq_add_tuple3(accumulator,
+                _hisq_path3_row3_flat(
+                    U1, U2, U3, U4, origin,
+                    -nu, mu, nu, row, padded_size))
+        end
+    end
+    return accumulator
+end
+
+@inline function _hisq_staple5_row3_flat(
+    U1, U2, U3, U4, origin, mu, row, part::Val{P}, padded_size,
+) where P
+    z = zero(eltype(U1))
+    accumulator = (z, z, z)
+    sign_nu, sign_rho = _hisq_five_signs(part)
+    @inbounds for nu in 1:4
+        if nu != mu
+            for rho in 1:4
+                if rho != mu && rho != nu
+                    signed_nu = sign_nu * nu
+                    signed_rho = sign_rho * rho
+                    accumulator = _hisq_add_tuple3(accumulator,
+                        _hisq_path5_row3_flat(
+                            U1, U2, U3, U4, origin,
+                            signed_nu, signed_rho, mu,
+                            -signed_rho, -signed_nu, row, padded_size))
+                end
+            end
+        end
+    end
+    return accumulator
+end
+
+@inline function _hisq_staple7_row3_flat(
+    U1, U2, U3, U4, origin, mu, row, part::Val{P}, padded_size,
+) where P
+    z = zero(eltype(U1))
+    accumulator = (z, z, z)
+    sign_nu, sign_rho, sign_sigma = _hisq_seven_signs(part)
+    @inbounds for nu in 1:4
+        if nu != mu
+            for rho in 1:4
+                if rho != mu && rho != nu
+                    sigma = 10 - mu - nu - rho
+                    signed_nu = sign_nu * nu
+                    signed_rho = sign_rho * rho
+                    signed_sigma = sign_sigma * sigma
+                    accumulator = _hisq_add_tuple3(accumulator,
+                        _hisq_path7_row3_flat(
+                            U1, U2, U3, U4, origin,
+                            signed_nu, signed_rho, signed_sigma, mu,
+                            -signed_sigma, -signed_rho, -signed_nu,
+                            row, padded_size))
+                end
+            end
+        end
+    end
+    return accumulator
+end
+
+@inline function _hisq_lepage_row3_flat(
+    U1, U2, U3, U4, origin, mu, row, padded_size,
+)
+    z = zero(eltype(U1))
+    accumulator = (z, z, z)
+    @inbounds for nu in 1:4
+        if nu != mu
+            accumulator = _hisq_add_tuple3(accumulator,
+                _hisq_path5_row3_flat(
+                    U1, U2, U3, U4, origin,
+                    nu, nu, mu, -nu, -nu, row, padded_size))
+            accumulator = _hisq_add_tuple3(accumulator,
+                _hisq_path5_row3_flat(
+                    U1, U2, U3, U4, origin,
+                    -nu, -nu, mu, nu, nu, row, padded_size))
+        end
+    end
+    return accumulator
+end
+
+@inline function _hisq_store_row3_flat!(
+    V1, V2, V3, V4, mu, site, row, values, coefficient, padded_size,
+)
+    site_index = _hisq_flat_site_index3(site, padded_size)
+    index1 = row + 9 * (site_index - 1)
+    index2 = index1 + 3
+    index3 = index2 + 3
+    @inbounds if mu == 1
+        V1[index1] = coefficient * values[1]
+        V1[index2] = coefficient * values[2]
+        V1[index3] = coefficient * values[3]
+    elseif mu == 2
+        V2[index1] = coefficient * values[1]
+        V2[index2] = coefficient * values[2]
+        V2[index3] = coefficient * values[3]
+    elseif mu == 3
+        V3[index1] = coefficient * values[1]
+        V3[index2] = coefficient * values[2]
+        V3[index3] = coefficient * values[3]
+    else
+        V4[index1] = coefficient * values[1]
+        V4[index2] = coefficient * values[2]
+        V4[index3] = coefficient * values[3]
+    end
+    return nothing
+end
+
+@inline function _hisq_add_row3_flat!(
+    V1, V2, V3, V4, mu, site, row, values, coefficient, padded_size,
+)
+    site_index = _hisq_flat_site_index3(site, padded_size)
+    index1 = row + 9 * (site_index - 1)
+    index2 = index1 + 3
+    index3 = index2 + 3
+    @inbounds if mu == 1
+        V1[index1] += coefficient * values[1]
+        V1[index2] += coefficient * values[2]
+        V1[index3] += coefficient * values[3]
+    elseif mu == 2
+        V2[index1] += coefficient * values[1]
+        V2[index2] += coefficient * values[2]
+        V2[index3] += coefficient * values[3]
+    elseif mu == 3
+        V3[index1] += coefficient * values[1]
+        V3[index2] += coefficient * values[2]
+        V3[index3] += coefficient * values[3]
+    else
+        V4[index1] += coefficient * values[1]
+        V4[index2] += coefficient * values[2]
+        V4[index3] += coefficient * values[3]
+    end
+    return nothing
+end
+
 @inline function _hisq_staple3_row(
     U1, U2, U3, U4, origin, mu, row, ::Val{NC},
 ) where NC
@@ -307,6 +621,76 @@ end
     return nothing
 end
 
+@inline function kernel_hisq_fat7_initialize_nc3_cuda!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, padded_size, ::Val{nw}, indexer,
+) where nw
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(3))
+    origin = delinearize(indexer, site_index, nw)
+    direct, _ = _hisq_oriented_row3_flat(
+        U1, U2, U3, U4, origin, mu, row, padded_size)
+    _hisq_store_row3_flat!(
+        V1, V2, V3, V4, mu, origin, row, direct, coefficient, padded_size)
+    return nothing
+end
+
+@inline function kernel_hisq_fat7_staple3_nc3_cuda!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, padded_size, ::Val{nw}, indexer,
+) where nw
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(3))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_staple3_row3_flat(
+        U1, U2, U3, U4, origin, mu, row, padded_size)
+    _hisq_add_row3_flat!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, padded_size)
+    return nothing
+end
+
+@inline function kernel_hisq_fat7_staple5_nc3_cuda!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, padded_size, ::Val{nw}, indexer,
+) where {P,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(3))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_staple5_row3_flat(
+        U1, U2, U3, U4, origin, mu, row, part, padded_size)
+    _hisq_add_row3_flat!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, padded_size)
+    return nothing
+end
+
+@inline function kernel_hisq_fat7_staple7_nc3_cuda!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, padded_size, ::Val{nw}, indexer,
+) where {P,nw}
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(3))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_staple7_row3_flat(
+        U1, U2, U3, U4, origin, mu, row, part, padded_size)
+    _hisq_add_row3_flat!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, padded_size)
+    return nothing
+end
+
+@inline function kernel_hisq_fat7_lepage_nc3_cuda!(
+    combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
+    coefficient, volume, padded_size, ::Val{nw}, indexer,
+) where nw
+    site_index, row, mu = _hisq_combined_row(
+        combined_index, volume, Val(3))
+    origin = delinearize(indexer, site_index, nw)
+    staple = _hisq_lepage_row3_flat(
+        U1, U2, U3, U4, origin, mu, row, padded_size)
+    _hisq_add_row3_flat!(
+        V1, V2, V3, V4, mu, origin, row, staple, coefficient, padded_size)
+    return nothing
+end
+
 function _validate_hisq_smearing_output(fat_links, thin_links)
     _validate_staggered_gauge_links(thin_links)
     _validate_staggered_gauge_links(fat_links)
@@ -476,6 +860,49 @@ function hisq_fat7_level1!(
     return _hisq_fat7!(fat_links, thin_links, coefficients)
 end
 
+function _hisq_fat7_nc3_cuda!(fat_links, thin_links, coefficients)
+    U1, U2, U3, U4 = thin_links
+    V1, V2, V3, V4 = fat_links
+    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+        coefficient_lepage = coefficients
+    volume = prod(V1.PN)
+    combined_volume = 12 * volume
+    padded_size = ntuple(d -> size(U1.A, d + 2), 4)
+    common_arguments = (
+        reshape(V1.A, :), reshape(V2.A, :),
+        reshape(V3.A, :), reshape(V4.A, :),
+        reshape(U1.A, :), reshape(U2.A, :),
+        reshape(U3.A, :), reshape(U4.A, :),
+    )
+    geometry_arguments = (volume, padded_size, Val(V1.nw), V1.indexer)
+
+    _hisq_parallel_for(
+        combined_volume, kernel_hisq_fat7_initialize_nc3_cuda!,
+        common_arguments..., coefficient_1, geometry_arguments...)
+    _hisq_parallel_for(
+        combined_volume, kernel_hisq_fat7_staple3_nc3_cuda!,
+        common_arguments..., coefficient_3, geometry_arguments...)
+    for part in 1:4
+        _hisq_parallel_for(
+            combined_volume, kernel_hisq_fat7_staple5_nc3_cuda!,
+            common_arguments..., coefficient_5, volume, Val(part),
+            padded_size, Val(V1.nw), V1.indexer)
+    end
+    for part in 1:8
+        _hisq_parallel_for(
+            combined_volume, kernel_hisq_fat7_staple7_nc3_cuda!,
+            common_arguments..., coefficient_7, volume, Val(part),
+            padded_size, Val(V1.nw), V1.indexer)
+    end
+    if !iszero(coefficient_lepage)
+        _hisq_parallel_for(
+            combined_volume, kernel_hisq_fat7_lepage_nc3_cuda!,
+            common_arguments..., coefficient_lepage, geometry_arguments...)
+    end
+    mark_halo_dirty!.(fat_links)
+    return fat_links
+end
+
 function _hisq_fat7!(fat_links, thin_links, coefficients)
     _validate_hisq_smearing_output(fat_links, thin_links)
 
@@ -491,6 +918,9 @@ function _hisq_fat7!(fat_links, thin_links, coefficients)
     V1, V2, V3, V4 = fat_links
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
         coefficient_lepage = coefficients
+    if V1.NC1 == 3 && JACC.backend == "cuda"
+        return _hisq_fat7_nc3_cuda!(fat_links, thin_links, coefficients)
+    end
     volume = prod(V1.PN)
     combined_volume = 4 * V1.NC1 * volume
     common_arguments = (

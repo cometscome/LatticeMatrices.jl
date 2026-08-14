@@ -83,7 +83,7 @@ function run_tests()
     length(devices) >= EXPECTED_RANKS || error(
         "This test requires at least $EXPECTED_RANKS visible GPUs, got $(length(devices))")
 
-    CUDA.device!(rank)
+    selection = select_device_by_mpi_rank!(comm)
     device = CUDA.device()
     device_name = CUDA.name(device)
     device_ids = MPI.Allgather(CUDA.deviceid(device), comm)
@@ -102,6 +102,8 @@ function run_tests()
         @test device_ids == [0, 1]
         @test length(unique(device_uuids)) == EXPECTED_RANKS
         @test JACC.backend == "cuda"
+        @test selection.backend === :cuda
+        @test selection.device_ordinal == rank + 1
     end
 
     A = global_input()

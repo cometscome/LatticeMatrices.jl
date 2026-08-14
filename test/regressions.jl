@@ -87,6 +87,23 @@ function regressiontests()
         end
     end
 
+    @testset "partial trace uses global positions" begin
+        global_size = (4 * nprocs,)
+        process_grid = (nprocs,)
+        values = zeros(ComplexF64, 2, 2, global_size...)
+        for x in 1:global_size[1]
+            values[1, 1, x] = x
+            values[2, 2, x] = 100 + x
+        end
+
+        for nw in (0, 1)
+            matrix = LatticeMatrix(values, 1, process_grid; nw)
+            for position in (1, global_size[1] ÷ 2, global_size[1])
+                @test partial_trace(matrix, 1, position) == 100 + 2position
+            end
+        end
+    end
+
     @testset "three-lattice parallel_reduce with arguments" begin
         global_size = (4 * nprocs,)
         process_grid = (nprocs,)

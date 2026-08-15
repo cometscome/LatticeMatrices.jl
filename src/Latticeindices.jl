@@ -6,7 +6,7 @@ export DIndexer
 # ---- helpers ----
 @inline _i32(x::Integer) = Int32(x)
 
-# compute strides for row-major order
+# Compute Julia/Fortran column-major strides (the first lattice index varies fastest).
 function make_strides(dims::NTuple{D,Int32}) where {D}
     @assert D > 0 "dims must be non-empty (D ≥ 1)."
     s = Vector{Int32}(undef, D)

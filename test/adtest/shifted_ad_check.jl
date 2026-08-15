@@ -65,12 +65,7 @@ function loss_shifted_two_terms_loop(U, temp)
     S = 0.0
     dim = length(U[1].PN)
     for μ = 1:2
-        #shift_μ = shift_μs[μ]
-        #shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
-        #shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
-        #U2_pμ = shift_L(U[2], shift_μ)
-        U2_pμ = shift_L(U[2], shift_μs[μ])
-        mul!(C, U[1], U2_pμ)
+        mul_AshiftB!(C, U[1], U[2], shift_μs[μ])
         S += realtrace(C)
     end
     return S
@@ -266,8 +261,7 @@ function loss_plaquette_mu1to3_firstmul(U, temp)
     for μ = 1:3
         shift_μ = ntuple(i -> ifelse(i == μ, 1, 0), dim)
         for ν = μ+1:3
-            Uν_pμ = shift_L(U[ν], shift_μ)
-            mul!(C, U[μ], Uν_pμ)
+            mul_AshiftB!(C, U[μ], U[ν], shift_μ)
             S += realtrace(C)
         end
     end
@@ -389,16 +383,24 @@ function run_case_all(label, f, U, dU, temp, dtemp, indices_mid, indices_halo; t
     clear_matrix!.(temp)
     clear_matrix!.(dtemp)
     f_num(Uin) = f(Uin, temp)
-    Wiltinger_derivative!(f, U, dU; temp=temp, dtemp=dtemp)
+    f_separate(U1, U2, U3, U4, work) = f((U1, U2, U3, U4), work)
+    Enzyme_derivative!(
+        f_separate,
+        U[1], U[2], U[3], U[4],
+        dU[1], dU[2], dU[3], dU[4];
+        temp,
+        dtemp,
+    )
+    Wirtinger!.(dU)
 
     clear_matrix!.(temp)
-    dUn_mid = Wiltinger_numerical_derivative(f_num, indices_mid, U)
+    dUn_mid = Wirtinger_numerical_derivative(f_num, indices_mid, U)
     for k in 1:length(U)
         _report_diff("U$k mid", dU[k], dUn_mid[k], indices_mid; tol)
     end
 
     clear_matrix!.(temp)
-    dUn_halo = Wiltinger_numerical_derivative(f_num, indices_halo, U)
+    dUn_halo = Wirtinger_numerical_derivative(f_num, indices_halo, U)
     for k in 1:length(U)
         _report_diff("U$k halo", dU[k], dUn_halo[k], indices_halo; tol)
     end

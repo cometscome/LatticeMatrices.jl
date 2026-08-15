@@ -11,6 +11,15 @@ end
 
 export WilsonDiracOperator4D
 
+@inline function _ensure_wilson_halo!(U, psi)
+    ensure_halo!(U[1])
+    ensure_halo!(U[2])
+    ensure_halo!(U[3])
+    ensure_halo!(U[4])
+    ensure_halo!(psi)
+    return nothing
+end
+
 struct Adjoint_WilsonDiracOperator4D{T} <: OperatorOnKernel
     parent::T
 end
@@ -18,6 +27,7 @@ end
 function Base.adjoint(A::T) where {T<:WilsonDiracOperator4D}
     Adjoint_WilsonDiracOperator4D{typeof(A)}(A)
 end
+Base.adjoint(A::Adjoint_WilsonDiracOperator4D) = A.parent
 
 
 
@@ -28,7 +38,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:WilsonDiracOperator4D}
 
-
+    _ensure_wilson_halo!(Dirac.U, ψ)
     U1 = get_matrix(Dirac.U[1])
     U2 = get_matrix(Dirac.U[2])
     U3 = get_matrix(Dirac.U[3])
@@ -36,7 +46,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_WilsonDiracOperator4D!, Cdata, U1, U2, U3, U4, Dirac.κ, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -253,7 +263,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:Adjoint_WilsonDiracOperator4D}
 
-
+    _ensure_wilson_halo!(Dirac.parent.U, ψ)
     U1 = get_matrix(Dirac.parent.U[1])
     U2 = get_matrix(Dirac.parent.U[2])
     U3 = get_matrix(Dirac.parent.U[3])
@@ -261,7 +271,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_adjoint_WilsonDiracOperator4D!, Cdata, U1, U2, U3, U4, Dirac.parent.κ, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -410,7 +420,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:WilsonDiracOperator4D_Donly}
 
-
+    _ensure_wilson_halo!(Dirac.U, ψ)
     U1 = get_matrix(Dirac.U[1])
     U2 = get_matrix(Dirac.U[2])
     U3 = get_matrix(Dirac.U[3])
@@ -418,7 +428,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_WilsonDiracOperator4D_Donly!, Cdata, U1, U2, U3, U4, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -559,6 +569,7 @@ end
 function Base.adjoint(A::T) where {T<:WilsonDiracOperator4D_Donly}
     Adjoint_WilsonDiracOperator4D_Donly{typeof(A)}(A)
 end
+Base.adjoint(A::Adjoint_WilsonDiracOperator4D_Donly) = A.parent
 
 
 """
@@ -568,7 +579,7 @@ function LinearAlgebra.mul!(C::TC,
     Dirac::TD, ψ::TC) where {T1,AT1,NC1,nw,DI,
     TC<:LatticeMatrix{4,T1,AT1,NC1,4,nw,DI},TD<:Adjoint_WilsonDiracOperator4D_Donly}
 
-
+    _ensure_wilson_halo!(Dirac.parent.U, ψ)
     U1 = get_matrix(Dirac.parent.U[1])
     U2 = get_matrix(Dirac.parent.U[2])
     U3 = get_matrix(Dirac.parent.U[3])
@@ -576,7 +587,7 @@ function LinearAlgebra.mul!(C::TC,
     ψdata = get_matrix(ψ)
     Cdata = get_matrix(C)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_adjoint_WilsonDiracOperator4D_Donly!, Cdata, U1, U2, U3, U4, ψdata,
         Val(NC1), Val(nw), C.indexer)
 
@@ -710,4 +721,93 @@ function kernel_adjoint_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdat
     #end
 
 
+end
+
+# ---------------------------------------------------------------------------
+# Halo-free Wilson kernels (nw == 0)
+# ---------------------------------------------------------------------------
+
+@inline function kernel_initialize_WilsonDiracOperator4D_nowing!(
+    i, C, ψ, ::Val{NC1}, dindexer, ::Val{copy_input}) where {NC1,copy_input}
+    indices = delinearize(dindexer, i, 0)
+    @inbounds for ia in 1:4
+        for ic in 1:NC1
+            value = ψ[ic, ia, indices...]
+            C[ic, ia, indices...] = copy_input ? value : zero(value)
+        end
+    end
+    return nothing
+end
+
+@inline function kernel_WilsonDiracOperator4D_direction_nowing!(
+    i, C, U, Uminus, ψplus, ψminus, coefficient,
+    ::Val{NC1}, dindexer, op_plus, op_minus) where NC1
+    indices = delinearize(dindexer, i, 0)
+
+    @inbounds for ic in 1:NC1
+        for jc in 1:NC1
+            vplus = mul_op(op_plus, ψplus, jc, indices)
+            vminus = mul_op(op_minus, ψminus, jc, indices)
+            uplus = U[ic, jc, indices...]
+            uminus = Uminus[jc, ic, indices...]'
+            for ia in 1:4
+                C[ic, ia, indices...] += coefficient *
+                    (uplus * vplus[ia] + uminus * vminus[ia])
+            end
+        end
+    end
+    return nothing
+end
+
+function _apply_WilsonDiracOperator4D_nowing!(C, U, ψ, coefficient,
+    copy_input::Bool, adjoint_operator::Bool)
+    all(u -> iszero(u.nw), U) || throw(ArgumentError(
+        "nw=0 Wilson operators require nw=0 gauge fields"))
+
+    _parallel_for_mutating!(C,
+        prod(C.PN), kernel_initialize_WilsonDiracOperator4D_nowing!,
+        C.A, ψ.A, Val(C.NC1), C.indexer, Val(copy_input))
+
+    plus_operators = adjoint_operator ? oneplusγs : oneminusγs
+    minus_operators = adjoint_operator ? oneminusγs : oneplusγs
+
+    for d in 1:4
+        ψplus = _materialize_periodic_shift(ψ, shifts_p[d])
+        ψminus = _materialize_periodic_shift(ψ, shifts_m[d])
+        Uminus = _materialize_periodic_shift(U[d], shifts_m[d])
+
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_WilsonDiracOperator4D_direction_nowing!,
+            C.A, U[d].A, Uminus.A, ψplus.A, ψminus.A, coefficient,
+            Val(C.NC1), C.indexer, plus_operators[d], minus_operators[d])
+    end
+    return C
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::WilsonDiracOperator4D, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.U, ψ, -Dirac.κ, true, false)
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::Adjoint_WilsonDiracOperator4D, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.parent.U, ψ, -Dirac.parent.κ, true, true)
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::WilsonDiracOperator4D_Donly, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.U, ψ, 0.5, false, false)
+end
+
+function LinearAlgebra.mul!(C::TC, Dirac::Adjoint_WilsonDiracOperator4D_Donly, ψ::TC) where {
+    T,AT,NC1,DI,TC<:LatticeMatrix{4,T,AT,NC1,4,0,DI}
+}
+    return _apply_WilsonDiracOperator4D_nowing!(
+        C, Dirac.parent.U, ψ, 0.5, false, true)
 end

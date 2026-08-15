@@ -181,13 +181,16 @@ function calc_grad_old!(U, dU, β, NC, temp)
 end
 
 function calc_grad_AD!(U, dU, β, NC, temp, dtemp)
-    Wiltinger_derivative!(
-        calc_action,
-        U,
-        dU, β, NC;
+    calc_action_separate(U1, U2, U3, U4, work) =
+        calc_action((U1, U2, U3, U4), β, NC, work)
+    Enzyme_derivative!(
+        calc_action_separate,
+        U[1], U[2], U[3], U[4],
+        dU[1], dU[2], dU[3], dU[4];
         temp,
-        dtemp
+        dtemp,
     )
+    Wirtinger!.(dU)
     dim = 4
     Y = temp[4]
     for μ = 1:dim
@@ -343,7 +346,7 @@ function _compare_X_vs_dUn!(U, β, NC, temps; indices::NTuple{4,Int}=(2, 2, 2, 2
     Xbuf = temps[3]
 
     # 数値 Wirtinger（あなたの関数をそのまま）
-    dUn = Wiltinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
+    dUn = Wirtinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
 
     println("=== Compare staple X vs numerical dUn at site ", indices, " ===")
     for μ = 1:dim
@@ -410,7 +413,7 @@ function _compare_force!(U, β, NC, temps; indices::NTuple{4,Int}=(2, 2, 2, 2))
     calc_grad!(U, dU_staple, β, NC, temps)
 
     # numerical
-    dUn = Wiltinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
+    dUn = Wirtinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
 
     println("=== Compare FORCE (su(N)) at site ", indices, " ===")
     for μ = 1:dim
@@ -498,7 +501,7 @@ function run_hmc(;
         println("action: ", S)
 
         indices = (2, 2, 2, 2)
-        dUn = Wiltinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
+        dUn = Wirtinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
         # Convert Wirtinger ∂S/∂U to the staple-force form (U * V with V=staple).
         for μ = 1:dim
             Y = U[μ].A[:, :, indices...] * (2 * dUn[μ]')
@@ -530,7 +533,7 @@ function run_hmc(;
         indices = (2, 2, 2, 2)
 
         # numerical Wirtinger
-        dUn = Wiltinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
+        dUn = Wirtinger_numerical_derivative(calc_action, indices, U; params=(β, NC, temps))
 
         # staple force
         clear_matrix!.(dU)

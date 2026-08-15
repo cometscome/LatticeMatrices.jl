@@ -7,7 +7,7 @@ function LinearAlgebra.axpby!(
 ) where {T1,AT1,NC1,NC2,nw,D,DI,
     TX<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TY<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(Y,
         prod(Y.PN), kernel_D_axpby!, a, X.A, b, Y.A, Val(NC1), Val(NC2), Val(nw), Y.indexer
     )
 end
@@ -50,7 +50,7 @@ include("mul.jl")
 function mul_AtransB!(C::LatticeMatrix{D,T1,AT1,NC1,NC1,nw,DI},
     A::LatticeMatrix{D,T2,AT2,NC1,NC1,nw,DI}, B::LatticeMatrix{D,T3,AT3,NC1,NC1,nw,DI}) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,nw,DI}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_AtransB!, C.A, A.A, B.A, Val(NC1), Val(nw), C.indexer
     )
     #set_halo!(C)
@@ -154,15 +154,137 @@ end
 
 function expt_TA!(C::TC, A::TA, t::S=one(S)) where {
     D,T,AT,NC1,NC2,S<:Number,nw,DI,TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TA<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
-    traceless_antihermitian!(C, A)
-
-    JACC.parallel_for(
-        prod(C.PN), kernel_4Dexpt_TA!, C.A, C.indexer, Val(nw), t, Val(NC1)
-    )
+    if NC1 == 3 && T <: Complex && S <: Real
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_4Dexpt_TA_su3_ch!,
+            C.A, A.A, C.indexer, Val(nw), t,
+        )
+    else
+        traceless_antihermitian!(C, A)
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_4Dexpt_TA!, C.A, C.indexer, Val(nw), t, Val(NC1)
+        )
+    end
     return
     #set_halo!(C)
 end
 export expt_TA!
+
+@inline function _writeback_exp_iQ_su3_ch!(
+    C, indices,
+    q11, q12, q13, q21, q22, q23, q31, q32, q33,
+)
+    c11, c12, c13, c21, c22, c23, c31, c32, c33 = _exp_iQ_su3_ch(
+        q11, q12, q13,
+        q21, q22, q23,
+        q31, q32, q33,
+    )
+    @inbounds begin
+        C[1, 1, indices...] = c11
+        C[1, 2, indices...] = c12
+        C[1, 3, indices...] = c13
+        C[2, 1, indices...] = c21
+        C[2, 2, indices...] = c22
+        C[2, 3, indices...] = c23
+        C[3, 1, indices...] = c31
+        C[3, 2, indices...] = c32
+        C[3, 3, indices...] = c33
+    end
+    return nothing
+end
+
+@inline function kernel_4Dexpt_TA_su3_ch!(
+    i, C, A, dindexer, ::Val{nw}, t,
+) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    RT = typeof(real(zero(eltype(C))))
+    zero_r = zero(RT)
+    half = one(RT) / RT(2)
+    third = one(RT) / RT(3)
+    tt = RT(t)
+
+    @inbounds begin
+        a11 = A[1, 1, indices...]
+        a12 = A[1, 2, indices...]
+        a13 = A[1, 3, indices...]
+        a21 = A[2, 1, indices...]
+        a22 = A[2, 2, indices...]
+        a23 = A[2, 3, indices...]
+        a31 = A[3, 1, indices...]
+        a32 = A[3, 2, indices...]
+        a33 = A[3, 3, indices...]
+    end
+
+    tri = third * (imag(a11) + imag(a22) + imag(a33))
+    y11 = complex(zero_r, imag(a11) - tri)
+    y22 = complex(zero_r, imag(a22) - tri)
+    y33 = complex(zero_r, imag(a33) - tri)
+    y12 = half * (a12 - conj(a21))
+    y13 = half * (a13 - conj(a31))
+    y23 = half * (a23 - conj(a32))
+    y21 = -conj(y12)
+    y31 = -conj(y13)
+    y32 = -conj(y23)
+
+    # Q = -i*t*Y is Hermitian and exp(tY) = exp(iQ).
+    q11 = complex(tt * imag(y11), -tt * real(y11))
+    q12 = complex(tt * imag(y12), -tt * real(y12))
+    q13 = complex(tt * imag(y13), -tt * real(y13))
+    q21 = complex(tt * imag(y21), -tt * real(y21))
+    q22 = complex(tt * imag(y22), -tt * real(y22))
+    q23 = complex(tt * imag(y23), -tt * real(y23))
+    q31 = complex(tt * imag(y31), -tt * real(y31))
+    q32 = complex(tt * imag(y32), -tt * real(y32))
+    q33 = complex(tt * imag(y33), -tt * real(y33))
+
+    _writeback_exp_iQ_su3_ch!(
+        C, indices,
+        q11, q12, q13,
+        q21, q22, q23,
+        q31, q32, q33,
+    )
+    return nothing
+end
+
+@inline function kernel_4Dexpt_TA_basis_su3_ch!(
+    i, C, A, dindexer, ::Val{nw}, t, ::Val{nw2},
+) where {nw,nw2}
+    indices = delinearize(dindexer, i, nw)
+    indices2 = delinearize(dindexer, i, nw2)
+    RT = typeof(real(zero(eltype(C))))
+    zero_r = zero(RT)
+    half_t = RT(t) / RT(2)
+    inv_sqrt_three = inv(sqrt(RT(3)))
+
+    @inbounds begin
+        c1 = half_t * RT(A[1, 1, indices2...])
+        c2 = half_t * RT(A[2, 1, indices2...])
+        c3 = half_t * RT(A[3, 1, indices2...])
+        c4 = half_t * RT(A[4, 1, indices2...])
+        c5 = half_t * RT(A[5, 1, indices2...])
+        c6 = half_t * RT(A[6, 1, indices2...])
+        c7 = half_t * RT(A[7, 1, indices2...])
+        c8 = half_t * RT(A[8, 1, indices2...])
+    end
+
+    q11 = complex(c3 + inv_sqrt_three * c8, zero_r)
+    q12 = complex(c1, -c2)
+    q13 = complex(c4, -c5)
+    q21 = conj(q12)
+    q22 = complex(-c3 + inv_sqrt_three * c8, zero_r)
+    q23 = complex(c6, -c7)
+    q31 = conj(q13)
+    q32 = conj(q23)
+    q33 = complex(-RT(2) * inv_sqrt_three * c8, zero_r)
+
+    _writeback_exp_iQ_su3_ch!(
+        C, indices,
+        q11, q12, q13,
+        q21, q22, q23,
+        q31, q32, q33,
+    )
+    return nothing
+end
 
 @inline function _writeback_expt3x3_pade!(
     C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t
@@ -589,7 +711,7 @@ end
 function expt!(C::TC, A::TA, t=1) where {D,T,AT,NC1,NC2,T1,AT1,nw,DI,TA<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     @assert NC1 == NC2 "Matrix exponentiation requires square matrices, but got $(NC1) x $(NC2)."
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dexpt!, C.A, A.A, C.indexer, Val(nw), t, Val(NC1)
     )
     return
@@ -651,7 +773,7 @@ function expt_TA!(C::TC, TA::TTA, t::S=one(S)) where {D,T,AT,NC1,
     if NC1 > 3
         error("In NC > 3 case, this function should not be used")
     else
-        JACC.parallel_for(
+        _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt_TA_general!, C.A, TA.A, C.indexer, Val(nw), t, Val(NC1), Val(nw2)
         )
     end
@@ -962,8 +1084,13 @@ function expt!(C::LatticeMatrix{D,T,AT,NC1,NC1,nw,DI}, TA::LatticeMatrix{D,T1,AT
 
     if NC1 > 3
         error("In NC > 3 case, this function should not be used")
+    elseif NC1 == 3 && T <: Complex && S <: Real
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_4Dexpt_TA_basis_su3_ch!,
+            C.A, TA.A, C.indexer, Val(nw), t, Val(nw2),
+        )
     else
-        JACC.parallel_for(
+        _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt_TA!, C.A, TA.A, C.indexer, Val(nw), t, Val(NC1), Val(nw2)
         )
     end
@@ -1222,10 +1349,11 @@ end
 
 
 function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute!, C.A, A.A, Val(NC1), Val(NC2), Val(nw), C.indexer
     )
     #set_halo!(C)
+    return nothing
 end
 
 @inline function kernel_4Dsubstitute!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
@@ -1239,10 +1367,11 @@ end
 
 function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattice{L}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_dag!, C.A, A.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer
     )
     #set_halo!(C)
+    return nothing
 end
 
 @inline function kernel_4Dsubstitute_dag!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
@@ -1264,10 +1393,11 @@ function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::TA) where {D,T
     end
     At = JACC.array(A)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_matrix!, C.A, At, Val(NC1), Val(NC2), Val(nw), C.indexer
     )
     #set_halo!(C)
+    return nothing
 end
 
 @inline function kernel_4Dsubstitute_matrix!(i, C, A, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, dindexer) where {NC1,NC2,nw}
@@ -1286,10 +1416,11 @@ end
 function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Shifted_Lattice{L,D}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
     shift = get_shift(A)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_shift!, C.A, A.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
+    return nothing
 end
 export substitute!
 
@@ -1305,13 +1436,14 @@ export substitute!
     end
 end
 
-function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattice{Shifted_Lattice{L,D}}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
+function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
     shift = get_shift(A)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_shiftdag!, C.A, A.data.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
+    return nothing
 end
 export substitute!
 
@@ -1337,7 +1469,7 @@ end
 function mul_shiftA_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Shifted_Lattice{L,D}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftAB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
@@ -1456,7 +1588,7 @@ function mul_shiftA_B!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::Shifted_Lattice{L,D}, B::LatticeMatrix{D,T3,AT3,NC3,NC2,nw,DI}, shift,
     α::S, β::S) where {D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw,DI}}
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftAB!, C.A, A.data.A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift, α::S, β::S
     )
     #set_halo!(C)
@@ -1528,13 +1660,13 @@ end
 #C = shiftA'*shiftedB
 #C[i,j] = A[k,j]'*B[k,i]
 function mulT!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D}) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Shifted_Lattice{L2,D}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC2,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC1,nw,DI}}
 
     shiftA = get_shift(A)
     shiftB = get_shift(B)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mulT_shiftAdagshiftB!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA, shiftB
     )
     #set_halo!(C)
@@ -1623,12 +1755,12 @@ end
 #C = shiftA'*B'
 #C[i,j] = A[k,j]'*B[i,k]
 function mulT!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    A::Adjoint_Lattice{Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,
+    A::Adjoint_Lattice{<:Shifted_Lattice{L1,D}}, B::Adjoint_Lattice{L2}) where {D,T1,T2,T3,AT1,AT2,
     AT3,NC1,NC2,NC3,nw,DI,
     L1<:LatticeMatrix{D,T2,AT2,NC3,NC2,nw,DI},L2<:LatticeMatrix{D,T3,AT3,NC3,NC1,nw,DI}}
 
     shiftA = get_shift(A)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mulT_shiftAdagBdag!, C.A, A.data.data.A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shiftA
     )
     #set_halo!(C)
@@ -1801,7 +1933,15 @@ end
 =#
 
 function partial_trace(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, μ::Int, position::Int=1) where {D,T1,AT1,NC1,NC2,nw,DI}
-    s = JACC.parallel_reduce(prod(C.PN), kernel_partial_trace_D, C.A, NC1, C.indexer, μ, position, Val(nw); init=zero(eltype(C.A)), op=+)
+    # `position` is a global, one-based coordinate. Only ranks that own the
+    # requested hyperplane contribute to the collective reduction.
+    local_position = position - C.coords[μ] * C.PN[μ]
+    s = if 1 <= local_position <= C.PN[μ]
+        JACC.parallel_reduce(prod(C.PN), kernel_partial_trace_D, C.A, NC1,
+            C.indexer, μ, local_position, Val(nw); init=zero(eltype(C.A)), op=+)
+    else
+        zero(eltype(C.A))
+    end
     s = MPI.Allreduce(s, MPI.SUM, C.comm)
     return s
 end
@@ -1822,12 +1962,12 @@ end
 # ========== host side ==========
 function normalize_matrix!(C::LatticeMatrix{D,T,AT,NC,NC,nw,DI}) where {D,T,AT,NC,nw,DI}
     if NC == 2
-        JACC.parallel_for(prod(C.PN), kernel_normalize_NC2!, C.A, C.indexer, Val(nw))
+        _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_NC2!, C.A, C.indexer, Val(nw))
     elseif NC == 3
-        JACC.parallel_for(prod(C.PN), kernel_normalize_NC3!, C.A, C.indexer, Val(nw))
+        _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_NC3!, C.A, C.indexer, Val(nw))
     else
         # Generic: modified Gram–Schmidt per site (unitarize columns)
-        JACC.parallel_for(prod(C.PN), kernel_normalize_generic!, C.A, C.indexer, NC, Val(nw))
+        _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_generic!, C.A, C.indexer, NC, Val(nw))
     end
     #set_halo!(C)
 end
@@ -1986,7 +2126,7 @@ end
 
 #=
 function randomize_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
-    JACC.parallel_for(prod(C.PN), kernel_randomize_4D!, C.A, C.indexer, NC1, NC2)
+    _parallel_for_mutating!(C, prod(C.PN), kernel_randomize_4D!, C.A, C.indexer, NC1, NC2)
     #set_halo!(C)
 end
 export randomize_matrix!
@@ -2003,91 +2143,268 @@ export randomize_matrix!
 end
 =#
 
-# Host wrapper: choose a fixed or time-based seed and launch
-function randomize_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
-    seed0 = UInt64(0x12345678ABCDEF01)  # or UInt64(time_ns())
-    JACC.parallel_for(prod(C.PN), kernel_randomize_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw), seed0)
+const _DEFAULT_RANDOMIZE_SEED = UInt64(0x12345678ABCDEF01)
+
+@inline _random_real_type(::Type{Float32}) = Float32
+@inline _random_real_type(::Type{Float64}) = Float64
+@inline _random_real_type(::Type{ComplexF32}) = Float32
+@inline _random_real_type(::Type{ComplexF64}) = Float64
+
+function _check_randomize_eltype(::Type{T}) where {T}
+    T in (Float32, Float64, ComplexF32, ComplexF64) && return nothing
+    throw(ArgumentError("random lattice fills do not support element type $T"))
+end
+
+"""
+    randomize_matrix!(C, key::RNGStreamKey; rng_algorithm=Philox4x32())
+    randomize_matrix!(C; seed=0x12345678ABCDEF01, sweep=0, direction=0,
+                      color=0, subgroup=0, rng_algorithm=Philox4x32())
+
+Fill the core of `C` with uniform values in `[-0.5, 0.5)`.  Every site owns
+one independent stream keyed by its zero-based global site id, so an explicit
+key produces the same global field for every MPI decomposition.  Complex
+elements consume independent uniforms for their real and imaginary parts.
+"""
+function randomize_matrix!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    key::RNGStreamKey;
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+) where {D,T,AT,NC1,NC2,nw,DI}
+    _check_randomize_eltype(T)
+    _parallel_for_mutating!(
+        C,
+        prod(C.PN),
+        kernel_randomize_global_sites!,
+        C.A,
+        C.indexer,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+        C.coords,
+        C.PN,
+        C.gsize,
+        key,
+        rng_algorithm,
+    )
     set_halo!(C)
+    return nothing
 end
-export randomize_matrix!
 
-# We split on element type at compile time via Val to avoid dynamic branches.
-@inline function kernel_randomize_4D!(i, u, dindexer, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
+function randomize_matrix!(
+    C::LatticeMatrix;
+    seed::Integer=_DEFAULT_RANDOMIZE_SEED,
+    sweep::Integer=0,
+    direction::Integer=0,
+    color::Integer=0,
+    subgroup::Integer=0,
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+)
+    key = RNGStreamKey(seed, sweep, direction, color, subgroup)
+    return randomize_matrix!(C, key; rng_algorithm)
+end
+
+"""
+    randomize_gaussian_matrix!(C, key::RNGStreamKey;
+                               sigma=1, rng_algorithm=Philox4x32())
+    randomize_gaussian_matrix!(C; sigma=1, seed=..., sweep=0, direction=0,
+                               color=0, subgroup=0,
+                               rng_algorithm=Philox4x32())
+
+Fill the core of `C` with independent zero-mean normal values of standard
+deviation `sigma`, using the same decomposition-independent site streams as
+[`randomize_matrix!`](@ref).  Complex elements receive independent normal real
+and imaginary components.
+"""
+function randomize_gaussian_matrix!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    key::RNGStreamKey;
+    sigma::Real=1,
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+) where {D,T,AT,NC1,NC2,nw,DI}
+    _check_randomize_eltype(T)
+    real_type = _random_real_type(T)
+    sigma_typed = real_type(sigma)
+    sigma_typed >= zero(real_type) || throw(ArgumentError("sigma must be non-negative"))
+    _parallel_for_mutating!(
+        C,
+        prod(C.PN),
+        kernel_randomize_gaussian_global_sites!,
+        C.A,
+        C.indexer,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+        C.coords,
+        C.PN,
+        C.gsize,
+        key,
+        rng_algorithm,
+        sigma_typed,
+    )
+    set_halo!(C)
+    return nothing
+end
+
+function randomize_gaussian_matrix!(
+    C::LatticeMatrix;
+    sigma::Real=1,
+    seed::Integer=_DEFAULT_RANDOMIZE_SEED,
+    sweep::Integer=0,
+    direction::Integer=0,
+    color::Integer=0,
+    subgroup::Integer=0,
+    rng_algorithm::SiteRNGAlgorithm=Philox4x32(),
+)
+    key = RNGStreamKey(seed, sweep, direction, color, subgroup)
+    return randomize_gaussian_matrix!(C, key; sigma, rng_algorithm)
+end
+
+@inline function _global_site_rng(
+    i,
+    dindexer,
+    coords::NTuple{D,Int},
+    local_size::NTuple{D,Int},
+    global_size::NTuple{D,Int},
+    key,
+    algorithm,
+) where {D}
+    local_indices = delinearize(dindexer, i, 0)
+    global_indices = global_site_coordinates(local_indices, coords, local_size)
+    global_site = global_site_id(global_indices, global_size)
+    return site_rng(key, global_site, algorithm)
+end
+
+@inline function kernel_randomize_global_sites!(
+    i,
+    u,
+    dindexer,
+    ::Val{NC1},
+    ::Val{NC2},
+    ::Val{nw},
+    coords,
+    local_size,
+    global_size,
+    key,
+    algorithm,
+) where {NC1,NC2,nw}
     indices = delinearize(dindexer, i, nw)
-    T = eltype(u)
-
-    if T === ComplexF32
-        _rand_fill!(Val(:c32), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    elseif T === ComplexF64
-        _rand_fill!(Val(:c64), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    elseif T === Float32
-        _rand_fill!(Val(:r32), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    elseif T === Float64
-        _rand_fill!(Val(:r64), indices, u, Val(NC1), Val(NC2), Val(nw), seed0)
-    else
-        # If you ever support other types, you can add more specializations.
-        # For now, throw a clear error on host side before launching widely.
-        @assert false "Unsupported eltype in randomize: $(T)"
-    end
+    rng = _global_site_rng(i, dindexer, coords, local_size, global_size, key, algorithm)
+    _uniform_site_fill!(u, indices, Val(NC1), Val(NC2), rng)
     return nothing
 end
 
-# --- Specializations (no convert(T, ...) inside) ---
-
-# ComplexF32
-@inline function _rand_fill!(::Val{:c32}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        state, r2 = pcg32_step(state, inc)
-        realv = u01_f32(r1) - 0.5f0
-        imagv = u01_f32(r2) - 0.5f0
-        u[ic, jc, indices...] = ComplexF32(realv, imagv)
+@inline function _uniform_site_fill!(
+    u::AbstractArray{T},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        rng, value = rand_uniform(rng, T)
+        u[ic, jc, indices...] = value - T(0.5)
     end
+    return rng
+end
+
+@inline function _uniform_site_fill!(
+    u::AbstractArray{Complex{T}},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        rng, real_value = rand_uniform(rng, T)
+        rng, imag_value = rand_uniform(rng, T)
+        u[ic, jc, indices...] = Complex{T}(real_value - T(0.5), imag_value - T(0.5))
+    end
+    return rng
+end
+
+@inline function kernel_randomize_gaussian_global_sites!(
+    i,
+    u,
+    dindexer,
+    ::Val{NC1},
+    ::Val{NC2},
+    ::Val{nw},
+    coords,
+    local_size,
+    global_size,
+    key,
+    algorithm,
+    sigma,
+) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+    rng = _global_site_rng(i, dindexer, coords, local_size, global_size, key, algorithm)
+    _gaussian_site_fill!(u, indices, Val(NC1), Val(NC2), rng, sigma)
     return nothing
 end
 
-# ComplexF64
-@inline function _rand_fill!(::Val{:c64}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        state, r2 = pcg32_step(state, inc)
-        realv = u01_f64(r1, r2) - 0.5
-        state, i1 = pcg32_step(state, inc)
-        state, i2 = pcg32_step(state, inc)
-        imagv = u01_f64(i1, i2) - 0.5
-        u[ic, jc, indices...] = ComplexF64(realv, imagv)
+@inline function _gaussian_site_fill!(
+    u::AbstractArray{T},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+    sigma::T,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    use_spare = false
+    spare = zero(T)
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        if use_spare
+            value = spare
+        else
+            rng, value, spare = rand_normal_pair(rng, T)
+        end
+        u[ic, jc, indices...] = sigma * value
+        use_spare = !use_spare
     end
-    return nothing
+    return rng
 end
 
-# Float32
-@inline function _rand_fill!(::Val{:r32}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        realv = u01_f32(r1) - 0.5f0
-        u[ic, jc, indices...] = realv  # already Float32
+@inline function _gaussian_site_fill!(
+    u::AbstractArray{Complex{T}},
+    indices,
+    ::Val{NC1},
+    ::Val{NC2},
+    rng,
+    sigma::T,
+) where {T<:Union{Float32,Float64},NC1,NC2}
+    @inbounds for jc in 1:NC2, ic in 1:NC1
+        rng, real_value, imag_value = rand_normal_pair(rng, T)
+        u[ic, jc, indices...] = Complex{T}(sigma * real_value, sigma * imag_value)
     end
-    return nothing
+    return rng
 end
 
-# Float64
-@inline function _rand_fill!(::Val{:r64}, indices, u, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, seed0::UInt64) where {NC1,NC2,nw}
-    @inbounds for jc = 1:NC2, ic = 1:NC1
-        state, inc = mix_seed(indices..., ic, jc, seed0)
-        state, r1 = pcg32_step(state, inc)
-        state, r2 = pcg32_step(state, inc)
-        realv = u01_f64(r1, r2) - 0.5
-        u[ic, jc, indices...] = realv  # already Float64
-    end
-    return nothing
-end
+export randomize_matrix!, randomize_gaussian_matrix!
 
 function clear_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
-    JACC.parallel_for(prod(C.PN), kernel_clear_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_clear_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw))
     set_halo!(C)
+    return nothing
+end
+
+function clear_matrix!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    target_even::Bool,
+) where {D,T,AT,NC1,NC2,nw,DI}
+    _parallel_for_mutating!(C,
+        prod(C.PN),
+        kernel_clear_evenodd!,
+        C.A,
+        C.indexer,
+        Val(NC1),
+        Val(NC2),
+        Val(nw),
+        C.coords,
+        C.PN,
+        target_even,
+    )
+    set_halo!(C)
+    return nothing
 end
 export clear_matrix!
 
@@ -2102,8 +2419,33 @@ export clear_matrix!
 
 end
 
+@inline function kernel_clear_evenodd!(
+    i,
+    u,
+    dindexer,
+    ::Val{NC1},
+    ::Val{NC2},
+    ::Val{nw},
+    coords::NTuple{D,Int},
+    local_size::NTuple{D,Int},
+    target_even::Bool,
+) where {NC1,NC2,nw,D}
+    local_indices = delinearize(dindexer, i, 0)
+
+    if _global_site_is_even(local_indices, coords, local_size) == target_even
+        storage_indices = ntuple(d -> local_indices[d] + nw, D)
+        @inbounds for jc = 1:NC2
+            for ic = 1:NC1
+                u[ic, jc, storage_indices...] = zero(eltype(u))
+            end
+        end
+    end
+
+    return nothing
+end
+
 function makeidentity_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}) where {D,T,AT,NC1,NC2,nw,DI}
-    JACC.parallel_for(prod(C.PN), kernel_makeidentity_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_makeidentity_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw))
     set_halo!(C)
 end
 export makeidentity_matrix!
@@ -2146,10 +2488,24 @@ end
 
 #C = C+ α*A
 function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI}
-    JACC.parallel_for(prod(C.PN), kernel_add_4D!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, Val(nw))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_add_4D!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, Val(nw))
     #set_halo!(C)
 end
 export add_matrix!
+
+function add_matrix_evenodd!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    A::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
+    target_even::Bool,
+    α::S=1,
+) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI}
+    _parallel_for_mutating!(C,
+        prod(C.PN), kernel_add_4D_evenodd!, C.A, A.A, C.indexer,
+        Val(NC1), Val(NC2), α, Val(nw), C.coords, C.PN, target_even
+    )
+    return nothing
+end
+export add_matrix_evenodd!
 
 @inline function kernel_add_4D!(i, u, v, dindexer, ::Val{NC1}, ::Val{NC2}, α, ::Val{nw}) where {NC1,NC2,nw}
     indices = delinearize(dindexer, i, nw)
@@ -2168,6 +2524,17 @@ export add_matrix!
     #end
 end
 
+@inline function kernel_add_4D_evenodd!(
+    i, u, v, dindexer, vNC1::Val{NC1}, vNC2::Val{NC2}, α, vnw::Val{nw},
+    coords, local_size, target_even::Bool,
+) where {NC1,NC2,nw}
+    local_indices = delinearize(dindexer, i, 0)
+    if _global_site_is_even(local_indices, coords, local_size) == target_even
+        kernel_add_4D!(i, u, v, dindexer, vNC1, vNC2, α, vnw)
+    end
+    return nothing
+end
+
 #C = C+ α*shiftA
 function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Shifted_Lattice{L,D}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
@@ -2177,9 +2544,25 @@ function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Shifted_Lattice{
     #set_halo!(C)
 end
 
+function add_matrix_evenodd!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    A::Shifted_Lattice{L,D},
+    target_even::Bool,
+    α::S=1,
+) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
+    shift = get_shift(A)
+    _parallel_for_mutating!(C,
+        prod(C.PN), kernel_add_4D_shift_evenodd!, C.A, A.data.A, C.indexer,
+        Val(NC1), Val(NC2), α, shift, Val(nw), C.coords, C.PN, target_even
+    )
+    return nothing
+end
+
 function add_matrix_shiftedA!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, shift, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}}
-    JACC.parallel_for(prod(C.PN), kernel_add_4D_shift!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
+    _ensure_halo_for_shift!(A, shift)
+    _parallel_for_mutating!(C, prod(C.PN), kernel_add_4D_shift!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
     #set_halo!(C)
 end
 
@@ -2195,15 +2578,40 @@ end
     end
 end
 
+@inline function kernel_add_4D_shift_evenodd!(
+    i, u, v, dindexer, vNC1::Val{NC1}, vNC2::Val{NC2}, α, shift,
+    vnw::Val{nw}, coords, local_size, target_even::Bool,
+) where {NC1,NC2,nw}
+    local_indices = delinearize(dindexer, i, 0)
+    if _global_site_is_even(local_indices, coords, local_size) == target_even
+        kernel_add_4D_shift!(i, u, v, dindexer, vNC1, vNC2, α, shift, vnw)
+    end
+    return nothing
+end
+
 #C = C+ α*Adag
 function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{L}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
     add_matrix_Adag!(C, A.data, α)
     #set_halo!(C)
 end
 
+function add_matrix_evenodd!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{L},
+    target_even::Bool,
+    α::S=1,
+) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+    _parallel_for_mutating!(C,
+        prod(C.PN), kernel_add_4D_dag_evenodd!, C.A, A.data.A, C.indexer,
+        Val(NC1), Val(NC2), α, Val(nw), C.coords, C.PN, target_even
+    )
+    return nothing
+end
+
 function add_matrix_Adag!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
-    JACC.parallel_for(prod(C.PN), kernel_add_4D_dag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, Val(nw))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_add_4D_dag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, Val(nw))
     #set_halo!(C)
 end
 
@@ -2217,16 +2625,44 @@ end
     end
 end
 
+@inline function kernel_add_4D_dag_evenodd!(
+    i, u, v, dindexer, vNC1::Val{NC1}, vNC2::Val{NC2}, α, vnw::Val{nw},
+    coords, local_size, target_even::Bool,
+) where {NC1,NC2,nw}
+    local_indices = delinearize(dindexer, i, 0)
+    if _global_site_is_even(local_indices, coords, local_size) == target_even
+        kernel_add_4D_dag!(i, u, v, dindexer, vNC1, vNC2, α, vnw)
+    end
+    return nothing
+end
+
 #C = C+ α*shiftAdag
-function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{Shifted_Lattice{L,D}}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+function add_matrix!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
     shift = get_shift(A)
     add_matrix_shiftedAdag!(C, A.data.data, shift, α)
     #set_halo!(C)
 end
 
+function add_matrix_evenodd!(
+    C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    A::Adjoint_Lattice{<:Shifted_Lattice{L,D}},
+    target_even::Bool,
+    α::S=1,
+) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
+    L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
+    shift = get_shift(A)
+    _parallel_for_mutating!(C,
+        prod(C.PN), kernel_add_4D_shiftdag_evenodd!, C.A, A.data.data.A,
+        C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw), C.coords, C.PN,
+        target_even
+    )
+    return nothing
+end
+
 function add_matrix_shiftedAdag!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, A::L, shift, α::S=1) where {D,T,T1,AT,AT1,NC1,NC2,nw,S<:Number,DI,
     L<:LatticeMatrix{D,T1,AT1,NC2,NC1,nw,DI}}
-    JACC.parallel_for(prod(C.PN), kernel_add_4D_shiftdag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
+    _ensure_halo_for_shift!(A, shift)
+    _parallel_for_mutating!(C, prod(C.PN), kernel_add_4D_shiftdag!, C.A, A.A, C.indexer, Val(NC1), Val(NC2), α, shift, Val(nw))
     #set_halo!(C)
 end
 
@@ -2242,8 +2678,19 @@ end
     end
 end
 
+@inline function kernel_add_4D_shiftdag_evenodd!(
+    i, u, v, dindexer, vNC1::Val{NC1}, vNC2::Val{NC2}, α, shift,
+    vnw::Val{nw}, coords, local_size, target_even::Bool,
+) where {NC1,NC2,nw}
+    local_indices = delinearize(dindexer, i, 0)
+    if _global_site_is_even(local_indices, coords, local_size) == target_even
+        kernel_add_4D_shiftdag!(i, u, v, dindexer, vNC1, vNC2, α, shift, vnw)
+    end
+    return nothing
+end
+
 function applyfunction!(C::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}, f::Function, variables...) where {D,T,AT,NC1,NC2,nw,DI}
-    JACC.parallel_for(prod(C.PN), kernel_apply_function_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw), f, variables...)
+    _parallel_for_mutating!(C, prod(C.PN), kernel_apply_function_4D!, C.A, C.indexer, Val(NC1), Val(NC2), Val(nw), f, variables...)
     #set_halo!(C)
 end
 export applyfunction!
@@ -2266,11 +2713,54 @@ export applyfunction!
     end
 end
 
+function map_matrix_evenodd!(
+    U::LatticeMatrix{D,TU,ATU,NC1,NC2,nw,DI},
+    V::LatticeMatrix{D,TV,ATV,NC1,NC2,nw,DI},
+    f!,
+    target_even::Bool,
+) where {D,TU,TV,ATU,ATV,NC1,NC2,nw,DI}
+    _parallel_for_mutating!(U,
+        prod(U.PN), kernel_map_matrix_evenodd!, U.A, V.A, U.indexer,
+        Val(NC1), Val(NC2), Val(nw), U.coords, U.PN, f!, target_even
+    )
+    set_halo!(U)
+    return nothing
+end
+export map_matrix_evenodd!
+
+@inline function kernel_map_matrix_evenodd!(
+    i, u, v, dindexer, ::Val{NC1}, ::Val{NC2}, ::Val{nw}, coords,
+    local_size, f!, target_even::Bool,
+) where {NC1,NC2,nw}
+    local_indices = delinearize(dindexer, i, 0)
+    if _global_site_is_even(local_indices, coords, local_size) == target_even
+        indices = delinearize(dindexer, i, nw)
+        u_local = MMatrix{NC1,NC2,eltype(u)}(undef)
+        v_local = MMatrix{NC1,NC2,eltype(v)}(undef)
+
+        @inbounds for jc in 1:NC2
+            for ic in 1:NC1
+                u_local[ic, jc] = u[ic, jc, indices...]
+                v_local[ic, jc] = v[ic, jc, indices...]
+            end
+        end
+
+        f!(u_local, v_local)
+
+        @inbounds for jc in 1:NC2
+            for ic in 1:NC1
+                u[ic, jc, indices...] = u_local[ic, jc]
+            end
+        end
+    end
+    return nothing
+end
+
 
 
 function traceless_antihermitian_add!(C::LatticeMatrix{D,T,AT,NC,NC,nw}, factor,
     A::LatticeMatrix{D,T2,AT2,NC,NC,nw2}) where {D,T,AT,nw,T2,AT2,NC,nw2}
-    JACC.parallel_for(prod(C.PN), kernel_4d_Traceless_antihermitian_add_general!, C.A, A.A, factor, C.indexer, Val(NC), Val(nw), Val(nw2))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add_general!, C.A, A.A, factor, C.indexer, Val(NC), Val(nw), Val(nw2))
 end
 export traceless_antihermitian_add!
 
@@ -2308,7 +2798,7 @@ end
 
 function traceless_antihermitian_add!(C::LatticeMatrix{D,T,AT,NG,1,nw}, factor,
     A::LatticeMatrix{D,T2,AT2,NC,NC,nw2}) where {D,T<:Real,AT,NG,nw,T2,AT2,NC,nw2}
-    JACC.parallel_for(prod(C.PN), kernel_4d_Traceless_antihermitian_add!, C.A, A.A, factor, C.indexer, Val(NG), Val(NC), Val(nw), Val(nw2))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add!, C.A, A.A, factor, C.indexer, Val(NG), Val(NC), Val(nw), Val(nw2))
 end
 
 function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::Val{NG}, ::Val{NC}, ::Val{nw}, ::Val{nw2}) where {NC,NG,nw,nw2}

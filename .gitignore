@@ -1,1 +1,5 @@
 /Manifest*.toml
+/LocalPreferences.toml
+/LocalPreferences.toml~
+/.ci-ad-env/
+/test/extended-env/

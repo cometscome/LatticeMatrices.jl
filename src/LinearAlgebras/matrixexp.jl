@@ -194,6 +194,128 @@ end
 end
 ###########################################################################################################
 export exp3x3_pade
+
+# Exact SU(3) exponential using the Cayley-Hamilton representation
+#
+#     exp(iQ) = f0 * I + f1 * Q + f2 * Q^2,
+#
+# for a traceless Hermitian 3x3 matrix Q.  This is the stable formulation used
+# by Morningstar--Peardon stout smearing.  Keeping the matrix as scalar
+# elements avoids the register pressure of an eigendecomposition on GPUs.
+@inline function _mul3x3_elements(
+    a11, a12, a13, a21, a22, a23, a31, a32, a33,
+    b11, b12, b13, b21, b22, b23, b31, b32, b33,
+)
+    return (
+        a11 * b11 + a12 * b21 + a13 * b31,
+        a11 * b12 + a12 * b22 + a13 * b32,
+        a11 * b13 + a12 * b23 + a13 * b33,
+        a21 * b11 + a22 * b21 + a23 * b31,
+        a21 * b12 + a22 * b22 + a23 * b32,
+        a21 * b13 + a22 * b23 + a23 * b33,
+        a31 * b11 + a32 * b21 + a33 * b31,
+        a31 * b12 + a32 * b22 + a33 * b32,
+        a31 * b13 + a32 * b23 + a33 * b33,
+    )
+end
+
+@inline function _exp_iQ_su3_ch(
+    q11::T, q12, q13, q21, q22, q23, q31, q32, q33,
+) where {T<:Number}
+    RT = typeof(real(zero(T)))
+    zero_r = zero(RT)
+    one_r = one(RT)
+    two = RT(2)
+    three = RT(3)
+    half = one_r / two
+    third = one_r / three
+
+    qq11, qq12, qq13, qq21, qq22, qq23, qq31, qq32, qq33 =
+        _mul3x3_elements(
+            q11, q12, q13,
+            q21, q22, q23,
+            q31, q32, q33,
+            q11, q12, q13,
+            q21, q22, q23,
+            q31, q32, q33,
+        )
+
+    c1 = half * real(qq11 + qq22 + qq33)
+    c0 = third * real(
+        q11 * qq11 + q12 * qq21 + q13 * qq31 +
+        q21 * qq12 + q22 * qq22 + q23 * qq32 +
+        q31 * qq13 + q32 * qq23 + q33 * qq33,
+    )
+
+    # Below this invariant scale the analytic coefficient formula suffers
+    # cancellation.  Its series is both faster and more accurate.
+    if c1 > RT(1.0e-4)
+        c0max = two * (c1 * third) * sqrt(c1 * third)
+        theta = acos(clamp(abs(c0) / c0max, zero_r, one_r))
+        u = sqrt(c1 * third) * cos(theta * third)
+        w = sqrt(c1) * sin(theta * third)
+        sinu, cosu = sincos(u)
+        sinw, cosw = sincos(w)
+        uu = u * u
+        ww = w * w
+
+        exp2iu = complex(two * cosu * cosu - one_r, two * cosu * sinu)
+        expmiu = complex(cosu, -sinu)
+        xi0 = if abs(w) > RT(0.05)
+            sinw / w
+        else
+            one_r - (ww / RT(6)) *
+                (one_r - (ww / RT(20)) * (one_r - ww / RT(42)))
+        end
+        denom = RT(9) * uu - ww
+
+        f0 = ((uu - ww) * exp2iu + expmiu *
+            complex(RT(8) * uu * cosw, two * u * (three * uu + ww) * xi0)) /
+             denom
+        f1 = (two * u * exp2iu - expmiu *
+            complex(two * u * cosw, (ww - three * uu) * xi0)) / denom
+        f2 = (exp2iu - expmiu * complex(cosw, three * u * xi0)) / denom
+
+        if c0 < zero_r
+            f0 = conj(f0)
+            f1 = -conj(f1)
+            f2 = conj(f2)
+        end
+    else
+        c0sq = c0 * c0
+        f0 = complex(
+            one_r - c0sq / RT(720),
+            -c0 / RT(6) *
+            (one_r - c1 / RT(20) * (one_r - c1 / RT(42))),
+        )
+        f1 = complex(
+            c0 / RT(24) *
+            (one_r - c1 / RT(15) * (one_r - RT(3) * c1 / RT(112))),
+            one_r - c1 / RT(6) *
+            (one_r - c1 / RT(20) * (one_r - c1 / RT(42))) -
+            c0sq / RT(5040),
+        )
+        f2 = half * complex(
+            -one_r + c1 / RT(12) *
+            (one_r - c1 / RT(30) * (one_r - c1 / RT(56))) +
+            c0sq / RT(20160),
+            c0 / RT(60) *
+            (one_r - c1 / RT(21) * (one_r - c1 / RT(48))),
+        )
+    end
+
+    return (
+        f0 + f1 * q11 + f2 * qq11,
+        f1 * q12 + f2 * qq12,
+        f1 * q13 + f2 * qq13,
+        f1 * q21 + f2 * qq21,
+        f0 + f1 * q22 + f2 * qq22,
+        f1 * q23 + f2 * qq23,
+        f1 * q31 + f2 * qq31,
+        f1 * q32 + f2 * qq32,
+        f0 + f1 * q33 + f2 * qq33,
+    )
+end
 ############################################################################################
 
 

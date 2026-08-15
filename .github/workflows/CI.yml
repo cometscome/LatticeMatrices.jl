@@ -16,6 +16,9 @@ jobs:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      # JACC's Julia 1.12 Threads path is currently stable with one thread.
+      JULIA_NUM_THREADS: 1
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
       actions: write
       contents: read
@@ -24,6 +27,7 @@ jobs:
       matrix:
         version:
           - '1.11'
+          - '1.12'
           - 'pre'
         os:
           - ubuntu-latest
@@ -36,5 +40,51 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
+      - name: Verify base package without Enzyme
+        env:
+          JULIA_LOAD_PATH: "@:@stdlib"
+        run: |
+          julia --startup-file=no -e '
+            using Pkg
+            Pkg.activate(; temp=true)
+            Pkg.develop(path=pwd())
+            @assert Base.find_package("Enzyme") === nothing
+            using LatticeMatrices
+            @assert Base.get_extension(
+              LatticeMatrices, :LatticeMatricesEnzymeExt) === nothing
+          '
       - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-runtest@v1
+      - name: Fast CPU test suite
+        uses: julia-actions/julia-runtest@v1
+      - name: MPI halo epoch regression (2 ranks)
+        if: matrix.version != 'pre'
+        run: |
+          julia --project=. --startup-file=no -e '
+            using MPI
+            MPI.install_mpiexecjl(destdir=".ci-bin", force=true)
+          '
+          .ci-bin/mpiexecjl --project=. -n 2 \
+            julia --project=. --startup-file=no test/mpi_halo.jl
+      - name: README smoke test (2 ranks)
+        if: matrix.version != 'pre'
+        run: |
+          .ci-bin/mpiexecjl --project=. -n 2 \
+            julia --project=. --startup-file=no test/readmetest.jl
+      - name: Prepare Enzyme smoke-test environment
+        if: matrix.version != 'pre'
+        run: |
+          julia --startup-file=no -e '
+            using Pkg
+            Pkg.activate(joinpath(pwd(), ".ci-ad-env"))
+            Pkg.develop(path=pwd())
+            Pkg.add(["Enzyme", "JACC", "MPI"])
+          '
+      - name: Enzyme AD smoke tests
+        if: matrix.version != 'pre'
+        run: |
+          julia --project=.ci-ad-env --startup-file=no test/runtests_ad_ci.jl
+      - name: MPI Enzyme gradient regression (2 ranks)
+        if: matrix.version == '1.11'
+        run: |
+          .ci-bin/mpiexecjl --project=.ci-ad-env -n 2 \
+            julia --project=.ci-ad-env --startup-file=no test/mpi_enzyme.jl

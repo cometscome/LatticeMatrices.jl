@@ -136,7 +136,7 @@ end
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::TA, B::LatticeMatrix{D,T3,AT3,NC1,NC3,nw,DI}) where {D,T1,T3,AT1,AT3,NC1,NC2,NC3,nw,DI,TA<:OperatorSecond{NC2,NC3}}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_OperatorSecond!, C.A, A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer
     )
     #set_halo!(C)
@@ -159,7 +159,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::OperatorSecond{NC2,NC3}, B::Shifted_Lattice{L,D}) where {D,T1,T3,AT1,AT3,NC1,NC2,NC3,nw,DI,L<:LatticeMatrix{D,T3,AT3,NC1,NC3,nw,DI}}
 
     shift = get_shift(B)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mulshifted_OperatorSecond!, C.A, A, B.data.A, Val(NC1), Val(NC2), Val(NC3), Val(nw), C.indexer, shift
     )
     #set_halo!(C)
@@ -184,7 +184,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::OperatorSecond{NC2,NC4}, B::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}) where {
     D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_UOperatorSecondB!, C.A, U.A, A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer
     )
     #set_halo!(C)
@@ -290,7 +290,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,L<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}}
 
     shift = get_shift(B)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_UOperatorSecondshiftedB!, C.A, U.A, A, B.data.A,
         Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer, shift
     )
@@ -366,7 +366,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     A::OperatorSecond{NC2,NC4}, B::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}) where {
     D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_UdagOperatorSecondB!, C.A, U.data.A, A, B.A, Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer
     )
     #set_halo!(C)
@@ -466,13 +466,13 @@ end
 
 #C = shiftedUdag*B*A^T
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    U::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    U::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
     A::OperatorSecond{NC2,NC4}, B::TB) where {
     D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI},
     TB<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}}
 
     shift = get_shift(U)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondB!, C.A, U.data.data.A, A, B.A,
         Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer, shift
     )
@@ -586,7 +586,7 @@ end
 
 #C = shiftedUdag*shiftedB*A^T
 function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    U::Adjoint_Lattice{Shifted_Lattice{L1,D}},
+    U::Adjoint_Lattice{<:Shifted_Lattice{L1,D}},
     A::OperatorSecond{NC2,NC4}, B::Shifted_Lattice{L2,D}) where {
     D,T1,T2,T3,AT1,AT2,AT3,NC1,NC2,NC3,NC4,nw,nw1,DI,L1<:LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI},
     L2<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI}}
@@ -594,7 +594,7 @@ function LinearAlgebra.mul!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
 
     shift = get_shift(U)
     shift2 = get_shift(B)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB!, C.A, U.data.data.A, A, B.data.A,
         Val(NC1), Val(NC2), Val(NC3), Val(NC4), Val(nw), Val(nw1), C.indexer, shift, shift2
     )
@@ -716,7 +716,7 @@ function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     U2::LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI}, A2::OperatorSecond{NC2,NC6}, B2::LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI}) where {
     D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI}
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_UOperatorSecondB_sum!, C.A,
         U1.A, A1, B1.A,
         U2.A, A2, B2.A,
@@ -828,13 +828,13 @@ export mul_and_sum!
 #C = U1*x1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
 function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
-    U2::Adjoint_Lattice{Shifted_Lattice{L2,D}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2}) where {
+    U2::Adjoint_Lattice{<:Shifted_Lattice{L2,D}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2}) where {
     D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
     BL2<:LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI}}
 
     shift1 = get_shift(U2)
     shift2 = get_shift(B2)
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedB_sum!, C.A,
         U1.A, A1, B1.A,
         U2.data.data.A, A2, B2.data.A,
@@ -947,7 +947,7 @@ end
 #C = U1*shiftedx1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
 function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::Shifted_Lattice{BL1},
-    U2::Adjoint_Lattice{Shifted_Lattice{L2,D}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2}) where {
+    U2::Adjoint_Lattice{<:Shifted_Lattice{L2,D}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2}) where {
     D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
     BL1<:LatticeMatrix{D,T3,AT3,NC3,NC4,nw,DI},
     BL2<:LatticeMatrix{D,T5,AT5,NC5,NC6,nw,DI}}
@@ -956,7 +956,7 @@ function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     shiftU = get_shift(U2)
     shift2 = get_shift(B2)
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!, C.A,
         U1.A, A1, B1.data.A,
         U2.data.data.A, A2, B2.data.A,
@@ -1068,7 +1068,7 @@ end
 
 #C = U1*shiftedx1*A1^T + shiftedU2dag*shiftgedx2*A2^T 
 function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
-    U2::Adjoint_Lattice{Shifted_Lattice{L2,D}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2},
+    U2::Adjoint_Lattice{<:Shifted_Lattice{L2,D}}, A2::OperatorSecond{NC2,NC6}, B2::Shifted_Lattice{BL2},
     U1::LatticeMatrix{D,T2,AT2,NC1,NC3,nw1,DI}, A1::OperatorSecond{NC2,NC4}, B1::Shifted_Lattice{BL1}
 ) where {
     D,T1,T2,T3,T4,T5,AT1,AT2,AT3,AT4,AT5,NC1,NC2,NC3,NC4,NC5,NC6,nw,nw1,nw2,DI,L2<:LatticeMatrix{D,T4,AT4,NC1,NC5,nw2,DI},
@@ -1080,7 +1080,7 @@ function mul_and_sum!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},
     shift1 = get_shift(B1)
 
 
-    JACC.parallel_for(
+    _parallel_for_mutating!(C,
         prod(C.PN), kernel_Dmatrix_mul_shiftedUdagOperatorSecondshiftedshiftedB_sum!, C.A,
         U1.A, A1, B1.data.A,
         U2.data.data.A, A2, B2.data.A,

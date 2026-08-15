@@ -19,6 +19,27 @@ abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} 
 # ---------------------------------------------------------------------------
 # container  (faces / derived datatypes are GONE)
 # ---------------------------------------------------------------------------
+mutable struct HaloEpoch
+    core::UInt64
+    halo::UInt64
+end
+
+HaloEpoch() = HaloEpoch(0, 0)
+
+mutable struct DirectShiftHostBuffers{T}
+    send::Vector{T}
+    recv::Vector{T}
+end
+
+DirectShiftHostBuffers(::Type{T}) where {T} =
+    DirectShiftHostBuffers{T}(Vector{T}(), Vector{T}())
+
+function _ensure_direct_shift_host_buffers!(buffers::DirectShiftHostBuffers, count::Int)
+    length(buffers.send) < count && resize!(buffers.send, count)
+    length(buffers.recv) < count && resize!(buffers.recv, count)
+    return buffers
+end
+
 #struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
 struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
     nw::Int                          # ghost width
@@ -35,20 +56,65 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
     A::AT                           # main array (NC first)
     buf::Vector{AT}                   # 2D work buffers (minus/plus)
     buf_host::Vector{Array{T}}      # Host array on CPUs to send and to receive 
+    shift_buf_host::DirectShiftHostBuffers{T}
 
     myrank::Int
     PN::NTuple{D,Int}
     comm::MPI.Comm
     indexer::DI
     temps::PreallocatedArray{AT,Union{Nothing,String},false}
+    halo_epoch::HaloEpoch
     #stride::NTuple{D,Int}
 end
+
+"""
+    mark_halo_dirty!(lattice)
+
+Advance the core-data epoch after modifying the local lattice data. Public
+mutating operations call this automatically. Call it explicitly after writing
+through `lattice.A` directly.
+
+On an MPI lattice, rank-local mutations and later shifted reads must follow the
+same control flow on every rank because halo synchronization is collective.
+"""
+@inline function mark_halo_dirty!(ls::LatticeMatrix)
+    epoch = ls.halo_epoch
+    epoch.core += UInt64(1)
+    if iszero(ls.nw)
+        epoch.halo = epoch.core
+    end
+    return nothing
+end
+
+@inline function _mark_halo_clean!(ls::LatticeMatrix)
+    ls.halo_epoch.halo = ls.halo_epoch.core
+    return nothing
+end
+
+"""Return whether the stored halo is older than the lattice core data."""
+@inline halo_is_dirty(ls::LatticeMatrix) = ls.halo_epoch.core != ls.halo_epoch.halo
+
+"""Return the current `(core, halo)` epochs as a named tuple."""
+@inline halo_epochs(ls::LatticeMatrix) = (core=ls.halo_epoch.core, halo=ls.halo_epoch.halo)
+
+function _parallel_for_mutating!(destination::LatticeMatrix, args...; kwargs...)
+    mark_halo_dirty!(destination)
+    return JACC.parallel_for(args...; kwargs...)
+end
+
+export mark_halo_dirty!, halo_is_dirty, halo_epochs
 
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
     numtemps = length(ls.temps._data)
     tA = zero(ls.A)
     temps = PreallocatedArray(tA; num=numtemps, haslabel=false)
+    buf = similar(ls.buf)
+    buf_host = similar(ls.buf_host)
+    for i in eachindex(ls.buf)
+        buf[i] = zero(ls.buf[i])
+        buf_host[i] = similar(ls.buf_host[i])
+    end
 
     return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
         ls.phases,
@@ -60,13 +126,47 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         ls.dims,
         ls.nbr,
         tA,
-        ls.buf,
-        ls.buf_host,
+        buf,
+        buf_host,
+        DirectShiftHostBuffers(T),
         ls.myrank,
         ls.PN,
         ls.comm,
         ls.indexer,
-        temps
+        temps,
+        HaloEpoch()
+    )
+end
+
+@inline function _lattice_alias_with_array(
+    ls::TL,
+    A::AT;
+    phases=ls.phases,
+    halo_epoch=HaloEpoch(),
+    temps=ls.temps,
+    shift_buf_host=ls.shift_buf_host,
+) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
+    phase_vector = phases isa typeof(ls.phases) ? phases : typeof(ls.phases)(phases)
+    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(
+        ls.nw,
+        phase_vector,
+        ls.NC1,
+        ls.NC2,
+        ls.gsize,
+        ls.cart,
+        ls.coords,
+        ls.dims,
+        ls.nbr,
+        A,
+        ls.buf,
+        ls.buf_host,
+        shift_buf_host,
+        ls.myrank,
+        ls.PN,
+        ls.comm,
+        ls.indexer,
+        temps,
+        halo_epoch,
     )
 end
 
@@ -74,24 +174,58 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
-    comm0=MPI.COMM_WORLD, numtemps=1)
-    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw, elementtype, phases, comm0, numtemps)
+    comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
+    return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs;
+        nw, elementtype, phases, comm0, numtemps, device_mapping)
 end
 
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
-    return LatticeMatrix_standard(A, dim, PEs; nw, phases, comm0, numtemps)
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+    device_mapping=:auto)
+    return LatticeMatrix_standard(A, dim, PEs;
+        nw, phases, comm0, numtemps, device_mapping)
 end
 
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD,
-    numtemps=1)
+    numtemps=1, device_mapping=:auto)
+
+    nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
+    dim > 0 || throw(ArgumentError("dim must be positive, got $dim"))
+    length(gsize) == dim || throw(ArgumentError(
+        "global size must have $dim entries, got $(length(gsize))"))
+    length(PEs) == dim || throw(ArgumentError(
+        "process grid must have $dim entries, got $(length(PEs))"))
+    length(phases) == dim || throw(ArgumentError(
+        "phases must have $dim entries, got $(length(phases))"))
+    NC1 > 0 && NC2 > 0 || throw(ArgumentError("matrix dimensions must be positive"))
+
+    gsize = ntuple(i -> Int(gsize[i]), dim)
+    dims = ntuple(i -> Int(PEs[i]), dim)
+    all(>(0), gsize) || throw(ArgumentError("global lattice sizes must be positive, got $gsize"))
+    all(>(0), dims) || throw(ArgumentError("process-grid sizes must be positive, got $dims"))
+    any(iszero, phases) && throw(ArgumentError(
+        "boundary phases must be nonzero because negative wraps use inv(phase)"))
+    for d in 1:dim
+        iszero(gsize[d] % dims[d]) || throw(ArgumentError(
+            "global size $(gsize[d]) in dimension $d is not divisible by process-grid size $(dims[d])"))
+    end
+    comm_size = MPI.Comm_size(comm0)
+    prod(dims) == comm_size || throw(ArgumentError(
+        "process grid $dims contains $(prod(dims)) ranks, but communicator contains $comm_size"))
+    PN = ntuple(i -> gsize[i] ÷ dims[i], dim)
+    for d in 1:dim
+        nw <= PN[d] || throw(ArgumentError(
+            "halo width nw=$nw exceeds local lattice size $(PN[d]) in dimension $d; " *
+            "the nearest-neighbor halo exchange requires nw <= local size"))
+    end
+
+    _prepare_backend_device!(comm0, device_mapping)
 
     # Cartesian grid
     D = dim
     T = elementtype
-    dims = PEs #MPI.dims_create(MPI.Comm_size(MPI.COMM_WORLD), D)
     periodic = ntuple(_ -> true, D)
     #println(dims)
     #println(periodic)
@@ -109,23 +243,25 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #stride = ntuple(i -> (i == 1 ? 1 : prod(locS[1:i-1])), D)
 
     # contiguous buffers for each face
-    buf = Vector{typeof(A)}(undef, 4D)
-    buf_host = Vector{Array{elementtype}}(undef, 4D)
-    for d in 1:D
-        shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
-        buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
-        buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
-        buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
-        buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
+    nbuf = iszero(nw) ? 0 : 4D
+    buf = Vector{typeof(A)}(undef, nbuf)
+    buf_host = Vector{Array{elementtype}}(undef, nbuf)
+    if !iszero(nw)
+        for d in 1:D
+            shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
+            buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
+            buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
+            buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
+            buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
 
-        buf_host[4d-3] = Array(buf[4d-3])
-        buf_host[4d-2] = Array(buf[4d-2])
-        buf_host[4d-1] = Array(buf[4d-1])
-        buf_host[4d] = Array(buf[4d])
+            buf_host[4d-3] = Array(buf[4d-3])
+            buf_host[4d-2] = Array(buf[4d-2])
+            buf_host[4d-1] = Array(buf[4d-1])
+            buf_host[4d] = Array(buf[4d])
+        end
     end
 
 
-    PN = ntuple(i -> gsize[i] ÷ dims[i], D)
     #println("LatticeMatrix: $dims, $gsize, $PN, $nw")
     #indexer = DIndexer(gsize)
     indexer = DIndexer(PN)
@@ -138,10 +274,12 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
     return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, buf_host, MPI.Comm_rank(cart), PN, comm0, indexer, temps)
+        A, buf, buf_host, DirectShiftHostBuffers(T), MPI.Comm_rank(cart), PN, comm0,
+        indexer, temps, HaloEpoch())
 end
 
-function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1)
+function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+    device_mapping=:auto)
 
     NC1, NC2, NN... = size(A)
     #println(NN)
@@ -155,7 +293,8 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
     #end
     gsize = NN
 
-    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs; elementtype, nw, phases, comm0, numtemps)
+    ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs;
+        elementtype, nw, phases, comm0, numtemps, device_mapping)
     MPI.Bcast!(A, ls.cart)
     Acpu = Array(ls.A)
 
@@ -185,6 +324,7 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
     Agpu = JACC.array(Acpu)
     ls.A .= Agpu
 
+    mark_halo_dirty!(ls)
     set_halo!(ls)
     #println(ls.A)
 
@@ -197,7 +337,9 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
 end
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
-    return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims; nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1)
+    return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims;
+        nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1,
+        device_mapping=:current)
 end
 
 
@@ -260,19 +402,45 @@ end
 
 
 
+Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}}
+    _mark_halo_clean!(ls)
+    return nothing
+end
+
 Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     # Single-process lattices do not need MPI communication. Keep halo updates local.
     if MPI.Comm_size(ls.cart) == 1
         for id = 1:D
             exchange_dim_local!(ls, id)
         end
-        return
+        _mark_halo_clean!(ls)
+        return nothing
     end
     for id = 1:D
         exchange_dim!(ls, id)
     end
+    _mark_halo_clean!(ls)
+    return nothing
 end
 export set_halo!
+
+"""
+    ensure_halo!(lattice)
+
+Synchronize the halo only when its epoch is older than the core-data epoch.
+Shifted lattice operations call this automatically.
+"""
+Base.@noinline function ensure_halo!(ls::LatticeMatrix)
+    halo_is_dirty(ls) && set_halo!(ls)
+    return nothing
+end
+
+@inline function _ensure_halo_for_shift!(ls::LatticeMatrix, shift)
+    any(s -> !iszero(s), shift) && ensure_halo!(ls)
+    return nothing
+end
+
+export ensure_halo!
 
 # ---------------------------------------------------------------------------
 # helpers that build proper “view tuples” without parsing errors
@@ -351,7 +519,7 @@ function exchange_dim_local!(ls::LatticeMatrix{D}, d::Int) where D
 
     # minus ghost <= plus face
     copy!(gminus, fplus)
-    _mul_phase!(gminus, ls.phases[d])
+    _mul_phase!(gminus, inv(ls.phases[d]))
 
     # plus ghost <= minus face
     copy!(gplus, fminus)
@@ -436,7 +604,7 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     else
         copy!(bufSP, fplus)
         if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(bufSP, ls.phases[d])
+            _mul_phase!(bufSP, inv(ls.phases[d]))
         end
 
         cnt = length(bufSP)
@@ -610,6 +778,7 @@ end
 export gather_and_bcast_matrix
 
 @inline function _mul_phase!(buf, ϕ)
+    isone(ϕ) && return nothing
     buf .*= ϕ
     return
 end

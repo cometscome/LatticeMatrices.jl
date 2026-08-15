@@ -290,10 +290,18 @@ deps = ["InteractiveUtils", "JACC", "LinearAlgebra", "MPI", "MPIPreferences", "P
 path = "../.."
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
 version = "0.3.3"
-weakdeps = ["Enzyme"]
 
     [deps.LatticeMatrices.extensions]
+    LatticeMatricesAMDGPUExt = "AMDGPU"
+    LatticeMatricesCUDAExt = "CUDA"
     LatticeMatricesEnzymeExt = "Enzyme"
+    LatticeMatricesoneAPIExt = "oneAPI"
+
+    [deps.LatticeMatrices.weakdeps]
+    AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+    CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+    oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
 
 [[deps.LazyArtifacts]]
 deps = ["Artifacts", "Pkg"]

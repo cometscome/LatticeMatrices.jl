@@ -6,6 +6,11 @@ using LinearAlgebra
 using InteractiveUtils
 JACC.@init_backend
 using MPI, JACC, StaticArrays
+
+const LATTICEMATRICES_EXTENDED_TESTS = lowercase(get(
+    ENV, "LATTICEMATRICES_EXTENDED_TESTS", "false")) in
+    ("1", "true", "yes", "on")
+
 include("nw0.jl")
 include("site_rng.jl")
 include("random_fill.jl")
@@ -14,22 +19,26 @@ include("device_selection.jl")
 include("regressions.jl")
 include("matrixexp_su3.jl")
 include("cg.jl")
-include("enzyme.jl")
-include("enzyme_gradient.jl")
-include("wilson_dirac_ad.jl")
-include("wilson_clover_ad.jl")
-include("staggered_dirac_ad.jl")
-include("hisq_dirac_ad.jl")
-include("hisq_smearing_ad.jl")
 include("wilson_clover.jl")
 include("staggered_dirac.jl")
 include("hisq_dirac.jl")
-include("hisq_smearing.jl")
-include("hisq_full_smearing.jl")
-include("hisq_full_smearing_ad.jl")
-include("hisq_end_to_end_ad.jl")
 include("domainwall.jl")
-include("domainwall_ad.jl")
+include("ci_hisq_smoke.jl")
+
+if LATTICEMATRICES_EXTENDED_TESTS
+    include("hisq_smearing.jl")
+    include("hisq_full_smearing.jl")
+    include("enzyme.jl")
+    include("enzyme_gradient.jl")
+    include("wilson_dirac_ad.jl")
+    include("wilson_clover_ad.jl")
+    include("staggered_dirac_ad.jl")
+    include("hisq_dirac_ad.jl")
+    include("hisq_smearing_ad.jl")
+    include("hisq_full_smearing_ad.jl")
+    include("hisq_end_to_end_ad.jl")
+    include("domainwall_ad.jl")
+end
 
 @testset "boundary phase multiplication" begin
     buf = ComplexF64[1 + 2im, 3 + 4im]
@@ -503,8 +512,7 @@ function operatortest2(NC, dim)
     end
 end
 
-function multtest(NC, dim)
-    NX = 16
+function multtest(NC, dim; NX=16)
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     myrank = MPI.Comm_rank(MPI.COMM_WORLD)
     #=
@@ -834,8 +842,7 @@ function indextest(dim)
     end
 end
 
-function wilsondiractest(NC)
-    NX = 32
+function wilsondiractest(NC; NX=32, repetitions=10)
     dim = 4
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     myrank = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -890,7 +897,10 @@ function wilsondiractest(NC)
     onepgamma = zeros(ComplexF64, 4, 4)
     onemgamma = zeros(ComplexF64, 4, 4)
 
-    L = (4 - 1) * NX * NX * NX + (4 - 1) * NX * NX + (4 - 1) * NX + 4
+    site_coordinate = min(4, NX)
+    L = (site_coordinate - 1) * NX * NX * NX +
+        (site_coordinate - 1) * NX * NX +
+        (site_coordinate - 1) * NX + site_coordinate
     indexer = DIndexer(gsize)
     indices = delinearize(indexer, L, nw)
     indices_a = delinearize(indexer, L, 0)
@@ -951,7 +961,7 @@ function wilsondiractest(NC)
     end
 
 
-    for i = 1:10
+    for i = 1:repetitions
         println("i = $i")
         @time mul!(M1, D, Mψ)
     end
@@ -968,22 +978,11 @@ function main()
     regressiontests()
     matrixexp_su3_tests()
     cg_tests()
-    enzymetests()
-    enzyme_gradient_tests()
-    wilson_dirac_ad_tests()
-    wilson_clover_ad_tests()
-    staggered_dirac_ad_tests()
-    hisq_dirac_ad_tests()
-    hisq_smearing_ad_tests()
-    hisq_full_smearing_ad_tests()
-    hisq_end_to_end_ad_tests()
-    domainwall_ad_tests()
     wilson_clover_tests()
     staggered_dirac_tests()
     hisq_dirac_tests()
-    hisq_smearing_tests()
-    hisq_full_smearing_tests()
     domainwall_tests()
+    ci_hisq_smoke_tests()
     #=
     for dim = 1:5
         indextest(dim)
@@ -991,20 +990,45 @@ function main()
 
     =#
 
-    for dim = 2:4
-        for NC = 2:4
+    if LATTICEMATRICES_EXTENDED_TESTS
+        hisq_smearing_tests()
+        hisq_full_smearing_tests()
+        enzymetests()
+        enzyme_gradient_tests()
+        wilson_dirac_ad_tests()
+        wilson_clover_ad_tests()
+        staggered_dirac_ad_tests()
+        hisq_dirac_ad_tests()
+        hisq_smearing_ad_tests()
+        hisq_full_smearing_ad_tests()
+        hisq_end_to_end_ad_tests()
+        domainwall_ad_tests()
+
+        for dim = 2:4, NC = 2:4
             @testset "NC = $NC, dim = $dim" begin
                 println("NC = $NC, dim = $dim")
                 multtest(NC, dim)
                 @time multtest(NC, dim)
             end
         end
-    end
 
-    for NC = 2:4
-        @testset "NC = $NC" begin
-            println("NC = $NC")
-            @time wilsondiractest(NC)
+        for NC = 2:4
+            @testset "extended Wilson NC = $NC" begin
+                println("NC = $NC")
+                @time wilsondiractest(NC)
+            end
+        end
+    else
+        # CI exercises representative generic and QCD shapes on small lattices.
+        # The full NC/dimension matrix and production-size Wilson run above are
+        # intentionally opt-in because they are performance/integration tests.
+        for (NC, dim) in ((2, 2), (3, 4))
+            @testset "CI matrix algebra NC = $NC, dim = $dim" begin
+                multtest(NC, dim; NX=2)
+            end
+        end
+        @testset "CI Wilson smoke" begin
+            wilsondiractest(3; NX=2, repetitions=0)
         end
     end
 

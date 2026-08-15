@@ -78,20 +78,39 @@ end
 
 """
     DdagDOp(D, temp)
+    DdagDOp(D::DiracOp)
 
 Allocation-free normal operator `D' * D`.  `temp` is caller-owned storage for
 `D*x` and must not alias the input or output passed to `mul!`.  A distinct
 `DdagDOp` (and `temp`) is required for each concurrent application.
+
+The one-argument `DiracOp` constructor is retained for compatibility.  It
+borrows the temporary field from `D.phitemps` for each application, as in the
+pre-v1 implementation.  New code should pass `temp` explicitly.
 """
 struct DdagDOp{T,F}
     D::T
     temp::F
 end
+
+DdagDOp(D::DiracOp) = DdagDOp(D, nothing)
+
 export DdagDOp
 
 Base.adjoint(A::DdagDOp) = A
 
 function LinearAlgebra.mul!(y, A::DdagDOp, x)
+    if A.temp === nothing
+        temp, temp_index = get_block(A.D.phitemps)
+        try
+            mul!(temp, A.D, x)
+            mul!(y, adjoint(A.D), temp)
+            return y
+        finally
+            unused!(A.D.phitemps, temp_index)
+        end
+    end
+
     (A.temp === x || A.temp === y) && throw(ArgumentError(
         "DdagDOp temporary field must not alias its input or output"))
     mul!(A.temp, A.D, x)
@@ -109,6 +128,18 @@ a [`CGResult`](@ref).
 function solve!(x, A::DdagDOp, b, r, p, Ap; kwargs...)
     return cg!(x, A, b, r, p, Ap; kwargs...)
 end
+
+"""
+    solve!(x, A::DdagDOp{<:DiracOp}, b; verboselevel=2)
+
+Compatibility interface that borrows CG work fields from `A.D.phitemps` and
+returns `nothing` on convergence.  New code should use the explicit-workspace
+method and inspect its `CGResult`.
+"""
+function solve!(x, A::DdagDOp{<:DiracOp}, b; verboselevel=2)
+    return cg(x, A, b, A.D.phitemps; verboselevel)
+end
+
 export solve!
 
 """
@@ -126,6 +157,24 @@ function pseudofermion_action(D, φ, η, Dη, r, p, Ap; kwargs...)
         "CG failed with reason $(result.reason) after $(result.iterations) iterations; " *
         "relative residual = $(result.relative_residual)")
     return real(dot(φ, η))
+end
+
+"""
+    pseudofermion_action(D::DiracOp, phi)
+
+Compatibility interface that borrows the solution and work fields from
+`D.phitemps`, matching the pre-v1 API.  New code should supply the five work
+fields explicitly.
+"""
+function pseudofermion_action(D::DiracOp, φ)
+    η, eta_index = get_block(D.phitemps)
+    try
+        normal_operator = DdagDOp(D)
+        solve!(η, normal_operator, φ)
+        return real(dot(φ, η))
+    finally
+        unused!(D.phitemps, eta_index)
+    end
 end
 
 export pseudofermion_action

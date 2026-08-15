@@ -948,6 +948,16 @@ LatticeMatrices.cg(x, normal, rhs, temps;
     eps=1e-10, maxsteps=5000, verboselevel=2)
 ```
 
+The pre-v1 `DiracOp` convenience interfaces are also retained. They borrow
+their work fields from `D.phitemps`; the explicit-workspace forms above are
+recommended for new code and concurrent applications:
+
+```julia
+legacy_normal = DdagDOp(D)
+solve!(x, legacy_normal, rhs; verboselevel=2)
+S = pseudofermion_action(D, phi)
+```
+
 The same operator code runs on the JACC backend selected for the current
 project.  For the CUDA correctness check and staggered benchmark, run:
 
@@ -1214,6 +1224,9 @@ enzyme_duplicated(primal, shadow)
 # Compatibility interface using a PreallocatedArray pool
 LatticeMatrices.cg(x, A, rhs, temps;
                    eps=1e-10, maxsteps=5000, verboselevel=2)
+DdagDOp(D)
+solve!(x, DdagD, rhs; verboselevel=2)
+pseudofermion_action(D, phi)
 ```
 
 ---

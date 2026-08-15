@@ -108,5 +108,36 @@ function cg_tests()
         end
     end
 
+    @testset "pre-v1 Dirac solver compatibility" begin
+        scale = 2 + im
+        apply_scale!(y, U1, U2, U3, U4, x, coefficient, phitemp, temp) =
+            mul!(y, coefficient, x)
+        apply_scale_adjoint!(y, U1, U2, U3, U4, x, coefficient, phitemp, temp) =
+            mul!(y, conj(coefficient), x)
+
+        U = [b for _ in 1:4]
+        D = DiracOp(U, apply_scale!, apply_scale_adjoint!, scale, b;
+            numtemp=1, numphitemp=4)
+        normal_operator = DdagDOp(D)
+        output = similar(b)
+        mul!(output, normal_operator, b)
+        normal_result = gather_matrix(output)
+        if rank == 0
+            @test normal_result ≈ abs2(scale) .* right_hand_side_array
+        end
+
+        x = similar(b)
+        clear_matrix!(x)
+        @test solve!(x, normal_operator, b; verboselevel=2) === nothing
+        solution = gather_matrix(x)
+        if rank == 0
+            @test solution ≈ right_hand_side_array ./ abs2(scale) atol=2e-13 rtol=2e-13
+        end
+
+        expected_action = real(dot(b, b)) / abs2(scale)
+        @test pseudofermion_action(D, b) ≈ expected_action atol=2e-13 rtol=2e-13
+        @test count(D.phitemps._flagusing) == 0
+    end
+
     return nothing
 end

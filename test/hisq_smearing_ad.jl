@@ -69,9 +69,9 @@ function hisq_smearing_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_hisq_smearing_ad_loss_from_links),
             Enzyme.Active,
-            Enzyme.Duplicated(U, dU),
-            Enzyme.Duplicated(V, dV),
-            Enzyme.Const(left),
+            enzyme_duplicated(U, dU),
+            enzyme_duplicated(V, dV),
+            Enzyme.Const(Tuple(left)),
         )
 
         epsilon = 2e-6

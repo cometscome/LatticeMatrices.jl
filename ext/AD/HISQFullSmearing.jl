@@ -125,8 +125,8 @@ function ER.augmented_primal(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_project_u3!)},
     ::Type{RT},
-    projected_links::ER.Annotation{<:Vector},
-    fat_links::ER.Annotation{<:Vector},
+    projected_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    fat_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
 ) where RT
     primal_return = hisq_project_u3!(projected_links.val, fat_links.val)
     tape = nothing
@@ -141,11 +141,11 @@ function ER.reverse(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_project_u3!)},
     _dresult_out, _tape,
-    projected_links::ER.Annotation{<:Vector},
-    fat_links::ER.Annotation{<:Vector},
+    projected_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    fat_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
 )
     dprojected = _hisq_smearing_vector_shadow(projected_links)
-    dprojected isa AbstractVector || return (nothing, nothing)
+    dprojected isa Union{AbstractVector,Tuple} || return (nothing, nothing)
     dfat = _hisq_smearing_vector_shadow(fat_links)
     _hisq_project_u3_pullback!(dfat, dprojected, fat_links.val)
     return (nothing, nothing)
@@ -181,8 +181,8 @@ function ER.augmented_primal(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_naik_links!)},
     ::Type{RT},
-    long_links::ER.Annotation{<:Vector},
-    reunitarized_links::ER.Annotation{<:Vector},
+    long_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    reunitarized_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
 ) where RT
     reunitarized_links.val[1].nw < 2 && throw(ArgumentError(
         "Enzyme differentiation of hisq_naik_links! requires nw >= 2"))
@@ -200,11 +200,11 @@ function ER.reverse(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_naik_links!)},
     _dresult_out, _tape,
-    long_links::ER.Annotation{<:Vector},
-    reunitarized_links::ER.Annotation{<:Vector},
+    long_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    reunitarized_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
 )
     dlong = _hisq_smearing_vector_shadow(long_links)
-    dlong isa AbstractVector || return (nothing, nothing)
+    dlong isa Union{AbstractVector,Tuple} || return (nothing, nothing)
     dinput = _hisq_smearing_vector_shadow(reunitarized_links)
     _hisq_naik_pullback!(
         dinput, dlong, reunitarized_links.val, long_links.val)
@@ -248,7 +248,7 @@ end
     return T(
         primal.nw, primal.phases, primal.NC1, primal.NC2, primal.gsize,
         primal.cart, primal.coords, primal.dims, primal.nbr,
-        array, primal.buf, primal.buf_host,
+        array, primal.buf, primal.buf_host, primal.shift_buf_host,
         primal.myrank, primal.PN, primal.comm, primal.indexer,
         primal.temps, HaloEpoch(),
     )

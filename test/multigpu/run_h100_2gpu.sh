@@ -17,6 +17,7 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
 fi
 
 visible_devices="${CUDA_VISIBLE_DEVICES:-0,1}"
+export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 export CUDA_VISIBLE_DEVICES="$visible_devices"
 export JULIA_PKG_PRECOMPILE_AUTO=0
 

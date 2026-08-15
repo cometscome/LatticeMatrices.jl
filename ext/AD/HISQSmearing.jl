@@ -9,7 +9,7 @@ using StaticArrays: SVector
     hasproperty(annotation, :dval) || return nothing
     shadow = getproperty(annotation, :dval)
     shadow isa Base.RefValue && (shadow = shadow[])
-    return shadow isa AbstractVector ? shadow : nothing
+    return shadow isa Union{AbstractVector,Tuple} ? shadow : nothing
 end
 
 @inline function _hisq_fat7_path_link_offset(path, occurrence)
@@ -294,8 +294,8 @@ function ER.augmented_primal(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_fat7_level1!)},
     ::Type{RT},
-    fat_links::ER.Annotation{<:Vector},
-    thin_links::ER.Annotation{<:Vector},
+    fat_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    thin_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
 ) where RT
     iszero(thin_links.val[1].nw) && throw(ArgumentError(
         "Enzyme differentiation of hisq_fat7_level1! requires nw >= 1"))
@@ -312,8 +312,8 @@ function ER.reverse(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_fat7_level1!)},
     _dresult_out, _tape,
-    fat_links::ER.Annotation{<:Vector},
-    thin_links::ER.Annotation{<:Vector},
+    fat_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    thin_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
 )
     real_type = typeof(real(zero(eltype(thin_links.val[1].A))))
     coefficients = (
@@ -332,7 +332,7 @@ function _hisq_fat7_reverse!(
     fat_links, thin_links, coefficients, operation_name,
 )
     dV = _hisq_smearing_vector_shadow(fat_links)
-    dV isa AbstractVector || return nothing
+    dV isa Union{AbstractVector,Tuple} || return nothing
     dU = _hisq_smearing_vector_shadow(thin_links)
     return _hisq_fat7_pullback!(
         dU, dV, thin_links.val, fat_links.val,
@@ -406,8 +406,8 @@ function ER.augmented_primal(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_fat7_level2!)},
     ::Type{RT},
-    fat_links::ER.Annotation{<:Vector},
-    reunitarized_links::ER.Annotation{<:Vector},
+    fat_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    reunitarized_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
     naik_epsilon::ER.Annotation,
 ) where RT
     reunitarized_links.val[1].nw < 2 && throw(ArgumentError(
@@ -426,8 +426,8 @@ function ER.reverse(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_fat7_level2!)},
     _dresult_out, _tape,
-    fat_links::ER.Annotation{<:Vector},
-    reunitarized_links::ER.Annotation{<:Vector},
+    fat_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
+    reunitarized_links::ER.Annotation{<:Union{AbstractVector,Tuple}},
     naik_epsilon::ER.Annotation,
 )
     real_type = typeof(real(zero(eltype(reunitarized_links.val[1].A))))
@@ -442,7 +442,7 @@ function ER.reverse(
     epsilon_cotangent = nothing
     if naik_epsilon isa ER.Active
         dV = _hisq_smearing_vector_shadow(fat_links)
-        epsilon_cotangent = if dV isa AbstractVector
+        epsilon_cotangent = if dV isa Union{AbstractVector,Tuple}
             real(
                 dot(dV[1], reunitarized_links.val[1]) +
                 dot(dV[2], reunitarized_links.val[2]) +

@@ -4,7 +4,7 @@ using LatticeMatrices
 using Enzyme
 using JACC
 import LatticeMatrices: Wirtinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU,
-    zero_halo_region!, zero_halo_dim!, fold_halo_dim_to_core_grad!
+    zero_halo_region!, zero_halo_dim!, fold_halo_dim_to_core_grad!, enzyme_duplicated
 
 
 include("./AD/AD.jl")
@@ -57,6 +57,40 @@ function _validate_enzyme_inputs(inputs::Pair...)
     return nothing
 end
 
+@static if VERSION >= v"1.12"
+    # Julia 1.12 passes the GC roots of immutable composite arguments
+    # separately from their inline fields.  Lattice matrices and fixed-size
+    # workspaces therefore need Enzyme's mixed-activity ABI.
+    @inline _enzyme_workspace(x::AbstractVector) = Tuple(x)
+end
+
+@inline _enzyme_workspace(x) = x
+
+@static if VERSION >= v"1.12"
+    @inline function enzyme_duplicated(x, dx)
+        return Enzyme.MixedDuplicated(x, Ref(dx))
+    end
+    @inline function enzyme_duplicated(
+        x::AbstractVector{<:LatticeMatrix},
+        dx::AbstractVector{<:LatticeMatrix},
+    )
+        length(x) == length(dx) || throw(DimensionMismatch(
+            "primal and shadow lattice collections must have equal length"))
+        return Enzyme.MixedDuplicated(Tuple(x), Ref(Tuple(dx)))
+    end
+else
+    @inline enzyme_duplicated(x, dx) = Enzyme.Duplicated(x, dx)
+end
+
+function _enzyme_workspace_pair(x, dx, label::AbstractString)
+    if x === nothing
+        dx === nothing || throw(ArgumentError("$label is nothing but its shadow is set"))
+        return nothing, nothing
+    end
+    dx === nothing && throw(ArgumentError("$label is set but its shadow is nothing"))
+    return _enzyme_workspace(x), _enzyme_workspace(dx)
+end
+
 function _fold_and_zero!(ls::LatticeMatrix)
     for d in length(ls.PN):-1:1
         fold_halo_dim_to_core_grad!(ls, d)
@@ -104,13 +138,15 @@ function Enzyme_derivative!(
         "dfdU1" => dfdU1, "dfdU2" => dfdU2, "dfdU3" => dfdU3, "dfdU4" => dfdU4,
         "args" => args, "temp" => temp, "dtemp" => dtemp,
         "phitemp" => phitemp, "dphitemp" => dphitemp)
+    temp, dtemp = _enzyme_workspace_pair(temp, dtemp, "temp")
+    phitemp, dphitemp = _enzyme_workspace_pair(phitemp, dphitemp, "phitemp")
     #println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
-    annU1 = Enzyme.Duplicated(U1, dfdU1)
-    annU2 = Enzyme.Duplicated(U2, dfdU2)
-    annU3 = Enzyme.Duplicated(U3, dfdU3)
-    annU4 = Enzyme.Duplicated(U4, dfdU4)
+    annU1 = enzyme_duplicated(U1, dfdU1)
+    annU2 = enzyme_duplicated(U2, dfdU2)
+    annU3 = enzyme_duplicated(U3, dfdU3)
+    annU4 = enzyme_duplicated(U4, dfdU4)
 
     # Convert additional arguments
     ann_args = map(toann, args)
@@ -134,10 +170,10 @@ function Enzyme_derivative!(
     else
         extra_args = Any[]
         if phitemp !== nothing
-            push!(extra_args, Duplicated(phitemp, dphitemp))
+            push!(extra_args, enzyme_duplicated(phitemp, dphitemp))
         end
         if temp !== nothing
-            push!(extra_args, Duplicated(temp, dtemp))
+            push!(extra_args, enzyme_duplicated(temp, dtemp))
         end
         result = Enzyme.autodiff(
             Reverse,
@@ -178,12 +214,13 @@ function Enzyme_derivative!(
         "U1" => U1, "U2" => U2, "U3" => U3,
         "dfdU1" => dfdU1, "dfdU2" => dfdU2, "dfdU3" => dfdU3,
         "args" => args, "temp" => temp, "dtemp" => dtemp)
+    temp, dtemp = _enzyme_workspace_pair(temp, dtemp, "temp")
     println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
-    annU1 = Enzyme.Duplicated(U1, dfdU1)
-    annU2 = Enzyme.Duplicated(U2, dfdU2)
-    annU3 = Enzyme.Duplicated(U3, dfdU3)
+    annU1 = enzyme_duplicated(U1, dfdU1)
+    annU2 = enzyme_duplicated(U2, dfdU2)
+    annU3 = enzyme_duplicated(U3, dfdU3)
 
     # Convert additional arguments
     ann_args = map(toann, args)
@@ -207,7 +244,7 @@ function Enzyme_derivative!(
             annU1,
             annU2,
             annU3,
-            ann_args..., Duplicated(temp, dtemp)
+            ann_args..., enzyme_duplicated(temp, dtemp)
             #ann_args..., DuplicatedNoNeed(temp, dtemp)
         )
     end
@@ -234,11 +271,12 @@ function Enzyme_derivative!(
         "U1" => U1, "U2" => U2,
         "dfdU1" => dfdU1, "dfdU2" => dfdU2,
         "args" => args, "temp" => temp, "dtemp" => dtemp)
+    temp, dtemp = _enzyme_workspace_pair(temp, dtemp, "temp")
     println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
-    annU1 = Enzyme.Duplicated(U1, dfdU1)
-    annU2 = Enzyme.Duplicated(U2, dfdU2)
+    annU1 = enzyme_duplicated(U1, dfdU1)
+    annU2 = enzyme_duplicated(U2, dfdU2)
 
     # Convert additional arguments
     ann_args = map(toann, args)
@@ -260,7 +298,7 @@ function Enzyme_derivative!(
             Active,
             annU1,
             annU2,
-            ann_args..., Duplicated(temp, dtemp)
+            ann_args..., enzyme_duplicated(temp, dtemp)
             #ann_args..., DuplicatedNoNeed(temp, dtemp)
         )
     end
@@ -283,10 +321,11 @@ function Enzyme_derivative!(
     _validate_enzyme_inputs(
         "U1" => U1, "dfdU1" => dfdU1,
         "args" => args, "temp" => temp, "dtemp" => dtemp)
+    temp, dtemp = _enzyme_workspace_pair(temp, dtemp, "temp")
     println("Enzyme_derivative! in LatticeMatrices.jl")
     Enzyme.API.strictAliasing!(false)
     # Primary variables: always differentiated
-    annU1 = Enzyme.Duplicated(U1, dfdU1)
+    annU1 = enzyme_duplicated(U1, dfdU1)
 
     # Convert additional arguments
     ann_args = map(toann, args)
@@ -306,7 +345,7 @@ function Enzyme_derivative!(
             Enzyme.Const(func),
             Active,
             annU1,
-            ann_args..., Duplicated(temp, dtemp)
+            ann_args..., enzyme_duplicated(temp, dtemp)
             #ann_args..., DuplicatedNoNeed(temp, dtemp)
         )
     end

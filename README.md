@@ -2,22 +2,68 @@
 
 [![Build Status](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
+🎉 **LatticeMatrices.jl has reached v1.0.0!** This is the first stable major release of the package.
+
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-- Per-site matrices (size `NC1×NC2`) stored in **column-major layout**:  
-  `(NC1, NC2, X, Y, Z, …)`
-- **MPI** domain decomposition via a Cartesian communicator (halo width `nw`, periodic BCs).
-- **GPU-ready** through **[JACC.jl](https://github.com/JuliaORNL/JACC.jl)** (portable CPU/GPU kernels; CUDA/ROCm/Threads).
-- Fast, allocation-free **indexing helpers** for kernels: `DIndexer`, `linearize`, `delinearize`, `shiftindices`.
-- Lattice-QCD fermion operators including Wilson, clover, staggered, and a **complete HISQ thin-link smearing and Dirac pipeline**.
+## What's new in v1.0.0
+
+Compared with the previous release, v0.3.13, v1.0.0 adds and stabilizes:
+
+- **Production parallel execution** with **[JACC.jl](https://github.com/JuliaORNL/JACC.jl)**
+  threaded CPU kernels, MPI,
+  hybrid MPI+threads, single GPU, and multi-GPU. Multi-GPU jobs normally use
+  one MPI rank per GPU, with automatic node-local rank-to-device mapping for
+  CUDA, AMDGPU/ROCm, and oneAPI backends.
+- **Safe automatic halo synchronization** using core and halo epochs. Public
+  mutations mark halos stale, and shifted reads synchronize them on demand.
+- **Arbitrary-distance periodic shifts**, including direct MPI redistribution,
+  boundary phases, reusable preallocated storage, and `nw=0` operation.
+- **A complete lattice-QCD operator suite**: Wilson, Wilson--clover, one-link
+  staggered, HISQ (two-level smearing, U(3) projection, and Naik links), and
+  Möbius/generalized domain-wall operators, together with their adjoints and
+  cached execution paths.
+- **Extended Enzyme reverse-mode AD**, including halo-aware pullbacks for the
+  Dirac operators and HISQ smearing. Enzyme is now an optional package
+  extension. The correctly spelled `Wirtinger` API is provided while the old
+  `Wiltinger` names remain as compatibility aliases.
+- **Decomposition-independent site utilities and random-number streams**, an
+  allocation-conscious CG solver, and a distributed non-QCD Heisenberg-model
+  example.
+
+**Upgrading from v0.3:** Existing constructors and legacy entry points remain
+available. Code that writes directly to `M.A` must now call
+`mark_halo_dirty!(M)` after completing its core writes; mutations through the
+public LatticeMatrices API do this automatically. Device selection is automatic
+by default; pass `device_mapping=:current` when the job launcher has already
+assigned a device to each MPI rank.
+
+## What you can do
+
+- Store real or complex `NC1×NC2` matrices at every site of an arbitrary
+  D-dimensional lattice. Common production types include `Float32`,
+  `Float64`, `ComplexF32`, and `ComplexF64`; square and rectangular site
+  matrices are supported.
+- Decompose a lattice over an MPI Cartesian process grid, use configurable
+  halo widths and periodic boundary phases, and gather, broadcast, or reduce
+  distributed results.
+- Run the same JACC-based kernels on threaded CPUs or accelerators, including
+  supported hybrid MPI+threads and multi-node/multi-GPU configurations.
+- Apply local and shifted matrix algebra, adjoints, traces, matrix
+  exponentials, traceless anti-Hermitian projections, even/odd updates, and
+  iterative solves.
+- Build and apply Wilson, clover, staggered, HISQ, and domain-wall fermion
+  operators, including `D`, `D'`, `D' * D`, CG solves, pseudofermion actions,
+  and cached HISQ/clover paths.
+- Differentiate lattice, fermion, and smearing calculations with Enzyme,
+  including complex-valued calculations through the Wirtinger interface.
+- Use LatticeMatrices.jl directly for general structured-lattice models or as
+  the MPI/JACC backend for [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl)
+  and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl).
 
 > This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.
 
 **Applications**: This package is designed to support large-scale simulations on structured lattices. A key application area is lattice QCD, where gauge fields and fermion fields are represented as matrix-valued objects on a multi-dimensional lattice. LatticeMatrices.jl provides the MPI/JACC lattice backend used by [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl), including distributed storage, halo synchronization, linear algebra kernels, and optional Enzyme AD support for gauge and fermion calculations. The same infrastructure can also be used for non-QCD structured-lattice problems; a distributed classical Heisenberg spin-model example is included below.
-
-
-
-**Current limitation.** Multi‑GPU execution and hybrid MPI+threads parallelism are **experimental** and **not yet thoroughly tested**; treat them as provisional.
 
 
 ---
@@ -42,7 +88,7 @@ using LatticeMatrices
 
 # Build an indexer for a D-dimensional lattice (1-based indices)
 gsize = (16, 16, 16, 16)     # global lattice size
-d = DIndexer(gsize)          # computes row-major "strides" internally
+d = DIndexer(gsize)          # computes column-major strides internally
 
 # Convert between linear and multi-index (1-based)
 L  = linearize(d, (1, 1, 1, 1))   # -> 1
@@ -59,14 +105,14 @@ DIndexer(dims_in::NTuple{D,<:Integer}) where {D}
 DIndexer(dims_in::AbstractVector{<:Integer})
 
 # 1-based linearization/delinearization (no heap allocs; GPU-friendly)
-linearize(::DIndexer{D,dims,strides}, idx::NTuple{D,Int32})::Int32
-delinearize(::DIndexer{D,dims,strides}, L::Integer, offset::Int32=0)::NTuple{D,Int32}
+linearize(::DIndexer{D,dims,strides}, idx::NTuple{D,T})::Int32 where {D,T<:Integer}
+delinearize(::DIndexer{D,dims,strides}, L::Integer, offset::Integer=0)::NTuple{D,Int}
 
 # elementwise shifting for index tuples
 shiftindices(indices, shift)
 ```
 
-- `delinearize(...; offset)` is handy to **map into halo regions**, e.g. pass `offset = nw`.
+- `delinearize(..., offset)` is handy to **map into halo regions**, e.g. pass `offset = nw`.
 
 ---
 
@@ -80,21 +126,20 @@ JACC.@init_backend
 MPI.Init()
 
 dim   = 4
-gsize = ntuple(_ -> 16, dim)   # global spatial size per dimension
 nw    = 1                      # ghost width
 NC    = 3                      # per-site matrix size (NC×NC)
 
-# Choose a Cartesian process grid (PEs) of length `dim`
+# This decomposition is valid for any positive MPI process count.
 nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-n1 = max(nprocs ÷ 2, 1)
-PEs = ntuple(i -> i == 1 ? n1 : (i == 2 ? nprocs ÷ n1 : 1), dim)
+gsize = (4 * nprocs, 16, 16, 16)
+PEs = (nprocs, 1, 1, 1)
 
 # Construct an empty lattice matrix (device array via JACC.zeros)
 M = LatticeMatrix(NC, NC, dim, gsize, PEs; nw, elementtype=ComplexF64)
 
 # Or initialize from an existing array (broadcast to ranks)
 A = rand(ComplexF64, NC, NC, gsize...)
-M2 = LatticeMatrix(A, dim, PEs; nw)
+M2 = LatticeMatrix(A, dim, PEs; nw, numtemps=2)
 
 # Halo exchange across all spatial dimensions
 set_halo!(M)
@@ -128,6 +173,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <:
     A::AT                         # local halo-padded array
     buf::Vector{AT}               # device-side communication buffers
     buf_host::Vector{Array{T}}    # host-side communication buffers
+    shift_buf_host::DirectShiftHostBuffers{T}
     myrank::Int
     PN::NTuple{D,Int}             # local interior size per dimension
     comm::MPI.Comm                # original communicator
@@ -144,9 +190,11 @@ and halo epochs so shifted reads can synchronize stale halo data automatically.
 **Constructors**
 ```julia
 LatticeMatrix(NC1, NC2, dim, gsize, PEs;
-              nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD)
+              nw=1, elementtype=ComplexF64, phases=ones(dim),
+              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
 
-LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
+LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
+              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
 ```
 
 - **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.
@@ -209,7 +257,7 @@ A2 = rand(ComplexF64, NC, NC, gsize...)
 A3 = rand(ComplexF64, NC, NC, gsize...)
 
 M1 = LatticeMatrix(NC, NC, dim, gsize, PEs; nw)
-M2 = LatticeMatrix(A2, dim, PEs; nw)
+M2 = LatticeMatrix(A2, dim, PEs; nw, numtemps=2)
 M3 = LatticeMatrix(A3, dim, PEs; nw)
 
 # Choose a site (using DIndexer + halos)
@@ -244,6 +292,7 @@ Adjoints and **shifted** operands are supported via wrappers:
 
 ```julia
 M2p = Shifted_Lattice(M2, (1, 0, 0, 0))    # shift by +1 along X (periodic)
+M3p = Shifted_Lattice(M3, (0, 1, 0, 0))    # shift by +1 along Y
 mul!(M1, M2', M3p)                          # all combinations in tests:
                                             # (A, B, C), (A, B', C), (A, B, C'), etc.
 ```
@@ -252,6 +301,33 @@ For `nw > 0`, an in-halo shift is a lightweight view and therefore observes late
 changes to its source lattice. For `nw == 0`, a nonzero shift is materialized when
 `Shifted_Lattice` is constructed, so it is a snapshot. This eager behavior keeps every
 public operation safe even though a halo-free lattice has no boundary storage.
+
+If any component of a shift is larger than `nw`, the shift is materialized in
+one direct MPI redistribution instead of extending the halo one cell at a time.
+The result borrows storage from the source lattice's `PreallocatedArray` pool.
+Return that slot deterministically after use:
+
+```julia
+long_shift = Shifted_Lattice(M2, (nw + 2, 0, 0, 0))
+try
+    mul!(M1, long_shift, M3)
+finally
+    release!(long_shift)          # `close(long_shift)` is equivalent
+end
+
+# The scoped helper performs the same release even if the callback throws.
+with_shifted_lattice(M2, (nw + 2, 0, 0, 0)) do shifted
+    mul!(M1, shifted, M3)
+end
+```
+
+`release!` is idempotent and is a no-op for lightweight in-halo shifts. A
+finalizer on the internal lease is a safety net if a materialized wrapper is
+dropped, but explicit/scoped release is preferred because finalizer timing is
+nondeterministic. Set the constructor keyword `numtemps` high enough for the
+maximum number of simultaneously live long shifts; the pool grows on demand
+when exhausted and then reuses those arrays. The constructor rejects
+`nw > minimum(local lattice extents)`.
 
 **Convenience**
 ```julia
@@ -491,15 +567,22 @@ Bridge++ oracle source is
 #### Complete HISQ smearing and stencil (SIMULATeQCD convention)
 
 The first HISQ smearing level can be constructed directly from periodic thin
-links. It sums the 1-, 3-, 5-, and 7-link paths with the SIMULATeQCD
+links. The complete stencil needs `nw>=3`, so use a separate set of thin
+links and a staggered field with that halo width. The smearing sums the 1-,
+3-, 5-, and 7-link paths with the SIMULATeQCD
 coefficients `1/8`, `1/16`, `1/64`, and `1/384`:
 
 ```julia
-V = hisq_fat7_level1(U)
+nw_hisq = 3
+U_hisq = [LatticeMatrix(unit_link, 4, PEs; nw=nw_hisq) for _ in 1:4]
+psi_hisq = LatticeMatrix(psi_staggered_host, 4, PEs;
+    nw=nw_hisq, phases=(1, 1, 1, -1))
+
+V = hisq_fat7_level1(U_hisq)
 
 # An allocation-controlling form is also available.
-V_preallocated = [similar(link) for link in U]
-hisq_fat7_level1!(V_preallocated, U)
+V_preallocated = [similar(link) for link in U_hisq]
+hisq_fat7_level1!(V_preallocated, U_hisq)
 ```
 
 `V` is the unprojected level-1 field. This builder accepts `nw>=1`; a slower
@@ -512,36 +595,36 @@ three-link product:
 
 ```julia
 epsilon_N = -0.083
-hisq_links = hisq_links_from_thin(U; naik_epsilon=epsilon_N)
+hisq_links = hisq_links_from_thin(U_hisq; naik_epsilon=epsilon_N)
 D_hisq = HISQDiracOperator4D(
     hisq_links, mass; naik_epsilon=epsilon_N)
 
 # Equivalent convenience constructor.
 D_hisq_from_U = HISQDiracOperator4D(
-    U, mass; naik_epsilon=epsilon_N)
+    U_hisq, mass; naik_epsilon=epsilon_N)
 ```
 
 For repeated construction, all output and work storage can be caller-owned:
 
 ```julia
-V = [similar(link) for link in U] # level-1 work
-W = [similar(link) for link in U] # reunitarized work
-X = [similar(link) for link in U] # corrected fat links
-L = [similar(link) for link in U] # forward-anchored Naik links
+V = [similar(link) for link in U_hisq] # level-1 work
+W = [similar(link) for link in U_hisq] # reunitarized work
+X = [similar(link) for link in U_hisq] # corrected fat links
+L = [similar(link) for link in U_hisq] # forward-anchored Naik links
 
-hisq_links_from_thin!(X, L, V, W, U; naik_epsilon=epsilon_N)
+hisq_links_from_thin!(X, L, V, W, U_hisq; naik_epsilon=epsilon_N)
 ```
 
 For a Krylov solve, retain all four smearing stages in a transparent cache:
 
 ```julia
-cache = HISQDiracCache4D(U, mass; naik_epsilon=epsilon_N)
-result = similar(psi)
+cache = HISQDiracCache4D(U_hisq, mass; naik_epsilon=epsilon_N)
+result = similar(psi_hisq)
 
 mul_cached_hisq!(
-    result, cache, U[1], U[2], U[3], U[4], psi)
+    result, cache, U_hisq[1], U_hisq[2], U_hisq[3], U_hisq[4], psi_hisq)
 mul_cached_hisq_adjoint!(
-    result, cache, U[1], U[2], U[3], U[4], psi)
+    result, cache, U_hisq[1], U_hisq[2], U_hisq[3], U_hisq[4], psi_hisq)
 ```
 
 The first call after a thin link changes rebuilds level-1, reunitarized, fat,
@@ -652,9 +735,7 @@ links `X[mu]`, which connect `x` to `x+mu`, and the forward-anchored Naik
 transporters `L[mu]`, which connect `x` to `x+3mu`:
 
 ```julia
-nw_hisq = 3
-X = [LatticeMatrix(X_host[mu], 4, PEs; nw=nw_hisq) for mu in 1:4]
-L = [LatticeMatrix(L_host[mu], 4, PEs; nw=nw_hisq) for mu in 1:4]
+# Continue with the caller-owned `X` and `L` built above.
 
 psi_hisq = LatticeMatrix(psi_staggered_host, 4, PEs;
     nw=nw_hisq, phases=(1, 1, 1, -1))
@@ -786,12 +867,17 @@ dD5 = D5DW_MobiusDomainwallOperator5D(dU, L5, mass, M, b, c)
 
 Enzyme.autodiff(
     Enzyme.Reverse, Enzyme.Const(loss), Enzyme.Active,
-    Enzyme.Duplicated(D5, dD5),
-    Enzyme.Duplicated(psi5, dpsi),
+    enzyme_duplicated(D5, dD5),
+    enzyme_duplicated(psi5, dpsi),
     Enzyme.Const(left),
-    Enzyme.Duplicated(out5, dout),
+    enzyme_duplicated(out5, dout),
 )
 ```
+
+`enzyme_duplicated` selects `Enzyme.Duplicated` on Julia 1.11 and the
+root-safe `Enzyme.MixedDuplicated` calling convention on Julia 1.12 and
+later. `Enzyme_derivative!` additionally converts its fixed-size vector
+workspaces to tuples when required by Julia 1.12's `MemoryRef` lowering.
 
 For the adjoint operator, pass `adjoint(D5)` and `adjoint(dD5)` as the
 primal and shadow operator annotations, respectively.
@@ -806,10 +892,10 @@ dD5general = D5DW_GeneralizedDomainwallOperator5D(
 
 Enzyme.autodiff(
     Enzyme.Reverse, Enzyme.Const(loss), Enzyme.Active,
-    Enzyme.Duplicated(D5general, dD5general),
-    Enzyme.Duplicated(psi5, dpsi),
+    enzyme_duplicated(D5general, dD5general),
+    enzyme_duplicated(psi5, dpsi),
     Enzyme.Const(left),
-    Enzyme.Duplicated(out5, dout),
+    enzyme_duplicated(out5, dout),
 )
 
 da5 = Array(dD5general.a)
@@ -898,9 +984,10 @@ JACC.@init_backend
 MPI.Init()
 
 dim   = 2
-gsize = (8, 8)
 NC    = 3
-PEs   = (2, 2)          # process grid (2×2)
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+gsize = (8 * nprocs, 8)
+PEs   = (nprocs, 1)     # valid for both single- and multi-rank runs
 
 M1 = LatticeMatrix(NC, NC, dim, gsize, PEs)
 M2 = LatticeMatrix(rand(ComplexF64, NC, NC, gsize...), dim, PEs)
@@ -938,12 +1025,9 @@ All combinations of shifted and adjoint operands are supported and tested in `te
 
 ## Automatic differentiation (Enzyme)
 
-(above v0.3: experimental) Enzyme is an optional dependency loaded through a package extension.
-Install and load Enzyme explicitly when AD is needed. We provide Enzyme-based AD extensions and test cases. See `test/adtest/ad.jl` for a concrete comparison between
-automatic differentiation and numerical differentiation using `calc_action_loopfn`. The loop body is factored
-into a small helper function (`_calc_action_step!`), which makes Enzyme AD more reliable for loop-heavy code.
-
-Example (runs the AD vs numerical comparison with `calc_action_loopfn`):
+Enzyme support is provided as an optional dependency loaded through a package
+extension. Install and load Enzyme explicitly when AD is needed. This complete
+example differentiates a shifted trace on one or more MPI ranks:
 
 ```julia
 using Enzyme
@@ -951,8 +1035,32 @@ using LatticeMatrices, MPI, JACC
 JACC.@init_backend
 MPI.Init()
 
-include("test/adtest/ad.jl") # runs main() in the script
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+gsize = (4 * nprocs, 2, 2, 2)
+PEs = (nprocs, 1, 1, 1)
+host = rand(ComplexF64, 2, 2, gsize...)
+U = [LatticeMatrix(host, 4, PEs; nw=1) for _ in 1:4]
+set_halo!.(U)
+
+dU = [similar(link) for link in U]
+temp = [similar(U[1])]
+dtemp = [similar(U[1])]
+clear_matrix!.(dU)
+clear_matrix!.(temp)
+clear_matrix!.(dtemp)
+
+function shifted_trace(U1, U2, U3, U4, temp)
+    mul_AshiftB!(temp[1], U1, U2, (1, 0, 0, 0))
+    return realtrace(temp[1])
+end
+
+Enzyme_derivative!(
+    shifted_trace, U[1], U[2], U[3], U[4],
+    dU[1], dU[2], dU[3], dU[4]; temp, dtemp)
 ```
+
+The executable finite-difference, halo-epoch, long-shift pool, and fused
+SU(3)-exponential regressions are in `test/mpi_enzyme.jl`.
 
 Note: the AD result here follows Enzyme's complex differentiation convention. For a complex variable
 `U = X + iY`, the gradient reported by Enzyme is
@@ -966,13 +1074,19 @@ and for every complete HISQ smearing stage: level-1 Fat7, U(3) projection,
 level-2 Fat7/Lepage, and Naik links. Consequently a real action can be
 differentiated from `HISQDiracOperator4D` all the way back to the thin links.
 The complete HISQ AD path requires `nw >= 3`; pass the caller-owned `V`, `W`,
-`X`, and `L` work vectors as `Enzyme.Duplicated` arguments when differentiating
+`X`, and `L` work vectors with `enzyme_duplicated` when differentiating
 through `hisq_links_from_thin!`.
 
 `mul_cached_hisq!` has a dedicated static Enzyme reverse rule for the complete
 Dirac → Naik/level-2 → U(3) → level-1 → thin-link force chain. The cache is
 treated as derived storage, so `runtime_activity=true` is not required and
 smearing is not rebuilt on each CG iteration.
+
+On Julia 1.12, use this cached rule when the entire smearing-plus-Dirac chain
+must be differentiated in one call. The individual smearing-stage and Dirac
+rules also work separately, but Enzyme cannot currently type-analyze a generic
+differentiated function that constructs the immutable `HISQDiracOperator4D`
+between those stages.
 
 ---
 
@@ -987,8 +1101,14 @@ julia --project -e 'using Pkg; Pkg.test("LatticeMatrices")'
 # MPI (choose ranks and an MPI launcher)
 mpiexec -n 4 julia --project test/runtests.jl
 
+# Executable smoke test for the README quick-tour snippets
+mpiexec -n 2 julia --project test/readmetest.jl
+
 # Focused two-rank halo/epoch regression used by CI
 mpiexec -n 2 julia --project test/mpi_halo.jl
+
+# Focused Enzyme regression (run from a project containing Enzyme)
+mpiexec -n 2 julia --project test/mpi_enzyme.jl
 
 # With GPUs (example; make sure CUDA/ROCm works and select a JACC backend)
 julia --project -e 'using JACC; JACC.@init_backend; using Pkg; Pkg.test()'
@@ -1023,21 +1143,23 @@ dirty synchronization, and an unconditional `set_halo!`. Environment variables
 # Indexing
 DIndexer(::NTuple{D,<:Integer})
 DIndexer(::AbstractVector{<:Integer})
-linearize(::DIndexer{D,dims,strides}, ::NTuple{D,Int32})::Int32
-delinearize(::DIndexer{D,dims,strides}, ::Integer, ::Int32=0)::NTuple{D,Int32}
+linearize(::DIndexer{D,dims,strides}, ::NTuple{D,T})::Int32 where {D,T<:Integer}
+delinearize(::DIndexer{D,dims,strides}, ::Integer, ::Integer=0)::NTuple{D,Int}
 shiftindices(indices, shift)
 
 # Lattice
 LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64,
-              phases=ones(dim), comm0=MPI.COMM_WORLD)
-LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD)
+              phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+              device_mapping=:auto)
+LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
+              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
 
 set_halo!(ls)
 ensure_halo!(ls)
 mark_halo_dirty!(ls)
 halo_is_dirty(ls)::Bool
 halo_epochs(ls)::NamedTuple{(:core, :halo)}
-exchange_dim!(ls, d::Int)
+LatticeMatrices.exchange_dim!(ls, d::Int)  # internal single-dimension primitive
 
 gather_matrix(ls; root=0)::Union{Array{T},Nothing}
 gather_and_bcast_matrix(ls; root=0)::Array{T}
@@ -1045,9 +1167,10 @@ gather_and_bcast_matrix(ls; root=0)::Array{T}
 allsum(ls)  # Reduce(SUM) to root over interior
 
 # Lightweight wrappers
-struct Shifted_Lattice{D,shift}; data::D; end
-struct Adjoint_Lattice{D};       data::D; end
-# Base.adjoint(::Lattice) and Base.adjoint(::Shifted_Lattice) return Adjoint_Lattice
+Shifted_Lattice(data, shift)
+adjoint(data)
+release!(shifted)
+with_shifted_lattice(f, data, shift)
 
 # Dirac operators
 WilsonDiracOperator4D(U, kappa)
@@ -1085,6 +1208,9 @@ cg!(x, A, rhs, r, p, Ap; rtol=1e-10, atol=0, maxiter=5000)
 solve!(x, DdagD, rhs, r, p, Ap; rtol=1e-10, atol=0, maxiter=5000)
 pseudofermion_action(D, phi, eta, Deta, r, p, Ap)
 
+# Enzyme annotation for lattice objects and fixed-size workspaces
+enzyme_duplicated(primal, shadow)
+
 # Compatibility interface using a PreallocatedArray pool
 LatticeMatrices.cg(x, A, rhs, temps;
                    eps=1e-10, maxsteps=5000, verboselevel=2)
@@ -1101,7 +1227,11 @@ MIT (see `LICENSE`).
 
 ## Acknowledgements
 
-Built on the excellent Julia HPC stack: **MPI.jl**, **JACC.jl**, and the Julia standard libraries.
+LatticeMatrices.jl is built on the excellent Julia HPC stack: **MPI.jl**,
+**[JACC.jl](https://github.com/JuliaORNL/JACC.jl)**, and the Julia standard
+libraries. In particular, we sincerely thank the JACC.jl developers for the
+performance-portable kernel abstraction that enables the same lattice code to
+run on threaded CPUs and multiple GPU backends.
 
 ---
 
@@ -1120,8 +1250,9 @@ Built on the excellent Julia HPC stack: **MPI.jl**, **JACC.jl**, and the Julia s
 
 ## Selecting & switching GPU/CPU backends (via JACC.jl)
 
-LatticeMatrices.jl uses [JACC.jl] for performance‑portable execution. Follow JACC’s
-recommended flow to select **one** backend per project/session:
+LatticeMatrices.jl uses [JACC.jl](https://github.com/JuliaORNL/JACC.jl) for
+performance-portable execution. Follow JACC’s recommended flow to select
+**one** backend per project/session:
 
 1) **Set a backend** (writes/updates `LocalPreferences.toml` and adds the backend package):
 ```julia
@@ -1143,3 +1274,15 @@ JACC.@init_backend                  # must be at top-level scope
 
 
 References: JACC quick start and usage in the upstream README.  
+
+---
+
+## Citation
+
+If you use LatticeMatrices.jl in research, please cite the following papers:
+
+- Yuki Nagai and Akio Tomiya, [“JuliaQCD: Portable lattice QCD package in
+  Julia language”](https://arxiv.org/abs/2409.03030), arXiv:2409.03030.
+- Yuki Nagai, Akio Tomiya, and Hiroshi Ohno, [“Lattice Gauge Theory via
+  LLVM-Level Automatic Differentiation”](https://arxiv.org/abs/2602.20516),
+  arXiv:2602.20516.

@@ -10,13 +10,11 @@ function _hisq_end_to_end_fermion_values(
 end
 
 function _hisq_end_to_end_loss_from_thin(
-    thin, level1, reunitarized, fat, long,
-    mass, naik_epsilon, psi, left, result,
+    thin, level1, reunitarized, operator, psi, left, result,
 )
-    links = hisq_links_from_thin!(
-        fat, long, level1, reunitarized, thin, naik_epsilon)
-    operator = HISQDiracOperator4D(
-        links, mass; naik_epsilon)
+    hisq_links_from_thin!(
+        operator.links.fat_links, operator.links.long_links,
+        level1, reunitarized, thin, operator.naik_epsilon)
     mul!(result, operator, psi)
     return real(dot(left, result))
 end
@@ -94,27 +92,30 @@ function hisq_end_to_end_ad_tests()
         clear_matrix!.(fields)
     end
     clear_matrix!.((dpsi, result, dresult))
+    operator = HISQDiracOperator4D(
+        Tuple(fat), Tuple(long), mass; naik_epsilon)
+    shadow_operator = HISQDiracOperator4D(
+        Tuple(dfat), Tuple(dlong), mass; naik_epsilon)
 
-    @testset "HISQ thin-link to Dirac-action Enzyme pullback" begin
+    # Julia 1.12 cannot type-analyze constructing/composing the immutable
+    # HISQ operator inside one generic Enzyme invocation.  The static cached
+    # rule below covers the same complete thin-link-to-action pullback.
+    if VERSION < v"1.12"
+      @testset "HISQ thin-link to Dirac-action Enzyme pullback" begin
         Enzyme.API.strictAliasing!(false)
         Enzyme.autodiff(
             Enzyme.Reverse,
             Enzyme.Const(_hisq_end_to_end_loss_from_thin),
             Enzyme.Active,
-            Enzyme.Duplicated(thin, dthin),
-            Enzyme.Duplicated(level1, dlevel1),
-            Enzyme.Duplicated(reunitarized, dreunitarized),
-            Enzyme.Duplicated(fat, dfat),
-            Enzyme.Duplicated(long, dlong),
-            Enzyme.Const(mass),
-            Enzyme.Const(naik_epsilon),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(thin, dthin),
+            enzyme_duplicated(level1, dlevel1),
+            enzyme_duplicated(reunitarized, dreunitarized),
+            enzyme_duplicated(operator, shadow_operator),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
 
-        operator = HISQDiracOperator4D(
-            fat, long, mass; naik_epsilon)
         expected_dpsi = similar(psi)
         mul!(expected_dpsi, operator', left)
         @test _hisq_end_to_end_core(dpsi) ≈
@@ -146,6 +147,7 @@ function hisq_end_to_end_ad_tests()
         @test all(link -> all(iszero, link.A), dfat)
         @test all(link -> all(iszero, link.A), dlong)
         @test all(iszero, dresult.A)
+      end
     end
 
     @testset "transparent cached HISQ Enzyme pullback" begin
@@ -168,14 +170,14 @@ function hisq_end_to_end_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_hisq_cached_end_to_end_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(thin[1], cached_dthin[1]),
-            Enzyme.Duplicated(thin[2], cached_dthin[2]),
-            Enzyme.Duplicated(thin[3], cached_dthin[3]),
-            Enzyme.Duplicated(thin[4], cached_dthin[4]),
+            enzyme_duplicated(thin[1], cached_dthin[1]),
+            enzyme_duplicated(thin[2], cached_dthin[2]),
+            enzyme_duplicated(thin[3], cached_dthin[3]),
+            enzyme_duplicated(thin[4], cached_dthin[4]),
             Enzyme.Const(cache),
-            Enzyme.Duplicated(psi, cached_dpsi),
+            enzyme_duplicated(psi, cached_dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(cached_result, cached_dresult),
+            enzyme_duplicated(cached_result, cached_dresult),
         )
 
         expected_dpsi = similar(psi)

@@ -21,8 +21,9 @@ Run from the `LatticeMatrices.jl` directory:
 test/multigpu/run_h100_2gpu.sh
 ```
 
-The runner expects the CUDA-enabled Open MPI installation at `/opt/ompi-cuda` and uses
-GPUs `0,1`. Override the executable paths or selected GPUs when needed:
+The runner expects the CUDA-enabled Open MPI installation at `/opt/ompi-cuda`,
+sets `CUDA_DEVICE_ORDER=PCI_BUS_ID`, and uses GPUs `0,1`. Override the
+executable paths or selected GPUs when needed:
 
 ```bash
 JULIA=/path/to/julia \

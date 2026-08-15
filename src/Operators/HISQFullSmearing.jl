@@ -113,7 +113,8 @@ Project each unprojected Fat7 link to U(3) using
 `V * (V' * V)^(-1/2)`, following SIMULATeQCD's HISQ convention.
 """
 function hisq_project_u3!(
-    projected_links::Vector{TO}, fat_links::Vector{TI},
+    projected_links::Union{Vector{TO},NTuple{4,TO}},
+    fat_links::Union{Vector{TI},NTuple{4,TI}},
 ) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
     _validate_hisq_projection_output(projected_links, fat_links)
     for mu in 1:4
@@ -170,7 +171,8 @@ expected by [`HISQDiracOperator4D`](@ref).  The halo kernel requires
 `nw >= 2`; `nw=0` uses periodic materialized shifts.
 """
 function hisq_naik_links!(
-    long_links::Vector{TO}, reunitarized_links::Vector{TI},
+    long_links::Union{Vector{TO},NTuple{4,TO}},
+    reunitarized_links::Union{Vector{TI},NTuple{4,TI}},
 ) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
     _validate_hisq_smearing_output(long_links, reunitarized_links)
     nw = reunitarized_links[1].nw
@@ -255,9 +257,11 @@ setup.  The stages are level-1 Fat7, U(3) reunitarization, level-2
 Fat7/Lepage, and forward-anchored Naik construction.
 """
 function hisq_links_from_thin!(
-    fat_links::Vector{T}, long_links::Vector{T},
-    level1_links::Vector{T}, reunitarized_links::Vector{T},
-    thin_links::Vector{T}, naik_epsilon,
+    fat_links::Union{Vector{T},NTuple{4,T}},
+    long_links::Union{Vector{T},NTuple{4,T}},
+    level1_links::Union{Vector{T},NTuple{4,T}},
+    reunitarized_links::Union{Vector{T},NTuple{4,T}},
+    thin_links::Union{Vector{T},NTuple{4,T}}, naik_epsilon,
 ) where {T<:LatticeMatrix{4}}
     _validate_hisq_full_workspace(
         fat_links, long_links, level1_links, reunitarized_links, thin_links)

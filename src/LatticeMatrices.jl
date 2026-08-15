@@ -1172,6 +1172,15 @@ Base.@deprecate Wiltinger_derivative! Wirtinger_derivative!
 export Wiltinger!, Wiltinger_derivative!
 function Enzyme_derivative! end
 export Enzyme_derivative!
+"""
+    enzyme_duplicated(primal, shadow)
+
+Construct the Enzyme annotation used for differentiable lattice arguments.
+Loading Enzyme activates this method. On Julia 1.12 and later it selects the
+mixed-activity ABI required by immutable lattice containers.
+"""
+function enzyme_duplicated end
+export enzyme_duplicated
 function fold_halo_to_core_grad! end
 
 struct DiffArg{T}

@@ -58,10 +58,10 @@ function wilson_clover_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_wilson_clover_ad_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(operator, shadow_operator),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(operator, shadow_operator),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
 
         expected_dpsi = similar(psi)
@@ -110,14 +110,14 @@ function wilson_clover_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_wilson_clover_cached_ad_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(links[1], cached_dlinks[1]),
-            Enzyme.Duplicated(links[2], cached_dlinks[2]),
-            Enzyme.Duplicated(links[3], cached_dlinks[3]),
-            Enzyme.Duplicated(links[4], cached_dlinks[4]),
+            enzyme_duplicated(links[1], cached_dlinks[1]),
+            enzyme_duplicated(links[2], cached_dlinks[2]),
+            enzyme_duplicated(links[3], cached_dlinks[3]),
+            enzyme_duplicated(links[4], cached_dlinks[4]),
             Enzyme.Const(operator),
-            Enzyme.Duplicated(psi, cached_dpsi),
+            enzyme_duplicated(psi, cached_dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(cached_result, cached_dresult),
+            enzyme_duplicated(cached_result, cached_dresult),
         )
 
         expected_dpsi = similar(psi)

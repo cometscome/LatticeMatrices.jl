@@ -11,8 +11,8 @@ smearing. A later link-building stage can construct the same container from
 thin links without changing the stencil API.
 """
 struct HISQLinks4D{T}
-    fat_links::Vector{T}
-    long_links::Vector{T}
+    fat_links::Union{Vector{T},NTuple{4,T}}
+    long_links::Union{Vector{T},NTuple{4,T}}
 end
 
 function _validate_hisq_link_geometry(fat_links, long_links)
@@ -43,7 +43,8 @@ function _validate_hisq_link_geometry(fat_links, long_links)
 end
 
 function HISQLinks4D(
-    fat_links::Vector{T}, long_links::Vector{T},
+    fat_links::Union{Vector{T},NTuple{4,T}},
+    long_links::Union{Vector{T},NTuple{4,T}},
 ) where {T<:LatticeMatrix{4}}
     _validate_hisq_link_geometry(fat_links, long_links)
     return HISQLinks4D{T}(fat_links, long_links)
@@ -90,7 +91,8 @@ function HISQDiracOperator4D(
 end
 
 function HISQDiracOperator4D(
-    fat_links::Vector{T}, long_links::Vector{T}, mass::Real;
+    fat_links::Union{Vector{T},NTuple{4,T}},
+    long_links::Union{Vector{T},NTuple{4,T}}, mass::Real;
     naik_epsilon::Real=0,
 ) where {T<:LatticeMatrix{4}}
     return HISQDiracOperator4D(

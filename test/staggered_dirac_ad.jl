@@ -77,6 +77,7 @@ function staggered_dirac_ad_tests()
     clear_matrix!.((dpsi, result, dresult))
 
     operator = StaggeredDiracOperator4D(links, mass)
+    shadow_operator = StaggeredDiracOperator4D(dlinks, mass)
 
     @testset "StaggeredDiracOperator4D Enzyme pullback" begin
         @test Base.get_extension(
@@ -84,16 +85,12 @@ function staggered_dirac_ad_tests()
         Enzyme.API.strictAliasing!(false)
         Enzyme.autodiff(
             Enzyme.Reverse,
-            Enzyme.Const(_staggered_dirac_ad_loss_from_links),
+            Enzyme.Const(_staggered_dirac_ad_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(links[1], dlinks[1]),
-            Enzyme.Duplicated(links[2], dlinks[2]),
-            Enzyme.Duplicated(links[3], dlinks[3]),
-            Enzyme.Duplicated(links[4], dlinks[4]),
-            Enzyme.Const(mass),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(operator, shadow_operator),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
 
         expected_dpsi = similar(psi)

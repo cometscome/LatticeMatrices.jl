@@ -82,10 +82,10 @@ function domainwall_ad_tests()
                 Enzyme.Reverse,
                 Enzyme.Const(_domainwall_ad_loss),
                 Enzyme.Active,
-                Enzyme.Duplicated(applied, shadow_applied),
-                Enzyme.Duplicated(psi, dpsi),
+                enzyme_duplicated(applied, shadow_applied),
+                enzyme_duplicated(psi, dpsi),
                 Enzyme.Const(left),
-                Enzyme.Duplicated(result, dresult),
+                enzyme_duplicated(result, dresult),
             )
 
             expected_dpsi = similar(psi)
@@ -165,10 +165,10 @@ function domainwall_ad_tests()
                 Enzyme.Reverse,
                 Enzyme.Const(_domainwall_ad_loss),
                 Enzyme.Active,
-                Enzyme.Duplicated(applied, shadow_applied),
-                Enzyme.Duplicated(psi, dpsi),
+                enzyme_duplicated(applied, shadow_applied),
+                enzyme_duplicated(psi, dpsi),
                 Enzyme.Const(left),
-                Enzyme.Duplicated(result, dresult),
+                enzyme_duplicated(result, dresult),
             )
 
             expected_dpsi = similar(psi)

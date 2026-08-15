@@ -127,9 +127,9 @@ function hisq_full_smearing_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_hisq_projection_ad_loss_from_links),
             Enzyme.Active,
-            Enzyme.Duplicated(input, dinput),
-            Enzyme.Duplicated(output, doutput),
-            Enzyme.Const(left),
+            enzyme_duplicated(input, dinput),
+            enzyme_duplicated(output, doutput),
+            Enzyme.Const(Tuple(left)),
         )
 
         epsilon = 1e-6
@@ -191,9 +191,9 @@ function hisq_full_smearing_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_hisq_level2_ad_loss_from_links),
             Enzyme.Active,
-            Enzyme.Duplicated(level2_input, dlevel2_input),
-            Enzyme.Duplicated(level2_output, dlevel2_output),
-            Enzyme.Const(level2_left),
+            enzyme_duplicated(level2_input, dlevel2_input),
+            enzyme_duplicated(level2_output, dlevel2_output),
+            Enzyme.Const(Tuple(level2_left)),
             Enzyme.Const(naik_epsilon),
         )
 
@@ -227,8 +227,8 @@ function hisq_full_smearing_ad_tests()
             Enzyme.Const(_hisq_level2_ad_loss_from_links),
             Enzyme.Active,
             Enzyme.Const(level2_input),
-            Enzyme.Duplicated(level2_output, dlevel2_output),
-            Enzyme.Const(level2_left),
+            enzyme_duplicated(level2_output, dlevel2_output),
+            Enzyme.Const(Tuple(level2_left)),
             Enzyme.Active(naik_epsilon),
         )
         epsilon_result isa Tuple && length(epsilon_result) == 1 &&
@@ -284,9 +284,9 @@ function hisq_full_smearing_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_hisq_naik_ad_loss_from_links),
             Enzyme.Active,
-            Enzyme.Duplicated(naik_input, dnaik_input),
-            Enzyme.Duplicated(naik_output, dnaik_output),
-            Enzyme.Const(naik_left),
+            enzyme_duplicated(naik_input, dnaik_input),
+            enzyme_duplicated(naik_output, dnaik_output),
+            Enzyme.Const(Tuple(naik_left)),
         )
 
         epsilon = 1e-6
@@ -362,13 +362,13 @@ function hisq_full_smearing_ad_tests()
             Enzyme.Reverse,
             Enzyme.Const(_hisq_full_chain_ad_loss_from_links),
             Enzyme.Active,
-            Enzyme.Duplicated(thin, dthin),
-            Enzyme.Duplicated(level1, dlevel1),
-            Enzyme.Duplicated(reunitarized, dreunitarized),
-            Enzyme.Duplicated(fat, dfat),
-            Enzyme.Duplicated(long, dlong),
-            Enzyme.Const(left_fat),
-            Enzyme.Const(left_long),
+            enzyme_duplicated(thin, dthin),
+            enzyme_duplicated(level1, dlevel1),
+            enzyme_duplicated(reunitarized, dreunitarized),
+            enzyme_duplicated(fat, dfat),
+            enzyme_duplicated(long, dlong),
+            Enzyme.Const(Tuple(left_fat)),
+            Enzyme.Const(Tuple(left_long)),
             Enzyme.Const(naik_epsilon),
         )
 

@@ -845,7 +845,8 @@ slower shift-materializing fallback. Staggered and fermion boundary phases
 are not included in the output.
 """
 function hisq_fat7_level1!(
-    fat_links::Vector{TO}, thin_links::Vector{TI},
+    fat_links::Union{Vector{TO},NTuple{4,TO}},
+    thin_links::Union{Vector{TI},NTuple{4,TI}},
 ) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
     _validate_staggered_gauge_links(thin_links)
     real_type = typeof(real(zero(eltype(thin_links[1].A))))
@@ -975,7 +976,8 @@ The halo kernel requires `nw >= 2`; `nw=0` uses the periodic
 shift-materializing fallback.
 """
 function hisq_fat7_level2!(
-    fat_links::Vector{TO}, reunitarized_links::Vector{TI}, naik_epsilon,
+    fat_links::Union{Vector{TO},NTuple{4,TO}},
+    reunitarized_links::Union{Vector{TI},NTuple{4,TI}}, naik_epsilon,
 ) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
     nw = reunitarized_links[1].nw
     !iszero(nw) && nw < 2 && throw(ArgumentError(

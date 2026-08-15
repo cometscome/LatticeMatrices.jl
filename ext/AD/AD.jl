@@ -75,11 +75,17 @@ end
 @static if isdefined(Enzyme, :Duplicated)
     if isdefined(Enzyme.EnzymeRules, :activity)
         import Enzyme.EnzymeRules: activity
+        @static if VERSION >= v"1.12"
+            activity(::Type{<:LatticeMatrix}) = Enzyme.MixedDuplicated
+        end
         activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.Duplicated
         activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.Duplicated
     end
     if isdefined(Enzyme, :activity)
         import Enzyme: activity
+        @static if VERSION >= v"1.12"
+            activity(::Type{<:LatticeMatrix}) = Enzyme.MixedDuplicated
+        end
         activity(::Type{Shifted_Lattice{D,Dim}}) where {D,Dim} = Enzyme.Duplicated
         activity(::Type{Adjoint_Lattice{D}}) where {D} = Enzyme.Duplicated
     end

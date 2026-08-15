@@ -102,10 +102,10 @@ function run_domainwall_pullback_benchmark()
             Enzyme.Reverse,
             Enzyme.Const(_domainwall_bench_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(operator, shadow_operator),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(operator, shadow_operator),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
         return nothing
     end
@@ -114,10 +114,10 @@ function run_domainwall_pullback_benchmark()
             Enzyme.Reverse,
             Enzyme.Const(_domainwall_bench_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(generalized_operator, generalized_shadow),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(generalized_operator, generalized_shadow),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
         return nothing
     end

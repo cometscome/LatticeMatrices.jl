@@ -63,22 +63,19 @@ function wilson_dirac_ad_tests()
     clear_matrix!.((dpsi, result, dresult))
 
     operator = WilsonDiracOperator4D(links, kappa)
+    shadow_operator = WilsonDiracOperator4D(dlinks, kappa)
 
     @testset "WilsonDiracOperator4D Enzyme pullback" begin
         @test Base.get_extension(LatticeMatrices, :LatticeMatricesEnzymeExt) !== nothing
         Enzyme.API.strictAliasing!(false)
         Enzyme.autodiff(
             Enzyme.Reverse,
-            Enzyme.Const(_wilson_dirac_ad_loss_from_links),
+            Enzyme.Const(_wilson_dirac_ad_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(links[1], dlinks[1]),
-            Enzyme.Duplicated(links[2], dlinks[2]),
-            Enzyme.Duplicated(links[3], dlinks[3]),
-            Enzyme.Duplicated(links[4], dlinks[4]),
-            Enzyme.Const(kappa),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(operator, shadow_operator),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
 
         expected_dpsi = similar(psi)

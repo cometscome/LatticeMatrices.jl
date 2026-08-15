@@ -105,6 +105,8 @@ function hisq_dirac_ad_tests()
     clear_matrix!.((dpsi, result, dresult))
 
     operator = HISQDiracOperator4D(X, L, mass; naik_epsilon)
+    shadow_operator = HISQDiracOperator4D(
+        dX, dL, mass; naik_epsilon)
 
     @testset "HISQDiracOperator4D Enzyme pullback" begin
         @test Base.get_extension(
@@ -112,21 +114,12 @@ function hisq_dirac_ad_tests()
         Enzyme.API.strictAliasing!(false)
         Enzyme.autodiff(
             Enzyme.Reverse,
-            Enzyme.Const(_hisq_dirac_ad_loss_from_links),
+            Enzyme.Const(_hisq_dirac_ad_loss),
             Enzyme.Active,
-            Enzyme.Duplicated(X[1], dX[1]),
-            Enzyme.Duplicated(X[2], dX[2]),
-            Enzyme.Duplicated(X[3], dX[3]),
-            Enzyme.Duplicated(X[4], dX[4]),
-            Enzyme.Duplicated(L[1], dL[1]),
-            Enzyme.Duplicated(L[2], dL[2]),
-            Enzyme.Duplicated(L[3], dL[3]),
-            Enzyme.Duplicated(L[4], dL[4]),
-            Enzyme.Const(mass),
-            Enzyme.Const(naik_epsilon),
-            Enzyme.Duplicated(psi, dpsi),
+            enzyme_duplicated(operator, shadow_operator),
+            enzyme_duplicated(psi, dpsi),
             Enzyme.Const(left),
-            Enzyme.Duplicated(result, dresult),
+            enzyme_duplicated(result, dresult),
         )
 
         expected_dpsi = similar(psi)

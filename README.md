@@ -6,6 +6,52 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
+## What's new in v1.1.0 (compared with v1.0.0)
+
+v1.1.0 is a backward-compatible minor release. Existing v1.0.0 code can be
+used without changes; the following APIs and kernels are additions.
+
+### Measurement building blocks
+
+- `set_global_component!` sets one matrix component using global lattice
+  coordinates. Under MPI, only the rank that owns the site writes it; the same
+  site-local JACC kernel works on CPU and accelerator backends.
+- `projected_bilinear_slices` contracts spin-color propagators into hyperplane
+  slices, with optional Fourier-momentum and staggered-parity projections, and
+  performs the final global MPI reduction. QCDMeasurements.jl uses these
+  primitives for generalized connected-meson two-point measurements.
+
+### Stable SU(2)/SU(3) exponential pullbacks
+
+- `exp_ta_pullback!(output, cotangent, A, t=1)` is a new public pullback for
+  `exp(t * TA(A))`, restricted to traceless anti-Hermitian variations. SU(2)
+  and SU(3) use site-local JACC kernels shared by CPU and GPU execution.
+- The active Enzyme reverse rule for `expt_TA!` now calls these core kernels.
+  In particular, the SU(3) coefficient derivatives are analytic rather than
+  finite-difference estimates.
+- The SU(3) implementation follows the analytic Cayley--Hamilton coefficients
+  and derivatives of
+  [Morningstar--Peardon](https://arxiv.org/abs/hep-lat/0311018), including the
+  reflection relations for negative cubic invariant. Stable series are used
+  near the origin and near degenerate eigenvalues.
+
+### Compatibility and validation
+
+- Enzyme remains an optional weak dependency; v1.1.0 adds no required AD
+  dependency and does not change the existing `expt_TA!` interface.
+- The new pullbacks were checked against the block-matrix exponential identity
+  described by
+  [Al-Mohy--Higham](https://eprints.maths.manchester.ac.uk/1218/) for SU(2) and
+  SU(3), including zero and very small fields, negative `t`, and both signs of
+  the SU(3) degenerate-eigenvalue case, in `ComplexF32` and `ComplexF64`.
+- Release validation covered threaded CPU and NVIDIA H100/CUDA execution, the
+  Enzyme rules on both backends, MPI-aware measurement kernels, the complete
+  LatticeMatrices.jl test suite, and the QCDMeasurements.jl integration suite.
+
+**Upgrading from v1.0:** No source changes are required for existing APIs.
+QCDMeasurements.jl's generalized meson measurement requires LatticeMatrices.jl
+v1.1 or later because it uses the new measurement building blocks.
+
 ## What's new in v1.0.0
 
 Compared with the previous release, v0.3.13, v1.0.0 adds and stabilizes:
@@ -1175,6 +1221,12 @@ gather_matrix(ls; root=0)::Union{Array{T},Nothing}
 gather_and_bcast_matrix(ls; root=0)::Array{T}
 
 allsum(ls)  # Reduce(SUM) to root over interior
+
+set_global_component!(ls, value, row, column, global_position)
+projected_bilinear_slices(
+    propagators1, propagators2, left, right;
+    axis=4, origin, momentum, parity_mask, coefficient=-1)
+exp_ta_pullback!(output, cotangent, A, t=1)
 
 # Lightweight wrappers
 Shifted_Lattice(data, shift)

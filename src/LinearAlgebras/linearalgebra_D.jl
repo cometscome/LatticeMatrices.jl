@@ -765,6 +765,376 @@ end
     #C[:, :, indices...] = expm_pade13(A[:, :, indices...], t)
 end
 
+@inline function _su3_xi0_stable(w)
+    RT = typeof(w)
+    w2 = w * w
+    if abs(w) > RT(0.05)
+        return sin(w) / w
+    end
+    return one(RT) - (w2 / RT(6)) *
+        (one(RT) - (w2 / RT(20)) * (one(RT) - w2 / RT(42)))
+end
+
+@inline function _su3_xi1_stable(w)
+    RT = typeof(w)
+    w2 = w * w
+    if abs(w) > RT(0.05)
+        return cos(w) / w2 - sin(w) / (w2 * w)
+    end
+    return -one(RT) / RT(3) + (w2 / RT(30)) *
+        (one(RT) - (w2 / RT(28)) * (one(RT) - w2 / RT(54)))
+end
+
+# Morningstar--Peardon analytic coefficients for exp(iH) and their
+# derivatives with respect to c1=tr(H^2)/2 and c0=tr(H^3)/3.  Negative c0
+# is evaluated through the exact reflection symmetries of Eqs. (34) and (70),
+# avoiding the vanishing denominator at the negative degenerate endpoint.
+@inline function _su3_exp_coefficients_analytic(c0, c1)
+    RT = typeof(c1)
+    two = RT(2)
+    three = RT(3)
+    nine = RT(9)
+
+    reflected = c0 < zero(RT)
+    c0abs = abs(c0)
+    c0max = two * (c1 / three) * sqrt(c1 / three)
+    ratio = clamp(c0abs / c0max, zero(RT), one(RT))
+    theta = acos(ratio)
+    u = sqrt(c1 / three) * cos(theta / three)
+    w = sqrt(c1) * sin(theta / three)
+    xi0 = _su3_xi0_stable(w)
+    xi1 = _su3_xi1_stable(w)
+
+    emiu = exp(-im * u)
+    e2iu = exp(two * im * u)
+
+    h0 =
+        (u^2 - w^2) * e2iu +
+        emiu * (RT(8) * u^2 * cos(w) + two * im * u * (three * u^2 + w^2) * xi0)
+    h1 =
+        two * u * e2iu -
+        emiu * (two * u * cos(w) - im * (three * u^2 - w^2) * xi0)
+    h2 = e2iu - emiu * (cos(w) + three * im * u * xi0)
+
+    denom = nine * u^2 - w^2
+    f0 = h0 / denom
+    f1 = h1 / denom
+    f2 = h2 / denom
+
+    r10 =
+        two * (u + im * (u^2 - w^2)) * e2iu +
+        two * emiu * (
+            RT(4) * u * (two - im * u) * cos(w) +
+            im * (nine * u^2 + w^2 - im * u * (three * u^2 + w^2)) * xi0
+        )
+    r11 =
+        two * (one(RT) + two * im * u) * e2iu +
+        emiu * (
+            -two * (one(RT) - im * u) * cos(w) +
+            im * (RT(6) * u + im * (w^2 - three * u^2)) * xi0
+        )
+    r12 = two * im * e2iu + im * emiu * (cos(w) - three * (one(RT) - im * u) * xi0)
+    r20 =
+        -two * e2iu +
+        two * im * u * emiu * (
+            cos(w) + (one(RT) + RT(4) * im * u) * xi0 + three * u^2 * xi1
+        )
+    r21 =
+        -im * emiu * (
+            cos(w) + (one(RT) + two * im * u) * xi0 - three * u^2 * xi1
+        )
+    r22 = emiu * (xi0 - three * im * u * xi1)
+
+    denom2 = two * denom^2
+    b10 = (
+        two * u * r10 + (three * u^2 - w^2) * r20 -
+        two * (RT(15) * u^2 + w^2) * f0
+    ) / denom2
+    b11 = (
+        two * u * r11 + (three * u^2 - w^2) * r21 -
+        two * (RT(15) * u^2 + w^2) * f1
+    ) / denom2
+    b12 = (
+        two * u * r12 + (three * u^2 - w^2) * r22 -
+        two * (RT(15) * u^2 + w^2) * f2
+    ) / denom2
+    b20 = (r10 - three * u * r20 - RT(24) * u * f0) / denom2
+    b21 = (r11 - three * u * r21 - RT(24) * u * f1) / denom2
+    b22 = (r12 - three * u * r22 - RT(24) * u * f2) / denom2
+
+    if reflected
+        f0 = conj(f0)
+        f1 = -conj(f1)
+        f2 = conj(f2)
+        b10 = conj(b10)
+        b11 = -conj(b11)
+        b12 = conj(b12)
+        b20 = -conj(b20)
+        b21 = conj(b21)
+        b22 = -conj(b22)
+    end
+
+    return f0, f1, f2, b10, b11, b12, b20, b21, b22
+end
+
+@inline function _exp_ta_series_threshold(::Type{RT}) where {RT<:AbstractFloat}
+    return RT(64) * sqrt(eps(RT))
+end
+
+# For a small X=tA, evaluate t*L_exp(X,C) from the power series of the
+# block-matrix exponential.  This is a pullback representative for the trace
+# pairing and avoids all invariant-coefficient cancellations at the origin.
+@inline function _exp_ta_pullback_taylor!(
+    result::MMatrix{N,N,T}, X::MMatrix{N,N,T}, C::MMatrix{N,N,T}, t,
+) where {N,T}
+    RT = typeof(real(zero(T)))
+    power = MMatrix{N,N,T}(undef)
+    upper = MMatrix{N,N,T}(undef)
+    left = MMatrix{N,N,T}(undef)
+    right = MMatrix{N,N,T}(undef)
+    nextpower = MMatrix{N,N,T}(undef)
+
+    @inbounds for jc = 1:N, ic = 1:N
+        result[ic, jc] = C[ic, jc]
+        power[ic, jc] = X[ic, jc]
+        upper[ic, jc] = C[ic, jc]
+    end
+
+    factorial = one(RT)
+    for order = 2:12
+        gemm!(left, power, C)
+        gemm!(right, upper, X)
+        factorial *= RT(order)
+        @inbounds for jc = 1:N, ic = 1:N
+            upper[ic, jc] = left[ic, jc] + right[ic, jc]
+            result[ic, jc] += upper[ic, jc] / factorial
+        end
+        gemm!(nextpower, power, X)
+        @inbounds for jc = 1:N, ic = 1:N
+            power[ic, jc] = nextpower[ic, jc]
+        end
+    end
+
+    @inbounds for jc = 1:N, ic = 1:N
+        result[ic, jc] *= t
+    end
+    return nothing
+end
+
+@inline function _store_exp_ta_pullback!(
+    output, result::MMatrix{N,N,T}, indices, ::Val{false},
+) where {N,T}
+    @inbounds for jc = 1:N, ic = 1:N
+        output[ic, jc, indices...] = result[ic, jc]
+    end
+    return nothing
+end
+
+@inline function _exp_ta_cotangent_entry(
+    cotangent, ic, jc, indices, ::Val{false},
+)
+    return cotangent[ic, jc, indices...]
+end
+
+
+@inline function _exp_ta_cotangent_entry(
+    cotangent, ic, jc, indices, ::Val{true},
+)
+    return conj(cotangent[jc, ic, indices...])
+end
+
+@inline function _store_exp_ta_pullback!(
+    output, result::MMatrix{N,N,T}, indices, ::Val{true},
+) where {N,T}
+    RT = typeof(real(zero(T)))
+    trace_imag = zero(RT)
+    @inbounds for ic = 1:N
+        trace_imag += imag(result[ic, ic])
+    end
+    trace_imag /= RT(N)
+    @inbounds for ic = 1:N
+        output[ic, ic, indices...] -= (imag(result[ic, ic]) - trace_imag) * im
+    end
+    @inbounds for jc = 2:N, ic = 1:jc-1
+        value = (result[ic, jc] - conj(result[jc, ic])) / RT(2)
+        output[ic, jc, indices...] -= value
+        output[jc, ic, indices...] += conj(value)
+    end
+    return nothing
+end
+
+@inline function kernel_exp_ta_pullback_su2!(
+    i, output, A, cotangent, dindexer, ::Val{nw}, t, accumulate_ta::Val,
+) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    T = eltype(output)
+    RT = typeof(real(zero(T)))
+    Q = MMatrix{2,2,T}(undef)
+    C = MMatrix{2,2,T}(undef)
+    result = MMatrix{2,2,T}(undef)
+
+    a11 = A[1, 1, indices...]
+    a12 = A[1, 2, indices...]
+    a21 = A[2, 1, indices...]
+    a22 = A[2, 2, indices...]
+    trace_imag = (imag(a11) + imag(a22)) / RT(2)
+    Q[1, 1] = t * (imag(a11) - trace_imag) * im
+    Q[2, 2] = t * (imag(a22) - trace_imag) * im
+    Q[1, 2] = t * (a12 - conj(a21)) / RT(2)
+    Q[2, 1] = -conj(Q[1, 2])
+    @inbounds for jc = 1:2, ic = 1:2
+        C[ic, jc] = _exp_ta_cotangent_entry(
+            cotangent, ic, jc, indices, accumulate_ta,
+        )
+    end
+
+    trQ2 = Q[1, 1]^2 + Q[1, 2] * Q[2, 1] +
+            Q[2, 1] * Q[1, 2] + Q[2, 2]^2
+    q2 = max(zero(RT), real(-trQ2 / RT(2)))
+    if q2 <= _exp_ta_series_threshold(RT)
+        _exp_ta_pullback_taylor!(result, Q, C, t)
+    else
+        q = sqrt(q2)
+        sinq, cosq = sincos(q)
+        f = sinq / q
+        b0 = f / RT(2)
+        b1 = (sinq - q * cosq) / (RT(2) * q^3)
+        trCB = zero(T)
+        @inbounds for jc = 1:2, ic = 1:2
+            bij = b1 * Q[jc, ic]
+            ic == jc && (bij += b0)
+            trCB += C[ic, jc] * bij
+        end
+        @inbounds for jc = 1:2, ic = 1:2
+            result[ic, jc] = t * (f * C[ic, jc] + trCB * Q[ic, jc])
+        end
+    end
+    _store_exp_ta_pullback!(output, result, indices, accumulate_ta)
+    return nothing
+end
+
+@inline function kernel_exp_ta_pullback_su3!(
+    i, output, A, cotangent, dindexer, ::Val{nw}, t, accumulate_ta::Val,
+) where {nw}
+    indices = delinearize(dindexer, i, nw)
+    T = eltype(output)
+    RT = typeof(real(zero(T)))
+    Q = MMatrix{3,3,T}(undef)
+    H = MMatrix{3,3,T}(undef)
+    H2 = MMatrix{3,3,T}(undef)
+    C = MMatrix{3,3,T}(undef)
+    result = MMatrix{3,3,T}(undef)
+
+    trace_imag = zero(RT)
+    @inbounds for ic = 1:3
+        trace_imag += imag(A[ic, ic, indices...])
+    end
+    trace_imag /= RT(3)
+    @inbounds for ic = 1:3
+        Q[ic, ic] = t * (imag(A[ic, ic, indices...]) - trace_imag) * im
+    end
+    @inbounds for jc = 2:3, ic = 1:jc-1
+        value = t * (A[ic, jc, indices...] - conj(A[jc, ic, indices...])) / RT(2)
+        Q[ic, jc] = value
+        Q[jc, ic] = -conj(value)
+    end
+    @inbounds for jc = 1:3, ic = 1:3
+        H[ic, jc] = Q[ic, jc] / im
+        C[ic, jc] = _exp_ta_cotangent_entry(
+            cotangent, ic, jc, indices, accumulate_ta,
+        )
+    end
+    gemm!(H2, H, H)
+    c1 = real(H2[1, 1] + H2[2, 2] + H2[3, 3]) / RT(2)
+
+    if c1 <= _exp_ta_series_threshold(RT)
+        _exp_ta_pullback_taylor!(result, Q, C, t)
+    else
+        c0 = real(
+            H2[1, 1] * H[1, 1] + H2[1, 2] * H[2, 1] + H2[1, 3] * H[3, 1] +
+            H2[2, 1] * H[1, 2] + H2[2, 2] * H[2, 2] + H2[2, 3] * H[3, 2] +
+            H2[3, 1] * H[1, 3] + H2[3, 2] * H[2, 3] + H2[3, 3] * H[3, 3]
+        ) / RT(3)
+        _, f1, f2, b10, b11, b12, b20, b21, b22 =
+            _su3_exp_coefficients_analytic(c0, c1)
+
+        B1 = MMatrix{3,3,T}(undef)
+        B2 = MMatrix{3,3,T}(undef)
+        @inbounds for jc = 1:3, ic = 1:3
+            identity_entry = ic == jc ? one(T) : zero(T)
+            B1[ic, jc] = b10 * identity_entry + b11 * H[ic, jc] + b12 * H2[ic, jc]
+            B2[ic, jc] = b20 * identity_entry + b21 * H[ic, jc] + b22 * H2[ic, jc]
+        end
+
+        trCB1 = zero(T)
+        trCB2 = zero(T)
+        @inbounds for jc = 1:3, ic = 1:3
+            trCB1 += C[ic, jc] * B1[jc, ic]
+            trCB2 += C[ic, jc] * B2[jc, ic]
+        end
+
+        factor = t / im
+        @inbounds for jc = 1:3, ic = 1:3
+            hc = zero(T)
+            ch = zero(T)
+            for kc = 1:3
+                hc += H[ic, kc] * C[kc, jc]
+                ch += C[ic, kc] * H[kc, jc]
+            end
+            derivative =
+                trCB1 * H[ic, jc] + f1 * C[ic, jc] +
+                trCB2 * H2[ic, jc] + f2 * (hc + ch)
+            result[ic, jc] = factor * derivative
+        end
+    end
+    _store_exp_ta_pullback!(output, result, indices, accumulate_ta)
+    return nothing
+end
+
+"""
+    exp_ta_pullback!(output, cotangent, A, t=1)
+
+Compute a representative of the pullback of `exp(t * TA(A))` with respect to
+the bilinear trace pairing, restricted to traceless anti-Hermitian variations
+of `A`. The SU(2) and SU(3) site-local kernels use the same JACC path on CPU
+and accelerator backends.
+"""
+function exp_ta_pullback!(
+    output::TO,
+    cotangent::TC,
+    A::TA,
+    t::S=1,
+) where {
+    D,T,AT,NC,nw,DI,S<:Real,
+    TO<:LatticeMatrix{D,T,AT,NC,NC,nw,DI},
+    TC<:LatticeMatrix{D,T,AT,NC,NC,nw,DI},
+    TA<:LatticeMatrix{D,T,AT,NC,NC,nw,DI},
+}
+    kernel = if NC == 2
+        kernel_exp_ta_pullback_su2!
+    elseif NC == 3
+        kernel_exp_ta_pullback_su3!
+    else
+        throw(ArgumentError(
+            "exp_ta_pullback! is implemented only for SU(2) and SU(3), got NC=$NC",
+        ))
+    end
+    _parallel_for_mutating!(
+        output,
+        prod(output.PN),
+        kernel,
+        output.A,
+        A.A,
+        cotangent.A,
+        output.indexer,
+        Val(nw),
+        t,
+        Val(false),
+    )
+    return nothing
+end
+export exp_ta_pullback!
+
 #=
 function expt_TA!(C::TC, TA::TTA, t::S=one(S)) where {D,T,AT,NC1,
     S<:Number,T1,AT1,nw,nw2,DI,TC<:LatticeMatrix{D,T,AT,NC1,NC1,nw,DI},

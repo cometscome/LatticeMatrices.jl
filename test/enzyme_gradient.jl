@@ -204,4 +204,77 @@ function enzyme_gradient_tests()
             end
         end
     end
+
+    @testset "Enzyme TA exponential at small and degenerate fields" begin
+        stable_global_size = (2 * nprocs, 2, 1, 1)
+        stable_process_grid = (nprocs, 1, 1, 1)
+        for (label, matrix_A) in (
+            ("SU(2) small", ComplexF64[1e-10im 2e-10; -2e-10 -1e-10im]),
+            ("SU(3) c0 positive", Matrix(Diagonal(ComplexF64[-im, -im, 2im]))),
+            ("SU(3) c0 negative", Matrix(Diagonal(ComplexF64[im, im, -2im]))),
+        )
+            NC_stable = size(matrix_A, 1)
+            values_A = Array{ComplexF64}(
+                undef, NC_stable, NC_stable, stable_global_size...,
+            )
+            values_weight = similar(values_A)
+            values_direction = similar(values_A)
+            for site in CartesianIndices(stable_global_size)
+                coordinates = Tuple(site)
+                @views values_A[:, :, coordinates...] .= matrix_A
+                for jc = 1:NC_stable, ic = 1:NC_stable
+                    values_weight[ic, jc, coordinates...] = complex(
+                        (7ic + 3jc + sum(coordinates)) / 31,
+                        (2ic - 5jc + coordinates[1]) / 29,
+                    )
+                    values_direction[ic, jc, coordinates...] = complex(
+                        (3ic - 2jc + coordinates[2]) / 37,
+                        (5ic + jc - coordinates[1]) / 41,
+                    )
+                end
+            end
+
+            A_stable = LatticeMatrix(
+                values_A, 4, stable_process_grid; nw,
+            )
+            weight_stable = LatticeMatrix(
+                values_weight, 4, stable_process_grid; nw,
+            )
+            direction_stable = LatticeMatrix(
+                values_direction, 4, stable_process_grid; nw,
+            )
+            constants = [deepcopy(A_stable) for _ in 1:2]
+            dinputs = [similar(A_stable) for _ in 1:4]
+            stable_temp = [similar(A_stable)]
+            stable_dtemp = [similar(A_stable)]
+            clear_matrix!.(dinputs)
+            clear_matrix!.(stable_temp)
+            clear_matrix!.(stable_dtemp)
+
+            Enzyme_derivative!(
+                _enzyme_expt_ta_weighted_loss,
+                A_stable, weight_stable, constants[1], constants[2],
+                dinputs[1], dinputs[2], dinputs[3], dinputs[4];
+                temp=stable_temp,
+                dtemp=stable_dtemp,
+            )
+
+            epsilon = 1e-6
+            plus_A, minus_A = deepcopy(A_stable), deepcopy(A_stable)
+            add_matrix!(plus_A, direction_stable, epsilon)
+            add_matrix!(minus_A, direction_stable, -epsilon)
+            plus = _enzyme_expt_ta_weighted_loss(
+                plus_A, weight_stable, constants[1], constants[2], stable_temp,
+            )
+            minus = _enzyme_expt_ta_weighted_loss(
+                minus_A, weight_stable, constants[1], constants[2], stable_temp,
+            )
+            finite_difference = (plus - minus) / (2epsilon)
+            enzyme_directional = real(dot(dinputs[1], direction_stable))
+            @testset "$label" begin
+                @test enzyme_directional ≈ finite_difference atol=3e-6 rtol=3e-6
+                @test all(isfinite, dinputs[1].A)
+            end
+        end
+    end
 end

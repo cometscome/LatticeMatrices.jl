@@ -1,6 +1,7 @@
 using LatticeMatrices
 using Test
 using MPI
+MPI.Initialized() || MPI.Init()
 import JACC
 using LinearAlgebra
 using InteractiveUtils
@@ -17,7 +18,9 @@ include("random_fill.jl")
 include("halo_epoch.jl")
 include("device_selection.jl")
 include("regressions.jl")
+include("projected_bilinear_slices.jl")
 include("matrixexp_su3.jl")
+include("matrixexp_ta_pullback.jl")
 include("cg.jl")
 include("wilson_clover.jl")
 include("staggered_dirac.jl")
@@ -969,7 +972,7 @@ function wilsondiractest(NC; NX=32, repetitions=10)
 end
 
 function main()
-    MPI.Init()
+    MPI.Initialized() || MPI.Init()
     site_rng_tests()
     random_fill_tests()
     nw0test()
@@ -977,6 +980,7 @@ function main()
     device_selection_tests()
     regressiontests()
     matrixexp_su3_tests()
+    matrixexp_ta_pullback_tests()
     cg_tests()
     wilson_clover_tests()
     staggered_dirac_tests()

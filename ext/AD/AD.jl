@@ -2,7 +2,8 @@ import Enzyme.EnzymeRules: augmented_primal, reverse, RevConfig, AugmentedReturn
 import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add_matrix_shiftedAdag!, kernel_add_4D!, kernel_add_4D_dag!, kernel_add_4D_shift!, Adjoint_Lattice, get_shift,
     kernel_Dmatrix_mul_AshiftB!, kernel_Dmatrix_mul_AshiftBdag!, kernel_clear_4D!,
     mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt!, expt_TA!, clear_matrix!, set_halo!,
-    fold_halo_dim_to_core_grad!, Staggered_Lattice, staggered_eta_halo
+    fold_halo_dim_to_core_grad!, Staggered_Lattice, staggered_eta_halo,
+    kernel_exp_ta_pullback_su2!, kernel_exp_ta_pullback_su3!
 using PreallocatedArrays
 using MPI
 
@@ -2639,18 +2640,18 @@ function ER.reverse(cfg::ER.RevConfig,
     if C.val.NC1 == 2 && C.val.NC2 == 2
         JACC.parallel_for(
             prod(C.val.PN),
-            kernel_expt_TA_rev_su2!,
-            dAval, dCval, Aval,
+            kernel_exp_ta_pullback_su2!,
+            dAval, Aval, dCval,
             C.val.indexer, Val(C.val.nw),
-            tval, _expt_ta_eps_q
+            tval, Val(true),
         )
     elseif C.val.NC1 == 3 && C.val.NC2 == 3
         JACC.parallel_for(
             prod(C.val.PN),
-            kernel_expt_TA_rev_su3_ch_fd!,
-            dAval, dCval, Aval,
+            kernel_exp_ta_pullback_su3!,
+            dAval, Aval, dCval,
             C.val.indexer, Val(C.val.nw),
-            tval, _expt_ta_eps_q
+            tval, Val(true),
         )
     else
         error("expt_TA! reverse is only implemented for NC=2 or NC=3.")

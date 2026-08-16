@@ -86,6 +86,8 @@ end
 
 include("Latticeindices.jl")
 include("LatticeMatrices_core.jl")
+include("measurements/global_source.jl")
+include("measurements/projected_bilinear_slices.jl")
 include("LinearAlgebras/linearalgebra.jl")
 include("TA/TA.jl")
 #include("AD/AD.jl")

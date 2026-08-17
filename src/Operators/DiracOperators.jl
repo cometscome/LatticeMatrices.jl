@@ -18,6 +18,7 @@ include("StaggeredDiracOperator.jl")
 include("HISQSmearing.jl")
 include("HISQDiracOperator.jl")
 include("HISQFullSmearing.jl")
+include("HISQPullback.jl")
 
 
 struct DiracOp{T,TF,Dmul,Ddagmul,P}

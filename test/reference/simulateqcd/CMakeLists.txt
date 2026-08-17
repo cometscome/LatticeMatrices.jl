@@ -105,3 +105,99 @@ set_target_properties(simulateqcd_hisq_full_reference PROPERTIES
     CUDA_ARCHITECTURES "${ARCHITECTURE}"
     CUDA_SEPARABLE_COMPILATION ON
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reference")
+
+set(BENCHMARK_SOURCE "${CMAKE_CURRENT_LIST_DIR}/hisq_benchmark.cpp")
+set_source_files_properties("${BENCHMARK_SOURCE}" PROPERTIES LANGUAGE CUDA)
+add_executable(simulateqcd_hisq_benchmark
+    "${BENCHMARK_SOURCE}"
+    "${HISQ_SMEARING_SOURCE}")
+target_link_libraries(simulateqcd_hisq_benchmark PRIVATE
+    CodeBase MPI::MPI_CXX CUDA::cudart)
+target_include_directories(simulateqcd_hisq_benchmark PRIVATE
+    "${SIMULATEQCD_SOURCE_DIR}/src"
+    "${MPI_INCLUDE_PATH}"
+    "${MPI_CXX_INCLUDE_DIRS}"
+    "${CUDAToolkit_INCLUDE_DIRS}")
+target_compile_definitions(simulateqcd_hisq_benchmark PRIVATE
+    USE_CUDA
+    ARCHITECTURE=${ARCHITECTURE}
+    GIT_HASH="external-benchmark"
+    HALODEPTH_2=1
+    DOUBLEPREC=1
+    COMP_R18=1)
+if(USE_GPU_AWARE_MPI)
+    target_compile_definitions(
+        simulateqcd_hisq_benchmark PRIVATE USE_GPU_AWARE_MPI)
+endif()
+if(USE_GPU_P2P)
+    target_compile_definitions(
+        simulateqcd_hisq_benchmark PRIVATE USE_GPU_P2P)
+endif()
+if(COMMS_STREAMS)
+    target_compile_definitions(
+        simulateqcd_hisq_benchmark PRIVATE COMMS_STREAMS)
+endif()
+if(USE_TILED_MULTIRHS)
+    target_compile_definitions(
+        simulateqcd_hisq_benchmark PRIVATE USE_TILED_MULTIRHS)
+endif()
+set_target_properties(simulateqcd_hisq_benchmark PROPERTIES
+    CXX_STANDARD 17
+    CUDA_STANDARD 17
+    CUDA_ARCHITECTURES "${ARCHITECTURE}"
+    CUDA_SEPARABLE_COMPILATION ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reference")
+
+set(DIRAC_BENCHMARK_SOURCE
+    "${CMAKE_CURRENT_LIST_DIR}/hisq_dirac_benchmark.cpp")
+set(SPINOR_SOURCE "${SIMULATEQCD_SOURCE_DIR}/src/spinor/spinorfield.cpp")
+set_source_files_properties(
+    "${DIRAC_BENCHMARK_SOURCE}" "${SPINOR_SOURCE}"
+    PROPERTIES LANGUAGE CUDA)
+add_executable(simulateqcd_hisq_dirac_benchmark
+    "${DIRAC_BENCHMARK_SOURCE}"
+    "${HISQ_SMEARING_SOURCE}"
+    "${SPINOR_SOURCE}")
+target_link_libraries(simulateqcd_hisq_dirac_benchmark PRIVATE
+    CodeBase MPI::MPI_CXX CUDA::cudart)
+target_include_directories(simulateqcd_hisq_dirac_benchmark PRIVATE
+    "${SIMULATEQCD_SOURCE_DIR}/src"
+    "${MPI_INCLUDE_PATH}"
+    "${MPI_CXX_INCLUDE_DIRS}"
+    "${CUDAToolkit_INCLUDE_DIRS}")
+target_compile_definitions(simulateqcd_hisq_dirac_benchmark PRIVATE
+    USE_CUDA
+    ARCHITECTURE=${ARCHITECTURE}
+    GIT_HASH="external-dirac-benchmark"
+    HALODEPTH_2=1
+    HALODEPTHSPIN_3=1
+    DOUBLEPREC=1
+    SINGLEPREC=1
+    COMP_R18=1
+    COMP_U3R14=1
+    NSTACKS_1=1
+    LAYOUT_ALL=1
+    LAYOUT_ODD=1
+    LAYOUT_EVEN=1)
+if(USE_GPU_AWARE_MPI)
+    target_compile_definitions(
+        simulateqcd_hisq_dirac_benchmark PRIVATE USE_GPU_AWARE_MPI)
+endif()
+if(USE_GPU_P2P)
+    target_compile_definitions(
+        simulateqcd_hisq_dirac_benchmark PRIVATE USE_GPU_P2P)
+endif()
+if(COMMS_STREAMS)
+    target_compile_definitions(
+        simulateqcd_hisq_dirac_benchmark PRIVATE COMMS_STREAMS)
+endif()
+if(USE_TILED_MULTIRHS)
+    target_compile_definitions(
+        simulateqcd_hisq_dirac_benchmark PRIVATE USE_TILED_MULTIRHS)
+endif()
+set_target_properties(simulateqcd_hisq_dirac_benchmark PROPERTIES
+    CXX_STANDARD 17
+    CUDA_STANDARD 17
+    CUDA_ARCHITECTURES "${ARCHITECTURE}"
+    CUDA_SEPARABLE_COMPILATION ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reference")

@@ -654,7 +654,7 @@ function _exchange_direct_shift!(receive, send, data::LatticeMatrix, plan::_Dire
         )
     else
         buffers = _ensure_direct_shift_host_buffers!(
-            data.shift_buf_host, plan.element_count)
+            data.shift_buf_host, plan.element_count, data.A)
         copyto!(buffers.send, 1, send, 1, plan.element_count)
         MPI.Alltoallv!(
             MPI.VBuffer(buffers.send, plan.send_counts, plan.send_displacements),

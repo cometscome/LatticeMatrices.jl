@@ -236,6 +236,35 @@ function hisq_full_smearing_tests()
             end
         end
 
+        factorized_level1 = [similar(link) for link in U]
+        factorized_reunitarized = [similar(link) for link in U]
+        factorized_fat = [similar(link) for link in U]
+        factorized_long = [similar(link) for link in U]
+        fat7_workspace = HISQFat7Workspace(U[1])
+        factorized_links = hisq_links_from_thin!(
+            factorized_fat, factorized_long, factorized_level1,
+            factorized_reunitarized, U;
+            naik_epsilon, fat7_workspace)
+        @test factorized_links.fat_links === factorized_fat
+        @test factorized_links.long_links === factorized_long
+        global_factorized_fat = _hisq_smearing_test_gather(factorized_fat)
+        global_factorized_long = _hisq_smearing_test_gather(factorized_long)
+        if rank == 0
+            for mu in 1:4
+                @test global_factorized_fat[mu] ≈ global_fat[mu]
+                @test global_factorized_long[mu] ≈ global_long[mu]
+            end
+        end
+
+        workspace_fields = (
+            fat7_workspace.first_stage..., fat7_workspace.second_stage...)
+        @test length(workspace_fields) == 6
+        @test all(field -> field !== U[1] && field.A !== U[1].A,
+            workspace_fields)
+        @test all(i -> all(j -> workspace_fields[i].A !==
+            workspace_fields[j].A, (i + 1):length(workspace_fields)),
+            eachindex(workspace_fields))
+
         allocating_links = hisq_links_from_thin(U; naik_epsilon)
         global_allocating_fat = _hisq_smearing_test_gather(
             allocating_links.fat_links)
@@ -251,6 +280,19 @@ function hisq_full_smearing_tests()
         operator = HISQDiracOperator4D(
             U, 0.13; naik_epsilon)
         @test operator.naik_epsilon == naik_epsilon
+
+        cache = HISQDiracCache4D(U, 0.13; naik_epsilon)
+        cached_workspace = cache.fat7_workspace
+        cached_fields = (
+            cached_workspace.first_stage..., cached_workspace.second_stage...)
+        @test update_hisq_cache!(cache, U) === cache
+        @test cache.fat7_workspace === cached_workspace
+        @test all(i -> cache.fat7_workspace.first_stage[i] ===
+            cached_workspace.first_stage[i], 1:3)
+        @test all(field -> all(output -> field.A !== output.A,
+            (cache.level1_links..., cache.reunitarized_links...,
+             cache.fat_links..., cache.long_links...)), cached_fields)
+
         @test_throws ArgumentError hisq_links_from_thin!(
             fat_links, long_links, level1_workspace,
             reunitarized_workspace, reunitarized_workspace,

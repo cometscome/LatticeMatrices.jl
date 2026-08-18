@@ -47,22 +47,32 @@ function _hisq_dirac_precision()
     error("HISQ_BENCH_PRECISION must be single/float32/f32 or double/float64/f64")
 end
 
-function _hisq_dirac_thin_links(global_size, process_grid, element_type)
-    arrays = [zeros(element_type, 3, 3, global_size...) for _ in 1:4]
-    real_type = typeof(real(zero(element_type)))
-    sites = CartesianIndices(global_size)
-    Threads.@threads :static for linear_site in eachindex(sites)
-        coordinates = Tuple(@inbounds sites[linear_site])
-        coordinate = coordinates[1] + 3coordinates[2] +
-            5coordinates[3] + 7coordinates[4]
+function _hisq_dirac_thin_links(
+    global_size, process_grid, ::Type{ElementType},
+) where {ElementType}
+    arrays = [zeros(ElementType, 3, 3, global_size...) for _ in 1:4]
+    real_type = typeof(real(zero(ElementType)))
+    volume = prod(global_size)
+    Threads.@threads :static for linear_site in 1:volume
+        site0 = linear_site - 1
+        x = rem(site0, global_size[1]) + 1
+        site0 = div(site0, global_size[1])
+        y = rem(site0, global_size[2]) + 1
+        site0 = div(site0, global_size[2])
+        z = rem(site0, global_size[3]) + 1
+        t = div(site0, global_size[3]) + 1
+        coordinate = x + 3y + 5z + 7t
+        site_offset = 9 * (linear_site - 1)
         @inbounds for mu in 1:4, column in 1:3, row in 1:3
             deterministic_re = real_type(0.013) *
                 (2row - column + coordinate + 3mu)
             deterministic_im = real_type(0.017) *
                 (row + 2column - coordinate + mu)
-            arrays[mu][row, column, coordinates...] = real_type(0.05) *
-                (deterministic_re + deterministic_im * im) +
-                (row == column)
+            real_value = real_type(0.05) * deterministic_re +
+                ifelse(row == column, one(real_type), zero(real_type))
+            imaginary_value = real_type(0.05) * deterministic_im
+            arrays[mu][site_offset + row + 3 * (column - 1)] =
+                ElementType(real_value, imaginary_value)
         end
     end
     return [LatticeMatrix(array, 4, process_grid; nw=3) for array in arrays]

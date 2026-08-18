@@ -1,5 +1,6 @@
 import LatticeMatrices: WilsonDiracOperator4D, mark_halo_dirty!,
-    kernel_adjoint_WilsonDiracOperator4D!, kernel_add_4D!, mul_op
+    kernel_adjoint_WilsonDiracOperator4D!, kernel_add_4D!, mul_op,
+    _wilson_halfspin_link_pullback_direction3!
 
 @inline function _wilson_operator_shadow(operator)
     hasproperty(operator, :dval) || return nothing
@@ -47,6 +48,14 @@ end
         end
     end
     return nothing
+end
+
+@inline function _kernel_wilson_link_pullback_direction!(
+    dU, dresult, psi, indices, indices_plus, coefficient,
+    ::Val{3}, ::LatticeMatrices.Oneγ{-1,MU}, ::LatticeMatrices.Oneγ{1,MU},
+) where MU
+    return _wilson_halfspin_link_pullback_direction3!(
+        dU, dresult, psi, indices, indices_plus, coefficient, Val(MU))
 end
 
 @inline function _kernel_wilson_link_pullback!(

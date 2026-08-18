@@ -2,117 +2,25 @@
 
 [![Build Status](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
-🎉 **LatticeMatrices.jl has reached v1.0.0!** This is the first stable major release of the package.
-
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-## What's new in v1.1.0 (compared with v1.0.0)
+Version 1.1.2 is the current backward-compatible release in the stable v1 line.
+It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
+and accelerator execution through JACC.
 
-v1.1.0 is a backward-compatible minor release. Existing v1.0.0 code can be
-used without changes; the following APIs and kernels are additions.
+## What's new in v1.1.2
 
-### Measurement building blocks
+- Faster backend-independent `NC=3` Wilson half-spin and factorized clover
+  kernels.
+- A public analytic `wilson_clover_link_pullback!` shared with the optional
+  Enzyme reverse rules.
+- Five-dimensional domain-wall kernel improvements and reusable physical,
+  midpoint, `PP`, and `J5q` projection APIs.
+- The v1.1 line also adds analytic HISQ pullbacks, MPI-aware measurement
+  building blocks, and stable SU(2)/SU(3) exponential pullbacks.
 
-- `set_global_component!` sets one matrix component using global lattice
-  coordinates. Under MPI, only the rank that owns the site writes it; the same
-  site-local JACC kernel works on CPU and accelerator backends.
-- `projected_bilinear_slices` contracts spin-color propagators into hyperplane
-  slices, with optional Fourier-momentum and staggered-parity projections, and
-  performs the final global MPI reduction. QCDMeasurements.jl uses these
-  primitives for generalized connected-meson two-point measurements.
-
-### Stable SU(2)/SU(3) exponential pullbacks
-
-- `exp_ta_pullback!(output, cotangent, A, t=1)` is a new public pullback for
-  `exp(t * TA(A))`, restricted to traceless anti-Hermitian variations. SU(2)
-  and SU(3) use site-local JACC kernels shared by CPU and GPU execution.
-- The active Enzyme reverse rule for `expt_TA!` now calls these core kernels.
-  In particular, the SU(3) coefficient derivatives are analytic rather than
-  finite-difference estimates.
-- The SU(3) implementation follows the analytic Cayley--Hamilton coefficients
-  and derivatives of
-  [Morningstar--Peardon](https://arxiv.org/abs/hep-lat/0311018), including the
-  reflection relations for negative cubic invariant. Stable series are used
-  near the origin and near degenerate eigenvalues.
-
-### Compatibility and validation
-
-- Enzyme remains an optional weak dependency; v1.1.0 adds no required AD
-  dependency and does not change the existing `expt_TA!` interface.
-- The new pullbacks were checked against the block-matrix exponential identity
-  described by
-  [Al-Mohy--Higham](https://eprints.maths.manchester.ac.uk/1218/) for SU(2) and
-  SU(3), including zero and very small fields, negative `t`, and both signs of
-  the SU(3) degenerate-eigenvalue case, in `ComplexF32` and `ComplexF64`.
-- Release validation covered threaded CPU and NVIDIA H100/CUDA execution, the
-  Enzyme rules on both backends, MPI-aware measurement kernels, the complete
-  LatticeMatrices.jl test suite, and the QCDMeasurements.jl integration suite.
-
-**Upgrading from v1.0:** No source changes are required for existing APIs.
-QCDMeasurements.jl's generalized meson measurement requires LatticeMatrices.jl
-v1.1 or later because it uses the new measurement building blocks.
-
-## What's new in v1.0.0
-
-Compared with the previous release, v0.3.13, v1.0.0 adds and stabilizes:
-
-- **Production parallel execution** with **[JACC.jl](https://github.com/JuliaORNL/JACC.jl)**
-  threaded CPU kernels, MPI,
-  hybrid MPI+threads, single GPU, and multi-GPU. Multi-GPU jobs normally use
-  one MPI rank per GPU, with automatic node-local rank-to-device mapping for
-  CUDA, AMDGPU/ROCm, and oneAPI backends.
-- **Safe automatic halo synchronization** using core and halo epochs. Public
-  mutations mark halos stale, and shifted reads synchronize them on demand.
-- **Arbitrary-distance periodic shifts**, including direct MPI redistribution,
-  boundary phases, reusable preallocated storage, and `nw=0` operation.
-- **A complete lattice-QCD operator suite**: Wilson, Wilson--clover, one-link
-  staggered, HISQ (two-level smearing, U(3) projection, and Naik links), and
-  Möbius/generalized domain-wall operators, together with their adjoints and
-  cached execution paths.
-- **Extended Enzyme reverse-mode AD**, including halo-aware pullbacks for the
-  Dirac operators and HISQ smearing. Enzyme is now an optional package
-  extension. The correctly spelled `Wirtinger` API is provided while the old
-  `Wiltinger` names remain as compatibility aliases.
-- **Decomposition-independent site utilities and random-number streams**, an
-  allocation-conscious CG solver, and a distributed non-QCD Heisenberg-model
-  example.
-
-**Upgrading from v0.3:** Existing constructors and legacy entry points remain
-available. Code that writes directly to `M.A` must now call
-`mark_halo_dirty!(M)` after completing its core writes; mutations through the
-public LatticeMatrices API do this automatically. Device selection is automatic
-by default; pass `device_mapping=:current` when the job launcher has already
-assigned a device to each MPI rank.
-
-## What you can do
-
-- Store real or complex `NC1×NC2` matrices at every site of an arbitrary
-  D-dimensional lattice. Common production types include `Float32`,
-  `Float64`, `ComplexF32`, and `ComplexF64`; square and rectangular site
-  matrices are supported.
-- Decompose a lattice over an MPI Cartesian process grid, use configurable
-  halo widths and periodic boundary phases, and gather, broadcast, or reduce
-  distributed results.
-- Run the same JACC-based kernels on threaded CPUs or accelerators, including
-  supported hybrid MPI+threads and multi-node/multi-GPU configurations.
-- Apply local and shifted matrix algebra, adjoints, traces, matrix
-  exponentials, traceless anti-Hermitian projections, even/odd updates, and
-  iterative solves.
-- Build and apply Wilson, clover, staggered, HISQ, and domain-wall fermion
-  operators, including `D`, `D'`, `D' * D`, CG solves, pseudofermion actions,
-  and cached HISQ/clover paths.
-- Differentiate lattice, fermion, and smearing calculations with Enzyme,
-  including complex-valued calculations through the Wirtinger interface.
-- Use LatticeMatrices.jl directly for general structured-lattice models or as
-  the MPI/JACC backend for [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl)
-  and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl).
-
-> This package focuses on scalable, halo-exchange–based lattice algorithms with minimal allocations and clean multi-backend execution.
-
-**Applications**: This package is designed to support large-scale simulations on structured lattices. A key application area is lattice QCD, where gauge fields and fermion fields are represented as matrix-valued objects on a multi-dimensional lattice. LatticeMatrices.jl provides the MPI/JACC lattice backend used by [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl), including distributed storage, halo synchronization, linear algebra kernels, and optional Enzyme AD support for gauge and fermion calculations. The same infrastructure can also be used for non-QCD structured-lattice problems; a distributed classical Heisenberg spin-model example is included below.
-
-
----
+Existing v1.0 code requires no source changes. See [CHANGES.md](CHANGES.md) for
+the complete v1 release history and upgrade notes.
 
 ## Installation
 
@@ -121,7 +29,28 @@ pkg> add LatticeMatrices
 ```
 
 Requirements:
+
 - Julia ≥ 1.11
+
+---
+
+## What you can do
+
+- Store real or complex `NC1×NC2` matrices at every site of an arbitrary
+  D-dimensional lattice, including square and rectangular site matrices.
+- Decompose lattices over MPI Cartesian process grids with configurable halos,
+  boundary phases, and distributed gather/reduction operations.
+- Run the same JACC kernels on threaded CPUs and supported accelerators,
+  including hybrid MPI+threads and multi-GPU configurations.
+- Apply local and shifted matrix algebra, matrix exponentials, traceless
+  anti-Hermitian projections, even/odd updates, and iterative solvers.
+- Build Wilson, Wilson--clover, staggered, HISQ, Möbius domain-wall, and
+  generalized domain-wall operators, together with their adjoints and cached
+  execution paths.
+- Use LatticeMatrices directly for structured-lattice models or as the
+  MPI/JACC backend for
+  [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and
+  [LatticeDiracOperators.jl](https://github.com/akio-tomiya/LatticeDiracOperators.jl).
 
 ---
 
@@ -534,6 +463,13 @@ D_hopping = WilsonDiracOperator4D_Donly(U)
 mul!(out, D_hopping, psi)
 ```
 
+For `NC=3` with a halo, the Wilson forward, adjoint, and hopping-only paths
+use a backend-independent half-spin kernel.  It applies each rank-two Wilson
+projector before the SU(3) multiplication and accumulates all eight neighbors
+before writing the spinor once.  This optimization does not change the
+`LatticeMatrix` memory layout or require CUDA-, ROCm-, or Threads-specific user
+code.  The `NC != 3` and `nw=0` implementations remain generic fallbacks.
+
 The Wilson operator is normalized as
 
 ```math
@@ -557,6 +493,10 @@ where `Q` is the sum of the four plaquettes touching the site in the
 `mu`--`nu` plane.  The six anti-Hermitian components are cached in the order
 `(12, 13, 14, 23, 24, 34)` and can also be constructed directly:
 
+For `NC=3`, each four-link clover leaf is evaluated as three factorized SU(3)
+matrix products.  The generic element-by-element construction remains the
+fallback for other color counts.
+
 ```julia
 field_strength = CloverFieldStrength4D(U)
 F12 = field_strength[1]
@@ -575,6 +515,20 @@ mul!(out, D_clover, psi)
 `update_clover!` is unnecessary while `U` is unchanged.  Direct writes to a
 lattice's storage (`U[mu].A`) must additionally be followed by
 `mark_halo_dirty!(U[mu])`, as described in the halo-epoch section above.
+
+The link derivative of a Wilson--clover bilinear is also available directly:
+
+```julia
+left = psi
+dU = [similar(link) for link in U]
+clear_matrix!.(dU)
+wilson_clover_link_pullback!(dU, D_clover, U, left, psi)
+```
+
+`wilson_clover_link_pullback!` accumulates the Wilson hopping and four-leaf
+clover contributions into `dU`. It is an analytic backend operation and does
+not require an automatic-differentiation package. A halo width of at least one
+is required.
 
 #### One-link staggered example (Bridge++ convention)
 

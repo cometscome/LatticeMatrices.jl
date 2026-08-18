@@ -154,128 +154,268 @@ end
     return acc
 end
 
-@inline function kernel_Umgammax_p!(C, κ, U, ψdata, indices, indices_p, oneminusγ)
-    v11, v12, v13, v14 = mul_op(oneminusγ, ψdata, 1, indices_p)
-    v21, v22, v23, v24 = mul_op(oneminusγ, ψdata, 2, indices_p)
-    v31, v32, v33, v34 = mul_op(oneminusγ, ψdata, 3, indices_p)
+@inline function _wilson_half_project3(ψdata, color, indices,
+    ::Val{PM}, ::Val{MU}) where {PM,MU}
 
-    U11 = U[1, 1, indices...]
-    U12 = U[1, 2, indices...]
-    U13 = U[1, 3, indices...]
-    U21 = U[2, 1, indices...]
-    U22 = U[2, 2, indices...]
-    U23 = U[2, 3, indices...]
-    U31 = U[3, 1, indices...]
-    U32 = U[3, 2, indices...]
-    U33 = U[3, 3, indices...]
-
-    #C[1, 1, indices...] += -κ*(U11*v11 + U12*v21 + U13*v31)
-    C[1, 1, indices...] += -κ * muladdmulti(U11, v11, U12, v21, U13, v31)
-    C[2, 1, indices...] += -κ * muladdmulti(U21, v11, U22, v21, U23, v31)
-    C[3, 1, indices...] += -κ * muladdmulti(U31, v11, U32, v21, U33, v31)
-
-    C[1, 2, indices...] += -κ * muladdmulti(U11, v12, U12, v22, U13, v32)
-    C[2, 2, indices...] += -κ * muladdmulti(U21, v12, U22, v22, U23, v32)
-    C[3, 2, indices...] += -κ * muladdmulti(U31, v12, U32, v22, U33, v32)
-
-
-    C[1, 3, indices...] += -κ * muladdmulti(U11, v13, U12, v23, U13, v33)
-    C[2, 3, indices...] += -κ * muladdmulti(U21, v13, U22, v23, U23, v33)
-    C[3, 3, indices...] += -κ * muladdmulti(U31, v13, U32, v23, U33, v33)
-
-    C[1, 4, indices...] += -κ * muladdmulti(U11, v14, U12, v24, U13, v34)
-    C[2, 4, indices...] += -κ * muladdmulti(U21, v14, U22, v24, U23, v34)
-    C[3, 4, indices...] += -κ * muladdmulti(U31, v14, U32, v24, U33, v34)
+    @inbounds begin
+        ψ1 = ψdata[color, 1, indices...]
+        ψ2 = ψdata[color, 2, indices...]
+        ψ3 = ψdata[color, 3, indices...]
+        ψ4 = ψdata[color, 4, indices...]
+    end
+    if MU == 1
+        return ψ1 - PM * im * ψ4, ψ2 - PM * im * ψ3
+    elseif MU == 2
+        return ψ1 - PM * ψ4, ψ2 + PM * ψ3
+    elseif MU == 3
+        return ψ1 - PM * im * ψ3, ψ2 + PM * im * ψ4
+    else
+        return ψ1 - PM * ψ3, ψ2 - PM * ψ4
+    end
 end
 
+@inline function _wilson_half_matvec_forward3(
+    U, ψdata, indices, indices_p, pm, mu,
+)
+    h11, h12 = _wilson_half_project3(ψdata, 1, indices_p, pm, mu)
+    h21, h22 = _wilson_half_project3(ψdata, 2, indices_p, pm, mu)
+    h31, h32 = _wilson_half_project3(ψdata, 3, indices_p, pm, mu)
+    @inbounds begin
+        U11 = U[1, 1, indices...]
+        U12 = U[1, 2, indices...]
+        U13 = U[1, 3, indices...]
+        U21 = U[2, 1, indices...]
+        U22 = U[2, 2, indices...]
+        U23 = U[2, 3, indices...]
+        U31 = U[3, 1, indices...]
+        U32 = U[3, 2, indices...]
+        U33 = U[3, 3, indices...]
+    end
+    return (
+        muladdmulti(U11, h11, U12, h21, U13, h31),
+        muladdmulti(U11, h12, U12, h22, U13, h32),
+        muladdmulti(U21, h11, U22, h21, U23, h31),
+        muladdmulti(U21, h12, U22, h22, U23, h32),
+        muladdmulti(U31, h11, U32, h21, U33, h31),
+        muladdmulti(U31, h12, U32, h22, U33, h32),
+    )
+end
 
-@inline function kernel_Updaggammax_m!(C, κ, U, ψdata, indices, indices_m, oneplusγ)
-    v11, v12, v13, v14 = mul_op(oneplusγ, ψdata, 1, indices_m)
-    v21, v22, v23, v24 = mul_op(oneplusγ, ψdata, 2, indices_m)
-    v31, v32, v33, v34 = mul_op(oneplusγ, ψdata, 3, indices_m)
+@inline function _wilson_half_matvec_backward3(
+    U, ψdata, indices_m, pm, mu,
+)
+    h11, h12 = _wilson_half_project3(ψdata, 1, indices_m, pm, mu)
+    h21, h22 = _wilson_half_project3(ψdata, 2, indices_m, pm, mu)
+    h31, h32 = _wilson_half_project3(ψdata, 3, indices_m, pm, mu)
+    @inbounds begin
+        U11 = conj(U[1, 1, indices_m...])
+        U12 = conj(U[2, 1, indices_m...])
+        U13 = conj(U[3, 1, indices_m...])
+        U21 = conj(U[1, 2, indices_m...])
+        U22 = conj(U[2, 2, indices_m...])
+        U23 = conj(U[3, 2, indices_m...])
+        U31 = conj(U[1, 3, indices_m...])
+        U32 = conj(U[2, 3, indices_m...])
+        U33 = conj(U[3, 3, indices_m...])
+    end
+    return (
+        muladdmulti(U11, h11, U12, h21, U13, h31),
+        muladdmulti(U11, h12, U12, h22, U13, h32),
+        muladdmulti(U21, h11, U22, h21, U23, h31),
+        muladdmulti(U21, h12, U22, h22, U23, h32),
+        muladdmulti(U31, h11, U32, h21, U33, h31),
+        muladdmulti(U31, h12, U32, h22, U33, h32),
+    )
+end
 
-    U11 = U[1, 1, indices_m...]'
-    U12 = U[2, 1, indices_m...]'
-    U13 = U[3, 1, indices_m...]'
-    U21 = U[1, 2, indices_m...]'
-    U22 = U[2, 2, indices_m...]'
-    U23 = U[3, 2, indices_m...]'
-    U31 = U[1, 3, indices_m...]'
-    U32 = U[2, 3, indices_m...]'
-    U33 = U[3, 3, indices_m...]'
+@inline function _wilson_reconstruct_add3(
+    accumulator, halfspinor, ::Val{PM}, ::Val{MU},
+) where {PM,MU}
+    c11, c12, c13, c14,
+    c21, c22, c23, c24,
+    c31, c32, c33, c34 = accumulator
+    h11, h12, h21, h22, h31, h32 = halfspinor
+    if MU == 1
+        return (
+            c11 + h11, c12 + h12, c13 + PM * im * h12, c14 + PM * im * h11,
+            c21 + h21, c22 + h22, c23 + PM * im * h22, c24 + PM * im * h21,
+            c31 + h31, c32 + h32, c33 + PM * im * h32, c34 + PM * im * h31,
+        )
+    elseif MU == 2
+        return (
+            c11 + h11, c12 + h12, c13 + PM * h12, c14 - PM * h11,
+            c21 + h21, c22 + h22, c23 + PM * h22, c24 - PM * h21,
+            c31 + h31, c32 + h32, c33 + PM * h32, c34 - PM * h31,
+        )
+    elseif MU == 3
+        return (
+            c11 + h11, c12 + h12, c13 + PM * im * h11, c14 - PM * im * h12,
+            c21 + h21, c22 + h22, c23 + PM * im * h21, c24 - PM * im * h22,
+            c31 + h31, c32 + h32, c33 + PM * im * h31, c34 - PM * im * h32,
+        )
+    else
+        return (
+            c11 + h11, c12 + h12, c13 - PM * h11, c14 - PM * h12,
+            c21 + h21, c22 + h22, c23 - PM * h21, c24 - PM * h22,
+            c31 + h31, c32 + h32, c33 - PM * h31, c34 - PM * h32,
+        )
+    end
+end
 
-    C[1, 1, indices...] += -κ * muladdmulti(U11, v11, U12, v21, U13, v31)
-    C[2, 1, indices...] += -κ * muladdmulti(U21, v11, U22, v21, U23, v31)
-    C[3, 1, indices...] += -κ * muladdmulti(U31, v11, U32, v21, U33, v31)
+@inline function _wilson_hopping_accumulator3(
+    U1, U2, U3, U4, ψdata, indices, ::Val{FORWARD_PM},
+) where FORWARD_PM
+    zero_value = zero(@inbounds ψdata[1, 1, indices...])
+    accumulator = (
+        zero_value, zero_value, zero_value, zero_value,
+        zero_value, zero_value, zero_value, zero_value,
+        zero_value, zero_value, zero_value, zero_value,
+    )
+    forward_pm = Val(FORWARD_PM)
+    backward_pm = Val(-FORWARD_PM)
 
-    C[1, 2, indices...] += -κ * muladdmulti(U11, v12, U12, v22, U13, v32)
-    C[2, 2, indices...] += -κ * muladdmulti(U21, v12, U22, v22, U23, v32)
-    C[3, 2, indices...] += -κ * muladdmulti(U31, v12, U32, v22, U33, v32)
+    indices_p = shiftindices(indices, shift_1p)
+    indices_m = shiftindices(indices, shift_1m)
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_forward3(
+            U1, ψdata, indices, indices_p, forward_pm, Val(1)),
+        forward_pm, Val(1))
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_backward3(
+            U1, ψdata, indices_m, backward_pm, Val(1)),
+        backward_pm, Val(1))
 
+    indices_p = shiftindices(indices, shift_2p)
+    indices_m = shiftindices(indices, shift_2m)
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_forward3(
+            U2, ψdata, indices, indices_p, forward_pm, Val(2)),
+        forward_pm, Val(2))
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_backward3(
+            U2, ψdata, indices_m, backward_pm, Val(2)),
+        backward_pm, Val(2))
 
-    C[1, 3, indices...] += -κ * muladdmulti(U11, v13, U12, v23, U13, v33)
-    C[2, 3, indices...] += -κ * muladdmulti(U21, v13, U22, v23, U23, v33)
-    C[3, 3, indices...] += -κ * muladdmulti(U31, v13, U32, v23, U33, v33)
+    indices_p = shiftindices(indices, shift_3p)
+    indices_m = shiftindices(indices, shift_3m)
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_forward3(
+            U3, ψdata, indices, indices_p, forward_pm, Val(3)),
+        forward_pm, Val(3))
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_backward3(
+            U3, ψdata, indices_m, backward_pm, Val(3)),
+        backward_pm, Val(3))
 
-    C[1, 4, indices...] += -κ * muladdmulti(U11, v14, U12, v24, U13, v34)
-    C[2, 4, indices...] += -κ * muladdmulti(U21, v14, U22, v24, U23, v34)
-    C[3, 4, indices...] += -κ * muladdmulti(U31, v14, U32, v24, U33, v34)
+    indices_p = shiftindices(indices, shift_4p)
+    indices_m = shiftindices(indices, shift_4m)
+    accumulator = _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_forward3(
+            U4, ψdata, indices, indices_p, forward_pm, Val(4)),
+        forward_pm, Val(4))
+    return _wilson_reconstruct_add3(accumulator,
+        _wilson_half_matvec_backward3(
+            U4, ψdata, indices_m, backward_pm, Val(4)),
+        backward_pm, Val(4))
+end
+
+@inline function _write_wilson_result3!(
+    C, ψdata, indices, hopping, coefficient, ::Val{COPY_INPUT},
+) where COPY_INPUT
+    @inbounds begin
+        C[1, 1, indices...] =
+            (COPY_INPUT ? ψdata[1, 1, indices...] : zero(hopping[1])) + coefficient * hopping[1]
+        C[1, 2, indices...] =
+            (COPY_INPUT ? ψdata[1, 2, indices...] : zero(hopping[2])) + coefficient * hopping[2]
+        C[1, 3, indices...] =
+            (COPY_INPUT ? ψdata[1, 3, indices...] : zero(hopping[3])) + coefficient * hopping[3]
+        C[1, 4, indices...] =
+            (COPY_INPUT ? ψdata[1, 4, indices...] : zero(hopping[4])) + coefficient * hopping[4]
+        C[2, 1, indices...] =
+            (COPY_INPUT ? ψdata[2, 1, indices...] : zero(hopping[5])) + coefficient * hopping[5]
+        C[2, 2, indices...] =
+            (COPY_INPUT ? ψdata[2, 2, indices...] : zero(hopping[6])) + coefficient * hopping[6]
+        C[2, 3, indices...] =
+            (COPY_INPUT ? ψdata[2, 3, indices...] : zero(hopping[7])) + coefficient * hopping[7]
+        C[2, 4, indices...] =
+            (COPY_INPUT ? ψdata[2, 4, indices...] : zero(hopping[8])) + coefficient * hopping[8]
+        C[3, 1, indices...] =
+            (COPY_INPUT ? ψdata[3, 1, indices...] : zero(hopping[9])) + coefficient * hopping[9]
+        C[3, 2, indices...] =
+            (COPY_INPUT ? ψdata[3, 2, indices...] : zero(hopping[10])) + coefficient * hopping[10]
+        C[3, 3, indices...] =
+            (COPY_INPUT ? ψdata[3, 3, indices...] : zero(hopping[11])) + coefficient * hopping[11]
+        C[3, 4, indices...] =
+            (COPY_INPUT ? ψdata[3, 4, indices...] : zero(hopping[12])) + coefficient * hopping[12]
+    end
+    return nothing
+end
+
+@inline function _wilson_halfspin_link_pullback_row3!(
+    dU, dresult, ψdata, indices, coefficient,
+    plus_psi, minus_dresult, ::Val{ROW}, ::Val{MU},
+) where {ROW,MU}
+    dplus1, dplus2 = _wilson_half_project3(
+        dresult, ROW, indices, Val(-1), Val(MU))
+    minus_psi1, minus_psi2 = _wilson_half_project3(
+        ψdata, ROW, indices, Val(1), Val(MU))
+    @inbounds begin
+        value1 = dplus1 * conj(plus_psi[1]) +
+                 dplus2 * conj(plus_psi[2]) +
+                 minus_psi1 * conj(minus_dresult[1]) +
+                 minus_psi2 * conj(minus_dresult[2])
+        value2 = dplus1 * conj(plus_psi[3]) +
+                 dplus2 * conj(plus_psi[4]) +
+                 minus_psi1 * conj(minus_dresult[3]) +
+                 minus_psi2 * conj(minus_dresult[4])
+        value3 = dplus1 * conj(plus_psi[5]) +
+                 dplus2 * conj(plus_psi[6]) +
+                 minus_psi1 * conj(minus_dresult[5]) +
+                 minus_psi2 * conj(minus_dresult[6])
+        dU[ROW, 1, indices...] += coefficient * value1
+        dU[ROW, 2, indices...] += coefficient * value2
+        dU[ROW, 3, indices...] += coefficient * value3
+    end
+    return nothing
+end
+
+@inline function _wilson_halfspin_link_pullback_direction3!(
+    dU, dresult, ψdata, indices, indices_plus, coefficient, ::Val{MU},
+) where MU
+    plus11, plus12 = _wilson_half_project3(
+        ψdata, 1, indices_plus, Val(-1), Val(MU))
+    plus21, plus22 = _wilson_half_project3(
+        ψdata, 2, indices_plus, Val(-1), Val(MU))
+    plus31, plus32 = _wilson_half_project3(
+        ψdata, 3, indices_plus, Val(-1), Val(MU))
+    minus_dresult11, minus_dresult12 = _wilson_half_project3(
+        dresult, 1, indices_plus, Val(1), Val(MU))
+    minus_dresult21, minus_dresult22 = _wilson_half_project3(
+        dresult, 2, indices_plus, Val(1), Val(MU))
+    minus_dresult31, minus_dresult32 = _wilson_half_project3(
+        dresult, 3, indices_plus, Val(1), Val(MU))
+    plus_psi = (plus11, plus12, plus21, plus22, plus31, plus32)
+    minus_dresult = (
+        minus_dresult11, minus_dresult12,
+        minus_dresult21, minus_dresult22,
+        minus_dresult31, minus_dresult32,
+    )
+    _wilson_halfspin_link_pullback_row3!(dU, dresult, ψdata, indices,
+        coefficient, plus_psi, minus_dresult, Val(1), Val(MU))
+    _wilson_halfspin_link_pullback_row3!(dU, dresult, ψdata, indices,
+        coefficient, plus_psi, minus_dresult, Val(2), Val(MU))
+    _wilson_halfspin_link_pullback_row3!(dU, dresult, ψdata, indices,
+        coefficient, plus_psi, minus_dresult, Val(3), Val(MU))
+    return nothing
 end
 
 
 function kernel_WilsonDiracOperator4D!(i, C, U1, U2, U3, U4, κ, ψdata, ::Val{3}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
-    #U = (U1,U2,U3,U4)
-
-    C[1, 1, indices...] = ψdata[1, 1, indices...]
-    C[2, 1, indices...] = ψdata[2, 1, indices...]
-    C[3, 1, indices...] = ψdata[3, 1, indices...]
-
-    C[1, 2, indices...] = ψdata[1, 2, indices...]
-    C[2, 2, indices...] = ψdata[2, 2, indices...]
-    C[3, 2, indices...] = ψdata[3, 2, indices...]
-
-
-    C[1, 3, indices...] = ψdata[1, 3, indices...]
-    C[2, 3, indices...] = ψdata[2, 3, indices...]
-    C[3, 3, indices...] = ψdata[3, 3, indices...]
-
-    C[1, 4, indices...] = ψdata[1, 4, indices...]
-    C[2, 4, indices...] = ψdata[2, 4, indices...]
-    C[3, 4, indices...] = ψdata[3, 4, indices...]
-
-    #@inbounds for ν=1:4
-    @inbounds begin
-        indices_p = shiftindices(indices, shift_1p)
-        kernel_Umgammax_p!(C, κ, U1, ψdata, indices, indices_p, oneminusγ1)
-
-        indices_m = shiftindices(indices, shift_1m)
-        kernel_Updaggammax_m!(C, κ, U1, ψdata, indices, indices_m, oneplusγ1)
-
-        indices_p = shiftindices(indices, shift_2p)
-        kernel_Umgammax_p!(C, κ, U2, ψdata, indices, indices_p, oneminusγ2)
-
-        indices_m = shiftindices(indices, shift_2m)
-        kernel_Updaggammax_m!(C, κ, U2, ψdata, indices, indices_m, oneplusγ2)
-
-
-        indices_p = shiftindices(indices, shift_3p)
-        kernel_Umgammax_p!(C, κ, U3, ψdata, indices, indices_p, oneminusγ3)
-
-        indices_m = shiftindices(indices, shift_3m)
-        kernel_Updaggammax_m!(C, κ, U3, ψdata, indices, indices_m, oneplusγ3)
-
-
-        indices_p = shiftindices(indices, shift_4p)
-        kernel_Umgammax_p!(C, κ, U4, ψdata, indices, indices_p, oneminusγ4)
-
-        indices_m = shiftindices(indices, shift_4m)
-        kernel_Updaggammax_m!(C, κ, U4, ψdata, indices, indices_m, oneplusγ4)
-    end
-
-    #end
-
-
+    hopping = _wilson_hopping_accumulator3(
+        U1, U2, U3, U4, ψdata, indices, Val(-1))
+    _write_wilson_result3!(C, ψdata, indices, hopping, -κ, Val(true))
+    return nothing
 end
 
 
@@ -373,57 +513,10 @@ end
 
 function kernel_adjoint_WilsonDiracOperator4D!(i, C, U1, U2, U3, U4, κ, ψdata, ::Val{3}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
-    #U = (U1,U2,U3,U4)
-
-    C[1, 1, indices...] = ψdata[1, 1, indices...]
-    C[2, 1, indices...] = ψdata[2, 1, indices...]
-    C[3, 1, indices...] = ψdata[3, 1, indices...]
-
-    C[1, 2, indices...] = ψdata[1, 2, indices...]
-    C[2, 2, indices...] = ψdata[2, 2, indices...]
-    C[3, 2, indices...] = ψdata[3, 2, indices...]
-
-
-    C[1, 3, indices...] = ψdata[1, 3, indices...]
-    C[2, 3, indices...] = ψdata[2, 3, indices...]
-    C[3, 3, indices...] = ψdata[3, 3, indices...]
-
-    C[1, 4, indices...] = ψdata[1, 4, indices...]
-    C[2, 4, indices...] = ψdata[2, 4, indices...]
-    C[3, 4, indices...] = ψdata[3, 4, indices...]
-
-    #@inbounds for ν=1:4
-    @inbounds begin
-        indices_p = shiftindices(indices, shift_1p)
-        kernel_Umgammax_p!(C, κ, U1, ψdata, indices, indices_p, oneplusγ1)
-
-        indices_m = shiftindices(indices, shift_1m)
-        kernel_Updaggammax_m!(C, κ, U1, ψdata, indices, indices_m, oneminusγ1)
-
-        indices_p = shiftindices(indices, shift_2p)
-        kernel_Umgammax_p!(C, κ, U2, ψdata, indices, indices_p, oneplusγ2)
-
-        indices_m = shiftindices(indices, shift_2m)
-        kernel_Updaggammax_m!(C, κ, U2, ψdata, indices, indices_m, oneminusγ2)
-
-
-        indices_p = shiftindices(indices, shift_3p)
-        kernel_Umgammax_p!(C, κ, U3, ψdata, indices, indices_p, oneplusγ3)
-
-        indices_m = shiftindices(indices, shift_3m)
-        kernel_Updaggammax_m!(C, κ, U3, ψdata, indices, indices_m, oneminusγ3)
-
-
-        indices_p = shiftindices(indices, shift_4p)
-        kernel_Umgammax_p!(C, κ, U4, ψdata, indices, indices_p, oneplusγ4)
-
-        indices_m = shiftindices(indices, shift_4m)
-        kernel_Updaggammax_m!(C, κ, U4, ψdata, indices, indices_m, oneminusγ4)
-    end
-
-    #end
-
-
+    hopping = _wilson_hopping_accumulator3(
+        U1, U2, U3, U4, ψdata, indices, Val(1))
+    _write_wilson_result3!(C, ψdata, indices, hopping, -κ, Val(true))
+    return nothing
 end
 
 struct WilsonDiracOperator4D_Donly{T} <: OperatorOnKernel
@@ -530,59 +623,11 @@ end
 
 function kernel_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdata, ::Val{3}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
-    #U = (U1,U2,U3,U4)
-    v0 = zero(ψdata[1, 1, indices...])
-
-    C[1, 1, indices...] = v0
-    C[2, 1, indices...] = v0
-    C[3, 1, indices...] = v0
-
-    C[1, 2, indices...] = v0
-    C[2, 2, indices...] = v0
-    C[3, 2, indices...] = v0
-
-
-    C[1, 3, indices...] = v0
-    C[2, 3, indices...] = v0
-    C[3, 3, indices...] = v0
-
-    C[1, 4, indices...] = v0
-    C[2, 4, indices...] = v0
-    C[3, 4, indices...] = v0
-
-    #@inbounds for ν=1:4
-    κ = -0.5
-    @inbounds begin
-        indices_p = shiftindices(indices, shift_1p)
-        kernel_Umgammax_p!(C, κ, U1, ψdata, indices, indices_p, oneminusγ1)
-
-        indices_m = shiftindices(indices, shift_1m)
-        kernel_Updaggammax_m!(C, κ, U1, ψdata, indices, indices_m, oneplusγ1)
-
-        indices_p = shiftindices(indices, shift_2p)
-        kernel_Umgammax_p!(C, κ, U2, ψdata, indices, indices_p, oneminusγ2)
-
-        indices_m = shiftindices(indices, shift_2m)
-        kernel_Updaggammax_m!(C, κ, U2, ψdata, indices, indices_m, oneplusγ2)
-
-
-        indices_p = shiftindices(indices, shift_3p)
-        kernel_Umgammax_p!(C, κ, U3, ψdata, indices, indices_p, oneminusγ3)
-
-        indices_m = shiftindices(indices, shift_3m)
-        kernel_Updaggammax_m!(C, κ, U3, ψdata, indices, indices_m, oneplusγ3)
-
-
-        indices_p = shiftindices(indices, shift_4p)
-        kernel_Umgammax_p!(C, κ, U4, ψdata, indices, indices_p, oneminusγ4)
-
-        indices_m = shiftindices(indices, shift_4m)
-        kernel_Updaggammax_m!(C, κ, U4, ψdata, indices, indices_m, oneplusγ4)
-    end
-
-    #end
-
-
+    hopping = _wilson_hopping_accumulator3(
+        U1, U2, U3, U4, ψdata, indices, Val(-1))
+    half = one(real(hopping[1])) / 2
+    _write_wilson_result3!(C, ψdata, indices, hopping, half, Val(false))
+    return nothing
 end
 
 struct Adjoint_WilsonDiracOperator4D_Donly{T} <: OperatorOnKernel
@@ -690,60 +735,11 @@ end
 
 function kernel_adjoint_WilsonDiracOperator4D_Donly!(i, C, U1, U2, U3, U4, ψdata, ::Val{3}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
-    #U = (U1,U2,U3,U4)
-
-    κ = -0.5
-    v0 = zero(ψdata[1, 1, indices...])
-
-    C[1, 1, indices...] = v0
-    C[2, 1, indices...] = v0
-    C[3, 1, indices...] = v0
-
-    C[1, 2, indices...] = v0
-    C[2, 2, indices...] = v0
-    C[3, 2, indices...] = v0
-
-
-    C[1, 3, indices...] = v0
-    C[2, 3, indices...] = v0
-    C[3, 3, indices...] = v0
-
-    C[1, 4, indices...] = v0
-    C[2, 4, indices...] = v0
-    C[3, 4, indices...] = v0
-
-    #@inbounds for ν=1:4
-    @inbounds begin
-        indices_p = shiftindices(indices, shift_1p)
-        kernel_Umgammax_p!(C, κ, U1, ψdata, indices, indices_p, oneplusγ1)
-
-        indices_m = shiftindices(indices, shift_1m)
-        kernel_Updaggammax_m!(C, κ, U1, ψdata, indices, indices_m, oneminusγ1)
-
-        indices_p = shiftindices(indices, shift_2p)
-        kernel_Umgammax_p!(C, κ, U2, ψdata, indices, indices_p, oneplusγ2)
-
-        indices_m = shiftindices(indices, shift_2m)
-        kernel_Updaggammax_m!(C, κ, U2, ψdata, indices, indices_m, oneminusγ2)
-
-
-        indices_p = shiftindices(indices, shift_3p)
-        kernel_Umgammax_p!(C, κ, U3, ψdata, indices, indices_p, oneplusγ3)
-
-        indices_m = shiftindices(indices, shift_3m)
-        kernel_Updaggammax_m!(C, κ, U3, ψdata, indices, indices_m, oneminusγ3)
-
-
-        indices_p = shiftindices(indices, shift_4p)
-        kernel_Umgammax_p!(C, κ, U4, ψdata, indices, indices_p, oneplusγ4)
-
-        indices_m = shiftindices(indices, shift_4m)
-        kernel_Updaggammax_m!(C, κ, U4, ψdata, indices, indices_m, oneminusγ4)
-    end
-
-    #end
-
-
+    hopping = _wilson_hopping_accumulator3(
+        U1, U2, U3, U4, ψdata, indices, Val(1))
+    half = one(real(hopping[1])) / 2
+    _write_wilson_result3!(C, ψdata, indices, hopping, half, Val(false))
+    return nothing
 end
 
 # ---------------------------------------------------------------------------

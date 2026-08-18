@@ -22,11 +22,10 @@ function _wilson_dirac_ad_core(field)
     return @view field.A[:, :, ranges...]
 end
 
-function wilson_dirac_ad_tests()
+function _wilson_dirac_ad_tests(NC)
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     global_size = (2 * nprocs, 2, 2, 2)
     process_grid = (nprocs, 1, 1, 1)
-    NC = 2
     nw = 1
     kappa = 0.117
     fermion_phases = (1.0, 1.0, 1.0, -1.0)
@@ -65,7 +64,7 @@ function wilson_dirac_ad_tests()
     operator = WilsonDiracOperator4D(links, kappa)
     shadow_operator = WilsonDiracOperator4D(dlinks, kappa)
 
-    @testset "WilsonDiracOperator4D Enzyme pullback" begin
+    @testset "WilsonDiracOperator4D Enzyme pullback NC=$NC" begin
         @test Base.get_extension(LatticeMatrices, :LatticeMatricesEnzymeExt) !== nothing
         Enzyme.API.strictAliasing!(false)
         Enzyme.autodiff(
@@ -127,4 +126,10 @@ function wilson_dirac_ad_tests()
         @test callback_directional ≈ finite_difference atol=2e-6 rtol=2e-7
         @test all(iszero, dresult.A)
     end
+end
+
+function wilson_dirac_ad_tests()
+    _wilson_dirac_ad_tests(2) # generic-color kernel
+    _wilson_dirac_ad_tests(3) # half-spin SU(3) kernel
+    return nothing
 end

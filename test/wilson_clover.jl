@@ -46,7 +46,8 @@ end
 
 function _clover_test_field_strength(links)
     lattice_size = size(links[1])[3:end]
-    fields = [zeros(ComplexF64, 2, 2, lattice_size...) for _ in 1:6]
+    NC = size(links[1], 1)
+    fields = [zeros(eltype(links[1]), NC, NC, lattice_size...) for _ in 1:6]
     plane_pairs = ((1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4))
 
     for (plane, (mu, nu)) in enumerate(plane_pairs)
@@ -186,6 +187,39 @@ function wilson_clover_tests()
         if rank == 0
             @test result ≈ reference atol=3e-12 rtol=3e-12
         end
+    end
+
+    @testset "analytic Wilson--clover link pullback" begin
+        direction_arrays = _clover_test_links(lattice_size)
+        directions = [
+            LatticeMatrix(
+                direction_arrays[mu], 4, process_grid; nw=1,
+            ) for mu in 1:4
+        ]
+        dlinks = [similar(link) for link in U1]
+        clear_matrix!.(dlinks)
+        wilson_clover_link_pullback!(
+            dlinks, operator1, U1, chi1, psi1)
+
+        epsilon = 1e-6
+        links_plus = deepcopy(links)
+        links_minus = deepcopy(links)
+        for mu in 1:4
+            links_plus[mu] .+= epsilon .* direction_arrays[mu]
+            links_minus[mu] .-= epsilon .* direction_arrays[mu]
+        end
+        Uplus = [LatticeMatrix(link, 4, process_grid; nw=1) for link in links_plus]
+        Uminus = [LatticeMatrix(link, 4, process_grid; nw=1) for link in links_minus]
+        result_plus = similar(psi1)
+        result_minus = similar(psi1)
+        mul!(result_plus, WilsonDiracCloverOperator4D(Uplus, kappa, cSW), psi1)
+        mul!(result_minus, WilsonDiracCloverOperator4D(Uminus, kappa, cSW), psi1)
+        finite_difference = (
+            real(dot(chi1, result_plus)) - real(dot(chi1, result_minus))
+        ) / (2epsilon)
+        analytic_directional = real(sum(
+            dot(dlinks[mu], directions[mu]) for mu in 1:4))
+        @test analytic_directional ≈ finite_difference atol=3e-6 rtol=3e-7
     end
 
     @testset "Wilson and unit-gauge limits" begin

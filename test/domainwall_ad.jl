@@ -59,7 +59,7 @@ function domainwall_ad_tests(NC=2)
     operator = D5DW_MobiusDomainwallOperator5D(
         links, L5, mass, M, b, c)
 
-    @testset "Möbius/domain-wall Enzyme pullback" begin
+    @testset "Möbius/domain-wall Enzyme pullback NC=$NC" begin
         @test Base.get_extension(
             LatticeMatrices, :LatticeMatricesEnzymeExt) !== nothing
         Enzyme.API.strictAliasing!(false)
@@ -135,7 +135,7 @@ function domainwall_ad_tests(NC=2)
     end
 
 
-    @testset "generalized domain-wall Enzyme pullback" begin
+    @testset "generalized domain-wall Enzyme pullback NC=$NC" begin
         a = [0.83, 1.17, 1.31]
         b5 = [1.2, 0.91, 1.47]
         c5 = [-0.18, 0.37, 0.22]

@@ -4,20 +4,24 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-Version 1.1.2 is the current backward-compatible release in the stable v1 line.
+Version 1.1.3 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 
-## What's new in v1.1.2
+## What's new in v1.1.3
 
-- Faster backend-independent `NC=3` Wilson half-spin and factorized clover
-  kernels.
-- A public analytic `wilson_clover_link_pullback!` shared with the optional
-  Enzyme reverse rules.
-- Five-dimensional domain-wall kernel improvements and reusable physical,
-  midpoint, `PP`, and `J5q` projection APIs.
+- Faster `NC=3` adjoints for Möbius and generalized five-dimensional
+  domain-wall operators.  A two-stage implementation evaluates `D_W'` once
+  per fifth-dimensional slice and then performs the fifth-direction mixing.
+- The adjoint scratch field is borrowed from the input field's existing
+  temporary pool and always returned after use; no global cache or new public
+  API is introduced.
+- The implementation remains backend-independent through JACC and keeps the
+  existing field layout.  Existing calls such as
+  `mul!(out, adjoint(D5), psi)` require no changes.
 - The v1.1 line also adds analytic HISQ pullbacks, MPI-aware measurement
-  building blocks, and stable SU(2)/SU(3) exponential pullbacks.
+  building blocks, stable SU(2)/SU(3) exponential pullbacks, optimized Wilson
+  and clover kernels, and domain-wall measurement APIs.
 
 Existing v1.0 code requires no source changes. See [CHANGES.md](CHANGES.md) for
 the complete v1 release history and upgrade notes.
@@ -1001,6 +1005,35 @@ For nonuniform coefficients the adjoint applies the slice factors in the
 mathematically required shifted order,
 `D5general' = (I-F_m' + (B+F_m'C)D_W')A`; it is not obtained by simply
 reusing the forward slice index.
+
+For `NC=3`, both adjoint operators use the same backend-independent two-stage
+path.  The first stage computes the four-dimensional Wilson adjoint once for
+each fifth-dimensional slice.  The second stage applies the chiral
+fifth-direction mixing with one work item per spin-color element, which keeps
+adjacent work items aligned with the existing component-major field layout.
+The intermediate field is borrowed from `psi.temps` and returned in a
+`finally` block, so it is local to the input field rather than a global cache.
+The generic single-stage implementation remains the fallback for `NC != 3`.
+
+The optimized path was checked for both Möbius and genuinely nonuniform
+generalized coefficients against the dense reference implementation and the
+adjoint inner-product identity.  CUDA tests pass on H100, Enzyme reverse-mode
+tests pass for `NC=3`, and the same implementation passes the JACC Threads
+test with four Julia threads.  On a fixed general, non-diagonal SU(3) field
+read independently from the same ILDG file, the full `24^4 x L5=8` adjoint
+timings were:
+
+| GPU | Precision | previous adjoint | v1.1.3 adjoint | speedup |
+| --- | --- | ---: | ---: | ---: |
+| NVIDIA H100 NVL | FP64 | 5.9511 ms | 4.0434 ms | 1.47x |
+| NVIDIA H100 NVL | FP32 | 3.2078 ms | 2.8281 ms | 1.13x |
+| NVIDIA Blackwell | FP64 | 11.3538 ms | 6.9415 ms | 1.64x |
+| NVIDIA Blackwell | FP32 | 3.7805 ms | 2.9946 ms | 1.26x |
+
+These are complete full-lattice Möbius adjoint applications, including both
+the four-dimensional Wilson part and fifth-direction couplings.  The gauge
+field was not a cold or diagonal configuration.  Forward timings are not
+changed by this adjoint-specific optimization.
 
 Loading Enzyme enables reverse rules for both `D5` and `adjoint(D5)`.  The
 following example differentiates `real(dot(left, D5*psi))` with respect to

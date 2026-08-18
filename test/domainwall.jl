@@ -149,6 +149,7 @@ function _domainwall_nc3_fastpath_tests()
     left = LatticeMatrix(left_array, 5, process_grid5; nw=1, phases)
     result = similar(psi)
     adjoint_result = similar(left)
+    adjoint_scratch_slots = length(left.temps)
 
     @testset "NC=3 half-spin domain-wall dense reference" begin
         for (b, c) in ((1.0, 1.0), (2.0, 0.0), (2.0, 1.0))
@@ -195,6 +196,8 @@ function _domainwall_nc3_fastpath_tests()
                 dot(vec(global_adjoint), vec(psi_array));
                 atol=2e-10, rtol=2e-11)
         end
+        @test length(left.temps) == adjoint_scratch_slots
+        @test !any(left.temps._flagusing)
     end
     return nothing
 end

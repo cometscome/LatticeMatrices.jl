@@ -303,6 +303,163 @@ end
         psi1, psi2, psi3, psi4, pm, mu)
 end
 
+# Form the two virtual spinors needed by the adjoint at the same time.  Their
+# centre-slice contribution is identical, so reading it once avoids duplicate
+# spinor traffic.  The returned half spinors correspond to the source slices
+# selected by the upper and lower output chiralities, respectively.
+@inline function _domainwall_paired_half_project3(
+    psi, color, base_indices, low_indices, high_indices,
+    base_coefficient, low_coefficient, high_coefficient,
+    pm, mu,
+)
+    @inbounds begin
+        base1 = psi[color, 1, base_indices...]
+        base2 = psi[color, 2, base_indices...]
+        base3 = psi[color, 3, base_indices...]
+        base4 = psi[color, 4, base_indices...]
+        low1 = base_coefficient * base1 +
+            low_coefficient * psi[color, 1, low_indices...]
+        low2 = base_coefficient * base2 +
+            low_coefficient * psi[color, 2, low_indices...]
+        low3 = base_coefficient * base3 +
+            low_coefficient * psi[color, 3, low_indices...]
+        low4 = base_coefficient * base4 +
+            low_coefficient * psi[color, 4, low_indices...]
+        high1 = base_coefficient * base1 +
+            high_coefficient * psi[color, 1, high_indices...]
+        high2 = base_coefficient * base2 +
+            high_coefficient * psi[color, 2, high_indices...]
+        high3 = base_coefficient * base3 +
+            high_coefficient * psi[color, 3, high_indices...]
+        high4 = base_coefficient * base4 +
+            high_coefficient * psi[color, 4, high_indices...]
+    end
+    low_half1, low_half2 = _domainwall_half_project_values3(
+        low1, low2, low3, low4, pm, mu)
+    high_half1, high_half2 = _domainwall_half_project_values3(
+        high1, high2, high3, high4, pm, mu)
+    return low_half1, low_half2, high_half1, high_half2
+end
+
+@inline function _domainwall_paired_half_matvec_forward3(
+    U, psi, gauge_indices, base_indices, low_indices, high_indices,
+    base_coefficient, low_coefficient, high_coefficient, pm, mu,
+)
+    l11, l12, h11, h12 = _domainwall_paired_half_project3(
+        psi, 1, base_indices, low_indices, high_indices,
+        base_coefficient, low_coefficient, high_coefficient, pm, mu)
+    l21, l22, h21, h22 = _domainwall_paired_half_project3(
+        psi, 2, base_indices, low_indices, high_indices,
+        base_coefficient, low_coefficient, high_coefficient, pm, mu)
+    l31, l32, h31, h32 = _domainwall_paired_half_project3(
+        psi, 3, base_indices, low_indices, high_indices,
+        base_coefficient, low_coefficient, high_coefficient, pm, mu)
+    @inbounds begin
+        U11 = U[1, 1, gauge_indices...]
+        U12 = U[1, 2, gauge_indices...]
+        U13 = U[1, 3, gauge_indices...]
+        U21 = U[2, 1, gauge_indices...]
+        U22 = U[2, 2, gauge_indices...]
+        U23 = U[2, 3, gauge_indices...]
+        U31 = U[3, 1, gauge_indices...]
+        U32 = U[3, 2, gauge_indices...]
+        U33 = U[3, 3, gauge_indices...]
+    end
+    return (
+        muladdmulti(U11, l11, U12, l21, U13, l31),
+        muladdmulti(U11, l12, U12, l22, U13, l32),
+        muladdmulti(U21, l11, U22, l21, U23, l31),
+        muladdmulti(U21, l12, U22, l22, U23, l32),
+        muladdmulti(U31, l11, U32, l21, U33, l31),
+        muladdmulti(U31, l12, U32, l22, U33, l32),
+        muladdmulti(U11, h11, U12, h21, U13, h31),
+        muladdmulti(U11, h12, U12, h22, U13, h32),
+        muladdmulti(U21, h11, U22, h21, U23, h31),
+        muladdmulti(U21, h12, U22, h22, U23, h32),
+        muladdmulti(U31, h11, U32, h21, U33, h31),
+        muladdmulti(U31, h12, U32, h22, U33, h32),
+    )
+end
+
+@inline function _domainwall_paired_half_matvec_backward3(
+    U, psi, gauge_indices, base_indices, low_indices, high_indices,
+    base_coefficient, low_coefficient, high_coefficient, pm, mu,
+)
+    l11, l12, h11, h12 = _domainwall_paired_half_project3(
+        psi, 1, base_indices, low_indices, high_indices,
+        base_coefficient, low_coefficient, high_coefficient, pm, mu)
+    l21, l22, h21, h22 = _domainwall_paired_half_project3(
+        psi, 2, base_indices, low_indices, high_indices,
+        base_coefficient, low_coefficient, high_coefficient, pm, mu)
+    l31, l32, h31, h32 = _domainwall_paired_half_project3(
+        psi, 3, base_indices, low_indices, high_indices,
+        base_coefficient, low_coefficient, high_coefficient, pm, mu)
+    @inbounds begin
+        U11 = conj(U[1, 1, gauge_indices...])
+        U12 = conj(U[2, 1, gauge_indices...])
+        U13 = conj(U[3, 1, gauge_indices...])
+        U21 = conj(U[1, 2, gauge_indices...])
+        U22 = conj(U[2, 2, gauge_indices...])
+        U23 = conj(U[3, 2, gauge_indices...])
+        U31 = conj(U[1, 3, gauge_indices...])
+        U32 = conj(U[2, 3, gauge_indices...])
+        U33 = conj(U[3, 3, gauge_indices...])
+    end
+    return (
+        muladdmulti(U11, l11, U12, l21, U13, l31),
+        muladdmulti(U11, l12, U12, l22, U13, l32),
+        muladdmulti(U21, l11, U22, l21, U23, l31),
+        muladdmulti(U21, l12, U22, l22, U23, l32),
+        muladdmulti(U31, l11, U32, l21, U33, l31),
+        muladdmulti(U31, l12, U32, l22, U33, l32),
+        muladdmulti(U11, h11, U12, h21, U13, h31),
+        muladdmulti(U11, h12, U12, h22, U13, h32),
+        muladdmulti(U21, h11, U22, h21, U23, h31),
+        muladdmulti(U21, h12, U22, h22, U23, h32),
+        muladdmulti(U31, h11, U32, h21, U33, h31),
+        muladdmulti(U31, h12, U32, h22, U33, h32),
+    )
+end
+
+# Reconstruct only the upper components of the first half spinor and the
+# lower components of the second.  Those are exactly the components selected
+# by F' in the adjoint; constructing the other twelve components only raises
+# register pressure and they would be discarded by the final write.
+@inline function _domainwall_paired_reconstruct_add3(
+    accumulator, halfspinors, ::Val{PM}, ::Val{MU},
+) where {PM,MU}
+    c11, c12, c13, c14,
+    c21, c22, c23, c24,
+    c31, c32, c33, c34 = accumulator
+    l11, l12, l21, l22, l31, l32,
+    h11, h12, h21, h22, h31, h32 = halfspinors
+    if MU == 1
+        return (
+            c11 + l11, c12 + l12, c13 + PM * im * h12, c14 + PM * im * h11,
+            c21 + l21, c22 + l22, c23 + PM * im * h22, c24 + PM * im * h21,
+            c31 + l31, c32 + l32, c33 + PM * im * h32, c34 + PM * im * h31,
+        )
+    elseif MU == 2
+        return (
+            c11 + l11, c12 + l12, c13 + PM * h12, c14 - PM * h11,
+            c21 + l21, c22 + l22, c23 + PM * h22, c24 - PM * h21,
+            c31 + l31, c32 + l32, c33 + PM * h32, c34 - PM * h31,
+        )
+    elseif MU == 3
+        return (
+            c11 + l11, c12 + l12, c13 + PM * im * h11, c14 - PM * im * h12,
+            c21 + l21, c22 + l22, c23 + PM * im * h21, c24 - PM * im * h22,
+            c31 + l31, c32 + l32, c33 + PM * im * h31, c34 - PM * im * h32,
+        )
+    else
+        return (
+            c11 + l11, c12 + l12, c13 - PM * h11, c14 - PM * h12,
+            c21 + l21, c22 + l22, c23 - PM * h21, c24 - PM * h22,
+            c31 + l31, c32 + l32, c33 - PM * h31, c34 - PM * h32,
+        )
+    end
+end
+
 @inline function _domainwall_half_matvec_forward3(
     U, psi, gauge_indices, base_indices, low_indices, high_indices,
     base_coefficient, low_coefficient, high_coefficient, pm, mu,
@@ -374,6 +531,66 @@ end
 @inline _domainwall_gauge_indices(indices) =
     (indices[1], indices[2], indices[3], indices[4])
 
+@inline function _domainwall_paired_hopping_direction3(
+    accumulator, U, psi, indices, low_indices, high_indices,
+    shift_plus, shift_minus, base_coefficient, low_coefficient,
+    high_coefficient, ::Val{FORWARD_PM}, ::Val{MU},
+) where {FORWARD_PM,MU}
+    indices_plus = shiftindices(indices, shift_plus)
+    indices_minus = shiftindices(indices, shift_minus)
+    low_plus = shiftindices(low_indices, shift_plus)
+    low_minus = shiftindices(low_indices, shift_minus)
+    high_plus = shiftindices(high_indices, shift_plus)
+    high_minus = shiftindices(high_indices, shift_minus)
+    forward_pm = Val(FORWARD_PM)
+    backward_pm = Val(-FORWARD_PM)
+    accumulator = _domainwall_paired_reconstruct_add3(
+        accumulator,
+        _domainwall_paired_half_matvec_forward3(
+            U, psi, _domainwall_gauge_indices(indices),
+            indices_plus, low_plus, high_plus,
+            base_coefficient, low_coefficient, high_coefficient,
+            forward_pm, Val(MU)),
+        forward_pm, Val(MU))
+    return _domainwall_paired_reconstruct_add3(
+        accumulator,
+        _domainwall_paired_half_matvec_backward3(
+            U, psi, _domainwall_gauge_indices(indices_minus),
+            indices_minus, low_minus, high_minus,
+            base_coefficient, low_coefficient, high_coefficient,
+            backward_pm, Val(MU)),
+        backward_pm, Val(MU))
+end
+
+@inline function _domainwall_paired_hopping_accumulator3(
+    U1, U2, U3, U4, psi, indices, low_indices, high_indices,
+    base_coefficient, low_coefficient, high_coefficient,
+    ::Val{FORWARD_PM},
+) where FORWARD_PM
+    zero_value = zero(@inbounds psi[1, 1, indices...])
+    accumulator = (
+        zero_value, zero_value, zero_value, zero_value,
+        zero_value, zero_value, zero_value, zero_value,
+        zero_value, zero_value, zero_value, zero_value,
+    )
+    accumulator = _domainwall_paired_hopping_direction3(
+        accumulator, U1, psi, indices, low_indices, high_indices,
+        shift_1p5D, shift_1m5D, base_coefficient, low_coefficient,
+        high_coefficient, Val(FORWARD_PM), Val(1))
+    accumulator = _domainwall_paired_hopping_direction3(
+        accumulator, U2, psi, indices, low_indices, high_indices,
+        shift_2p5D, shift_2m5D, base_coefficient, low_coefficient,
+        high_coefficient, Val(FORWARD_PM), Val(2))
+    accumulator = _domainwall_paired_hopping_direction3(
+        accumulator, U3, psi, indices, low_indices, high_indices,
+        shift_3p5D, shift_3m5D, base_coefficient, low_coefficient,
+        high_coefficient, Val(FORWARD_PM), Val(3))
+    return _domainwall_paired_hopping_direction3(
+        accumulator, U4, psi, indices, low_indices, high_indices,
+        shift_4p5D, shift_4m5D, base_coefficient, low_coefficient,
+        high_coefficient, Val(FORWARD_PM), Val(4))
+end
+
 @inline function _domainwall_hopping_direction3(
     accumulator, U, psi, indices, low_indices, high_indices,
     shift_plus, shift_minus, base_coefficient, low_coefficient,
@@ -432,6 +649,83 @@ end
         accumulator, U4, psi, indices, low_indices, high_indices,
         shift_4p5D, shift_4m5D, base_coefficient, low_coefficient,
         high_coefficient, Val(FORWARD_PM), Val(4))
+end
+
+# Apply only the four-dimensional Wilson hopping term to one fifth slice.
+# Unlike `_domainwall_hopping_accumulator3`, this does not construct a virtual
+# spinor from neighbouring fifth slices.  The two-stage adjoint stores this
+# result once and lets a second, cheap kernel perform the fifth-direction
+# mixing, matching Grid's DW^dag -> MeooeDag5D decomposition.
+@inline function _domainwall_wilson_half_matvec_backward3(
+    U, psi, gauge_indices, source_indices, pm, mu,
+)
+    h11, h12 = _wilson_half_project3(psi, 1, source_indices, pm, mu)
+    h21, h22 = _wilson_half_project3(psi, 2, source_indices, pm, mu)
+    h31, h32 = _wilson_half_project3(psi, 3, source_indices, pm, mu)
+    @inbounds begin
+        U11 = conj(U[1, 1, gauge_indices...])
+        U12 = conj(U[2, 1, gauge_indices...])
+        U13 = conj(U[3, 1, gauge_indices...])
+        U21 = conj(U[1, 2, gauge_indices...])
+        U22 = conj(U[2, 2, gauge_indices...])
+        U23 = conj(U[3, 2, gauge_indices...])
+        U31 = conj(U[1, 3, gauge_indices...])
+        U32 = conj(U[2, 3, gauge_indices...])
+        U33 = conj(U[3, 3, gauge_indices...])
+    end
+    return (
+        muladdmulti(U11, h11, U12, h21, U13, h31),
+        muladdmulti(U11, h12, U12, h22, U13, h32),
+        muladdmulti(U21, h11, U22, h21, U23, h31),
+        muladdmulti(U21, h12, U22, h22, U23, h32),
+        muladdmulti(U31, h11, U32, h21, U33, h31),
+        muladdmulti(U31, h12, U32, h22, U33, h32),
+    )
+end
+
+@inline function _domainwall_wilson_hopping_direction3(
+    accumulator, U, psi, indices, shift_plus, shift_minus,
+    ::Val{FORWARD_PM}, ::Val{MU},
+) where {FORWARD_PM,MU}
+    indices_plus = shiftindices(indices, shift_plus)
+    indices_minus = shiftindices(indices, shift_minus)
+    forward_pm = Val(FORWARD_PM)
+    backward_pm = Val(-FORWARD_PM)
+    accumulator = _wilson_reconstruct_add3(
+        accumulator,
+        _wilson_half_matvec_forward3(
+            U, psi, _domainwall_gauge_indices(indices), indices_plus,
+            forward_pm, Val(MU)),
+        forward_pm, Val(MU))
+    return _wilson_reconstruct_add3(
+        accumulator,
+        _domainwall_wilson_half_matvec_backward3(
+            U, psi, _domainwall_gauge_indices(indices_minus), indices_minus,
+            backward_pm, Val(MU)),
+        backward_pm, Val(MU))
+end
+
+@inline function _domainwall_wilson_hopping_accumulator3(
+    U1, U2, U3, U4, psi, indices, ::Val{FORWARD_PM},
+) where FORWARD_PM
+    zero_value = zero(@inbounds psi[1, 1, indices...])
+    accumulator = (
+        zero_value, zero_value, zero_value, zero_value,
+        zero_value, zero_value, zero_value, zero_value,
+        zero_value, zero_value, zero_value, zero_value,
+    )
+    accumulator = _domainwall_wilson_hopping_direction3(
+        accumulator, U1, psi, indices, shift_1p5D, shift_1m5D,
+        Val(FORWARD_PM), Val(1))
+    accumulator = _domainwall_wilson_hopping_direction3(
+        accumulator, U2, psi, indices, shift_2p5D, shift_2m5D,
+        Val(FORWARD_PM), Val(2))
+    accumulator = _domainwall_wilson_hopping_direction3(
+        accumulator, U3, psi, indices, shift_3p5D, shift_3m5D,
+        Val(FORWARD_PM), Val(3))
+    return _domainwall_wilson_hopping_direction3(
+        accumulator, U4, psi, indices, shift_4p5D, shift_4m5D,
+        Val(FORWARD_PM), Val(4))
 end
 
 @inline function _write_domainwall_forward_result3!(
@@ -1072,6 +1366,143 @@ function kernel_D4x_5D!(C, ψdata, U1, U2, U3, U4, indices, coeff, ::Val{NC1},
 
 end
 
+@inline function _write_domainwall_wilson_adjoint_stage3!(
+    destination, psi, indices, hopping, kappa,
+)
+    diagonal = one(kappa) / (2 * kappa)
+    hopping_coefficient = -(one(kappa) / 2)
+    @inbounds begin
+        destination[1, 1, indices...] = diagonal * psi[1, 1, indices...] +
+            hopping_coefficient * hopping[1]
+        destination[1, 2, indices...] = diagonal * psi[1, 2, indices...] +
+            hopping_coefficient * hopping[2]
+        destination[1, 3, indices...] = diagonal * psi[1, 3, indices...] +
+            hopping_coefficient * hopping[3]
+        destination[1, 4, indices...] = diagonal * psi[1, 4, indices...] +
+            hopping_coefficient * hopping[4]
+        destination[2, 1, indices...] = diagonal * psi[2, 1, indices...] +
+            hopping_coefficient * hopping[5]
+        destination[2, 2, indices...] = diagonal * psi[2, 2, indices...] +
+            hopping_coefficient * hopping[6]
+        destination[2, 3, indices...] = diagonal * psi[2, 3, indices...] +
+            hopping_coefficient * hopping[7]
+        destination[2, 4, indices...] = diagonal * psi[2, 4, indices...] +
+            hopping_coefficient * hopping[8]
+        destination[3, 1, indices...] = diagonal * psi[3, 1, indices...] +
+            hopping_coefficient * hopping[9]
+        destination[3, 2, indices...] = diagonal * psi[3, 2, indices...] +
+            hopping_coefficient * hopping[10]
+        destination[3, 3, indices...] = diagonal * psi[3, 3, indices...] +
+            hopping_coefficient * hopping[11]
+        destination[3, 4, indices...] = diagonal * psi[3, 4, indices...] +
+            hopping_coefficient * hopping[12]
+    end
+    return nothing
+end
+
+function kernel_domainwall_wilson_adjoint_stage3!(
+    site, destination, U1, U2, U3, U4, kappa, psi,
+    ::Val{nw}, indexer,
+) where nw
+    indices = delinearize(indexer, site, nw)
+    hopping = _domainwall_wilson_hopping_accumulator3(
+        U1, U2, U3, U4, psi, indices, Val(1))
+    _write_domainwall_wilson_adjoint_stage3!(
+        destination, psi, indices, hopping, kappa)
+    return nothing
+end
+
+@inline function _domainwall_wrapped_fifth_indices(
+    indices, ::Val{L5}, ::Val{nw},
+) where {L5,nw}
+    fifth = indices[5]
+    fifth_plus = ifelse(fifth == L5 + nw, 1 + nw, fifth + 1)
+    fifth_minus = ifelse(fifth == 1 + nw, L5 + nw, fifth - 1)
+    indices_plus = (
+        indices[1], indices[2], indices[3], indices[4], fifth_plus)
+    indices_minus = (
+        indices[1], indices[2], indices[3], indices[4], fifth_minus)
+    return indices_plus, indices_minus
+end
+
+@inline function _kernel_domainwall_adjoint_combine3!(
+    destination, wilson_adjoint, psi, color, spin, indices,
+    diagonal_coefficient, fifth_plus_coefficient, fifth_minus_coefficient,
+    scale, scale_plus, scale_minus, mass,
+    ::Val{L5}, ::Val{nw},
+) where {L5,nw}
+    indices_plus, indices_minus =
+        _domainwall_wrapped_fifth_indices(indices, Val(L5), Val(nw))
+    boundary_plus = ifelse(indices[5] == L5 + nw, -mass, one(mass))
+    boundary_minus = ifelse(indices[5] == 1 + nw, -mass, one(mass))
+    same = scale * diagonal_coefficient
+    plus = boundary_plus * scale_plus
+    minus = boundary_minus * scale_minus
+    @inbounds if spin <= 2
+        destination[color, spin, indices...] =
+            scale * psi[color, spin, indices...] +
+            same * wilson_adjoint[color, spin, indices...] +
+            plus * (
+                fifth_plus_coefficient *
+                    wilson_adjoint[color, spin, indices_plus...] -
+                psi[color, spin, indices_plus...])
+    else
+        destination[color, spin, indices...] =
+            scale * psi[color, spin, indices...] +
+            same * wilson_adjoint[color, spin, indices...] +
+            minus * (
+                fifth_minus_coefficient *
+                    wilson_adjoint[color, spin, indices_minus...] -
+                psi[color, spin, indices_minus...])
+    end
+    return nothing
+end
+
+@inline function _domainwall_component_site(linear_index)
+    zero_based = linear_index - 1
+    component = rem(zero_based, 12)
+    site = fld(zero_based, 12) + 1
+    color = rem(component, 3) + 1
+    spin = fld(component, 3) + 1
+    return color, spin, site
+end
+
+function kernel_domainwall_mobius_adjoint_combine3!(
+    linear_index, destination, wilson_adjoint, psi, mass,
+    coeff_plus, coeff_minus, ::Val{nw}, indexer, ::Val{L5},
+) where {nw,L5}
+    color, spin, site = _domainwall_component_site(linear_index)
+    indices = delinearize(indexer, site, nw)
+    scale = one(mass)
+    fifth = -coeff_minus
+    _kernel_domainwall_adjoint_combine3!(
+        destination, wilson_adjoint, psi, color, spin, indices,
+        coeff_plus, fifth, fifth, scale, scale, scale, mass,
+        Val(L5), Val(nw))
+    return nothing
+end
+
+function kernel_domainwall_generalized_adjoint_combine3!(
+    linear_index, destination, wilson_adjoint, psi, mass, a, b, c,
+    ::Val{nw}, indexer, ::Val{L5},
+) where {nw,L5}
+    color, spin, site = _domainwall_component_site(linear_index)
+    indices = delinearize(indexer, site, nw)
+    fifth = indices[5] - nw
+    fifth_plus = ifelse(fifth == L5, 1, fifth + 1)
+    fifth_minus = ifelse(fifth == 1, L5, fifth - 1)
+    _kernel_domainwall_adjoint_combine3!(
+        destination, wilson_adjoint, psi, color, spin, indices,
+        b[fifth], c[fifth_plus], c[fifth_minus],
+        a[fifth], a[fifth_plus], a[fifth_minus], mass,
+        Val(L5), Val(nw))
+    return nothing
+end
+
+@inline function _domainwall_scratch_lattice(array, primal::LatticeMatrix)
+    return _lattice_alias_with_array(primal, array)
+end
+
 
 function LinearAlgebra.mul!(C::TC,
     Dirac::Adjoint_D5DW_MobiusDomainwallOperator5D{TD}, ψ::Tp) where {
@@ -1094,14 +1525,30 @@ function LinearAlgebra.mul!(C::TC,
     b, c = get_bc(Dirac.parent)
     coeff_plus = (b + c) / 2
     coeff_minus = -(b - c) / 2
-    #println("mass = ", mass)
-
-
-    _parallel_for_mutating!(C,
-        prod(C.PN), kernel_adjoint_D5DW_MobiusDomainwallOperator5D!,
-        Cdata, U1, U2, U3, U4, mass, wilson_params, ψdata,
-        Val(NC1), Val(nw), C.indexer, Val(L5), coeff_plus, coeff_minus)
-
+    if NC1 == 3
+        scratch_array, scratch_index = get_block(ψ.temps)
+        scratch = _domainwall_scratch_lattice(scratch_array, ψ)
+        try
+            scratch_data = get_matrix(scratch)
+            _parallel_for_mutating!(scratch,
+                prod(C.PN), kernel_domainwall_wilson_adjoint_stage3!,
+                scratch_data, U1, U2, U3, U4,
+                wilson_params.κ_wilson, ψdata, Val(nw), C.indexer)
+            _parallel_for_mutating!(C,
+                12 * prod(C.PN), kernel_domainwall_mobius_adjoint_combine3!,
+                Cdata, scratch_data, ψdata, mass,
+                coeff_plus, coeff_minus, Val(nw), C.indexer, Val(L5))
+        finally
+            unused!(ψ.temps, scratch_index)
+        end
+    else
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_adjoint_D5DW_MobiusDomainwallOperator5D!,
+            Cdata, U1, U2, U3, U4, mass, wilson_params, ψdata,
+            Val(NC1), Val(nw), C.indexer, Val(L5),
+            coeff_plus, coeff_minus)
+    end
+    return nothing
 end
 
 function kernel_adjoint_D5DW_MobiusDomainwallOperator5D!(i, C, U1, U2, U3, U4,
@@ -1149,11 +1596,32 @@ function LinearAlgebra.mul!(C::TC,
     U3 = get_matrix(parent.U[3])
     U4 = get_matrix(parent.U[4])
     a, b, c = get_abc(parent)
-    _parallel_for_mutating!(C,
-        prod(C.PN), kernel_adjoint_D5DW_GeneralizedDomainwallOperator5D!,
-        get_matrix(C), U1, U2, U3, U4, get_mass(parent),
-        get_wilson_params(parent), get_matrix(psi), a, b, c,
-        Val(NC1), Val(nw), C.indexer, Val(L5))
+    mass = get_mass(parent)
+    wilson_params = get_wilson_params(parent)
+    psi_data = get_matrix(psi)
+    if NC1 == 3
+        scratch_array, scratch_index = get_block(psi.temps)
+        scratch = _domainwall_scratch_lattice(scratch_array, psi)
+        try
+            scratch_data = get_matrix(scratch)
+            _parallel_for_mutating!(scratch,
+                prod(C.PN), kernel_domainwall_wilson_adjoint_stage3!,
+                scratch_data, U1, U2, U3, U4,
+                wilson_params.κ_wilson, psi_data, Val(nw), C.indexer)
+            _parallel_for_mutating!(C,
+                12 * prod(C.PN), kernel_domainwall_generalized_adjoint_combine3!,
+                get_matrix(C), scratch_data, psi_data, mass, a, b, c,
+                Val(nw), C.indexer, Val(L5))
+        finally
+            unused!(psi.temps, scratch_index)
+        end
+    else
+        _parallel_for_mutating!(C,
+            prod(C.PN), kernel_adjoint_D5DW_GeneralizedDomainwallOperator5D!,
+            get_matrix(C), U1, U2, U3, U4, mass,
+            wilson_params, psi_data, a, b, c,
+            Val(NC1), Val(nw), C.indexer, Val(L5))
+    end
     return nothing
 end
 
@@ -1262,18 +1730,15 @@ end
     low_coefficient = boundary_5p * scale_5p * fifth_5p
     high_coefficient = boundary_5m * scale_5m * fifth_5m
 
-    # F' selects the lower output components from s+1 and the upper output
-    # components from s-1.  Two half-spin accumulators therefore suffice;
-    # only the selected chirality of each result is written below.
-    hopping_low = _domainwall_hopping_accumulator3(
-        U1, U2, U3, U4, psi, indices, indices_5p, indices_5p,
-        same_coefficient, low_coefficient, low_coefficient, Val(1))
-    hopping_high = _domainwall_hopping_accumulator3(
-        U1, U2, U3, U4, psi, indices, indices_5m, indices_5m,
-        same_coefficient, high_coefficient, high_coefficient, Val(1))
+    # F' selects the upper output components from s+1 and the lower output
+    # components from s-1.  Process both right-hand sides in one direction
+    # traversal so the gauge matrix and the common centre slice are read once.
+    hopping = _domainwall_paired_hopping_accumulator3(
+        U1, U2, U3, U4, psi, indices, indices_5p, indices_5m,
+        same_coefficient, low_coefficient, high_coefficient, Val(1))
     _write_domainwall_adjoint_result3!(
         C, psi, indices, indices_5p, indices_5m,
-        hopping_low, hopping_high,
+        hopping, hopping,
         diagonal_coefficient, fifth_5p, fifth_5m,
         scale, scale_5p, scale_5m, mass, kappa,
         Val(L5), Val(nw))

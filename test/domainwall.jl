@@ -126,6 +126,79 @@ function _domainwall_test_generalized_reference(
         _domainwall_test_DW(links, effective, M, phases))
 end
 
+function _domainwall_nc3_fastpath_tests()
+    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    lattice_size = (2 * nprocs, 2, 2, 2)
+    L5 = 3
+    process_grid = (nprocs, 1, 1, 1)
+    process_grid5 = (process_grid..., 1)
+    phases = (cis(0.13), cis(-0.21), cis(0.34), cis(pi - 0.17), 1.0)
+    NC = 3
+    mass = 0.13
+    M = -1.0
+    link_arrays = [
+        _domainwall_test_values(Val(NC), Val(NC), lattice_size, 7mu)
+        for mu in 1:4
+    ]
+    fermion_size = (lattice_size..., L5)
+    psi_array = _domainwall_test_values(Val(NC), Val(4), fermion_size, 11)
+    left_array = _domainwall_test_values(Val(NC), Val(4), fermion_size, 23)
+    links = [LatticeMatrix(link, 4, process_grid; nw=1) for link in link_arrays]
+    psi = LatticeMatrix(psi_array, 5, process_grid5; nw=1, phases)
+    left = LatticeMatrix(left_array, 5, process_grid5; nw=1, phases)
+    result = similar(psi)
+    adjoint_result = similar(left)
+
+    @testset "NC=3 half-spin domain-wall dense reference" begin
+        for (b, c) in ((1.0, 1.0), (2.0, 0.0), (2.0, 1.0))
+            operator = D5DW_MobiusDomainwallOperator5D(
+                links, L5, mass, M, b, c)
+            mul!(result, operator, psi)
+            mul!(adjoint_result, adjoint(operator), left)
+            global_result = gather_matrix(result)
+            global_adjoint = gather_matrix(adjoint_result)
+            if rank == 0
+                reference = _domainwall_test_reference(
+                    link_arrays, psi_array, mass, M, b, c, phases)
+                reference_dag = _domainwall_test_reference(
+                    link_arrays, left_array, mass, M, b, c, phases;
+                    adjoint_operator=true)
+                @test global_result ≈ reference atol=8e-12 rtol=8e-12
+                @test global_adjoint ≈ reference_dag atol=8e-12 rtol=8e-12
+                @test isapprox(
+                    dot(vec(left_array), vec(global_result)),
+                    dot(vec(global_adjoint), vec(psi_array));
+                    atol=2e-10, rtol=2e-11)
+            end
+        end
+
+        a = [0.83, 1.17, 1.31]
+        b5 = [1.2, 0.91, 1.47]
+        c5 = [-0.18, 0.37, 0.22]
+        operator = D5DW_GeneralizedDomainwallOperator5D(
+            links, L5, mass, M, a, b5, c5)
+        mul!(result, operator, psi)
+        mul!(adjoint_result, adjoint(operator), left)
+        global_result = gather_matrix(result)
+        global_adjoint = gather_matrix(adjoint_result)
+        if rank == 0
+            reference = _domainwall_test_generalized_reference(
+                link_arrays, psi_array, mass, M, a, b5, c5, phases)
+            reference_dag = _domainwall_test_generalized_reference(
+                link_arrays, left_array, mass, M, a, b5, c5, phases;
+                adjoint_operator=true)
+            @test global_result ≈ reference atol=8e-12 rtol=8e-12
+            @test global_adjoint ≈ reference_dag atol=8e-12 rtol=8e-12
+            @test isapprox(
+                dot(vec(left_array), vec(global_result)),
+                dot(vec(global_adjoint), vec(psi_array));
+                atol=2e-10, rtol=2e-11)
+        end
+    end
+    return nothing
+end
+
 function domainwall_tests()
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -248,4 +321,5 @@ function domainwall_tests()
         @test_throws ArgumentError D5DW_GeneralizedDomainwallOperator5D(
             links, L5, mass, M, ones(L5), fill(Inf, L5), zeros(L5))
     end
+    _domainwall_nc3_fastpath_tests()
 end

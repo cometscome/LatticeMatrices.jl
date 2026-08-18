@@ -6,7 +6,8 @@ import LatticeMatrices: D5DW_MobiusDomainwallOperator5D,
     kernel_adjoint_D5DW_MobiusDomainwallOperator5D!,
     kernel_D5DW_GeneralizedDomainwallOperator5D!,
     kernel_adjoint_D5DW_GeneralizedDomainwallOperator5D!, kernel_add_4D!,
-    mul_op, mul_op_1pg5, mul_op_1mg5
+    mul_op, mul_op_1pg5, mul_op_1mg5,
+    _domainwall_combined_half_project3, _wilson_half_project3
 using StaticArrays: MMatrix
 
 @inline function _domainwall_operator_shadow(operator)
@@ -177,6 +178,125 @@ end
     end
     @inbounds for col in 1:NC, row in 1:NC
         dU[row, col, x...] += -(one(mass) / 2) * values[row, col]
+    end
+    return nothing
+end
+
+@inline function _domainwall_effective_half_project3(
+    source, color, indices, coeff_diagonal, coeff_fifth,
+    mass, ::Val{L5}, ::Val{nw}, pm, mu,
+) where {L5,nw}
+    indices_5p = shiftindices(indices, LatticeMatrices.shift_5p5D)
+    indices_5m = shiftindices(indices, LatticeMatrices.shift_5m5D)
+    boundary_5p = ifelse(indices[5] == L5 + nw, -mass, one(mass))
+    boundary_5m = ifelse(indices[5] == 1 + nw, -mass, one(mass))
+    return _domainwall_combined_half_project3(
+        source, color, indices, indices_5m, indices_5p,
+        coeff_diagonal,
+        coeff_fifth * boundary_5m,
+        coeff_fifth * boundary_5p,
+        pm, mu)
+end
+
+@inline function _domainwall_halfspin_pullback_row3(
+    left, source, indices, coeff_diagonal, coeff_fifth, mass,
+    plus_source, minus_left, ::Val{ROW}, ::Val{MU},
+    ::Val{L5}, ::Val{nw},
+) where {ROW,MU,L5,nw}
+    left1, left2 = _wilson_half_project3(
+        left, ROW, indices, Val(-1), Val(MU))
+    minus_source1, minus_source2 = _domainwall_effective_half_project3(
+        source, ROW, indices, coeff_diagonal, coeff_fifth,
+        mass, Val(L5), Val(nw), Val(1), Val(MU))
+    value1 = left1 * conj(plus_source[1]) +
+             left2 * conj(plus_source[2]) +
+             minus_source1 * conj(minus_left[1]) +
+             minus_source2 * conj(minus_left[2])
+    value2 = left1 * conj(plus_source[3]) +
+             left2 * conj(plus_source[4]) +
+             minus_source1 * conj(minus_left[3]) +
+             minus_source2 * conj(minus_left[4])
+    value3 = left1 * conj(plus_source[5]) +
+             left2 * conj(plus_source[6]) +
+             minus_source1 * conj(minus_left[5]) +
+             minus_source2 * conj(minus_left[6])
+    return value1, value2, value3
+end
+
+@inline function _kernel_domainwall_link_pullback_direction_matrix!(
+    dU, left, source, x, xplus_shift,
+    coeff_scale, coeff_diagonal, coeff_fifth, mass,
+    ::Val{3}, ::Val{L5}, ::Val{nw},
+    ::LatticeMatrices.Oneγ{-1,MU}, ::LatticeMatrices.Oneγ{1,MU},
+) where {L5,nw,MU}
+    zero_value = zero(eltype(dU))
+    value11 = zero_value
+    value12 = zero_value
+    value13 = zero_value
+    value21 = zero_value
+    value22 = zero_value
+    value23 = zero_value
+    value31 = zero_value
+    value32 = zero_value
+    value33 = zero_value
+    @inbounds for s in 1:L5
+        scale = _domainwall_slice_coefficient(coeff_scale, s)
+        diagonal = _domainwall_slice_coefficient(coeff_diagonal, s)
+        fifth = _domainwall_slice_coefficient(coeff_fifth, s)
+        indices = (x[1], x[2], x[3], x[4], s + nw)
+        indices_plus = shiftindices(indices, xplus_shift)
+
+        plus11, plus12 = _domainwall_effective_half_project3(
+            source, 1, indices_plus, diagonal, fifth,
+            mass, Val(L5), Val(nw), Val(-1), Val(MU))
+        plus21, plus22 = _domainwall_effective_half_project3(
+            source, 2, indices_plus, diagonal, fifth,
+            mass, Val(L5), Val(nw), Val(-1), Val(MU))
+        plus31, plus32 = _domainwall_effective_half_project3(
+            source, 3, indices_plus, diagonal, fifth,
+            mass, Val(L5), Val(nw), Val(-1), Val(MU))
+        minus_left11, minus_left12 = _wilson_half_project3(
+            left, 1, indices_plus, Val(1), Val(MU))
+        minus_left21, minus_left22 = _wilson_half_project3(
+            left, 2, indices_plus, Val(1), Val(MU))
+        minus_left31, minus_left32 = _wilson_half_project3(
+            left, 3, indices_plus, Val(1), Val(MU))
+        plus_source = (plus11, plus12, plus21, plus22, plus31, plus32)
+        minus_left = (
+            minus_left11, minus_left12,
+            minus_left21, minus_left22,
+            minus_left31, minus_left32,
+        )
+        row1 = _domainwall_halfspin_pullback_row3(
+            left, source, indices, diagonal, fifth, mass,
+            plus_source, minus_left, Val(1), Val(MU), Val(L5), Val(nw))
+        row2 = _domainwall_halfspin_pullback_row3(
+            left, source, indices, diagonal, fifth, mass,
+            plus_source, minus_left, Val(2), Val(MU), Val(L5), Val(nw))
+        row3 = _domainwall_halfspin_pullback_row3(
+            left, source, indices, diagonal, fifth, mass,
+            plus_source, minus_left, Val(3), Val(MU), Val(L5), Val(nw))
+        value11 += scale * row1[1]
+        value12 += scale * row1[2]
+        value13 += scale * row1[3]
+        value21 += scale * row2[1]
+        value22 += scale * row2[2]
+        value23 += scale * row2[3]
+        value31 += scale * row3[1]
+        value32 += scale * row3[2]
+        value33 += scale * row3[3]
+    end
+    coefficient = -(one(mass) / 2)
+    @inbounds begin
+        dU[1, 1, x...] += coefficient * value11
+        dU[1, 2, x...] += coefficient * value12
+        dU[1, 3, x...] += coefficient * value13
+        dU[2, 1, x...] += coefficient * value21
+        dU[2, 2, x...] += coefficient * value22
+        dU[2, 3, x...] += coefficient * value23
+        dU[3, 1, x...] += coefficient * value31
+        dU[3, 2, x...] += coefficient * value32
+        dU[3, 3, x...] += coefficient * value33
     end
     return nothing
 end

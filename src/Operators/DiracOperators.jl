@@ -14,6 +14,7 @@ const shifts_m = (shift_1m, shift_2m, shift_3m, shift_4m)
 
 include("WilsonDiracOperator.jl")
 include("WilsonDiracCloverOperator.jl")
+include("WilsonCloverPullback.jl")
 include("StaggeredDiracOperator.jl")
 include("HISQSmearing.jl")
 include("HISQDiracOperator.jl")

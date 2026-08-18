@@ -6,9 +6,9 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-## What's new in v1.1.0 (compared with v1.0.0)
+## What's new in v1.1.2 (compared with v1.0.0)
 
-v1.1.0 is a backward-compatible minor release. Existing v1.0.0 code can be
+v1.1.2 is a backward-compatible minor release. Existing v1.0.0 code can be
 used without changes; the following APIs and kernels are additions.
 
 ### Measurement building blocks
@@ -20,6 +20,8 @@ used without changes; the following APIs and kernels are additions.
   slices, with optional Fourier-momentum and staggered-parity projections, and
   performs the final global MPI reduction. QCDMeasurements.jl uses these
   primitives for generalized connected-meson two-point measurements.
+- v1.1.2 adds reusable APIs for Shamir domain-wall physical-source import,
+  physical/midpoint projection, and `PP`/`J5q` slice contractions.
 
 ### Stable SU(2)/SU(3) exponential pullbacks
 
@@ -534,6 +536,13 @@ D_hopping = WilsonDiracOperator4D_Donly(U)
 mul!(out, D_hopping, psi)
 ```
 
+For `NC=3` with a halo, the Wilson forward, adjoint, and hopping-only paths
+use a backend-independent half-spin kernel.  It applies each rank-two Wilson
+projector before the SU(3) multiplication and accumulates all eight neighbors
+before writing the spinor once.  This optimization does not change the
+`LatticeMatrix` memory layout or require CUDA-, ROCm-, or Threads-specific user
+code.  The `NC != 3` and `nw=0` implementations remain generic fallbacks.
+
 The Wilson operator is normalized as
 
 ```math
@@ -557,6 +566,10 @@ where `Q` is the sum of the four plaquettes touching the site in the
 `mu`--`nu` plane.  The six anti-Hermitian components are cached in the order
 `(12, 13, 14, 23, 24, 34)` and can also be constructed directly:
 
+For `NC=3`, each four-link clover leaf is evaluated as three factorized SU(3)
+matrix products.  The generic element-by-element construction remains the
+fallback for other color counts.
+
 ```julia
 field_strength = CloverFieldStrength4D(U)
 F12 = field_strength[1]
@@ -575,6 +588,20 @@ mul!(out, D_clover, psi)
 `update_clover!` is unnecessary while `U` is unchanged.  Direct writes to a
 lattice's storage (`U[mu].A`) must additionally be followed by
 `mark_halo_dirty!(U[mu])`, as described in the halo-epoch section above.
+
+The link derivative of a Wilson--clover bilinear is also available directly:
+
+```julia
+left = psi
+dU = [similar(link) for link in U]
+clear_matrix!.(dU)
+wilson_clover_link_pullback!(dU, D_clover, U, left, psi)
+```
+
+`wilson_clover_link_pullback!` accumulates the Wilson hopping and four-leaf
+clover contributions into `dU`. It is an analytic backend operation and does
+not require an automatic-differentiation package. A halo width of at least one
+is required.
 
 #### One-link staggered example (Bridge++ convention)
 

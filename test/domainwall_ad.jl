@@ -18,13 +18,12 @@ function _domainwall_ad_shifted_links(links, directions, epsilon)
     return shifted
 end
 
-function domainwall_ad_tests()
+function domainwall_ad_tests(NC=2)
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
     global_size = (2 * nprocs, 2, 2, 2)
     fermion_size = (global_size..., 3)
     process_grid = (nprocs, 1, 1, 1)
     process_grid5 = (process_grid..., 1)
-    NC = 2
     L5 = 3
     nw = 1
     mass = 0.13

@@ -120,6 +120,11 @@ try
             field_strength = CloverFieldStrength4D(U)
             @test length(field_strength) == 6
             @test update_clover!(clover) === clover
+            clover_gradient = [similar(link) for link in U]
+            clear_matrix!.(clover_gradient)
+            wilson_clover_link_pullback!(
+                clover_gradient, clover, U, psi, psi)
+            @test all(field -> all(isfinite, field.A), clover_gradient)
 
             staggered_host = randn(ComplexF64, NC, 1, gsize...)
             staggered = LatticeMatrix(

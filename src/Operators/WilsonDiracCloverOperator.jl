@@ -118,6 +118,113 @@ end
     return nothing
 end
 
+@inline function _clover_load_matrix3(U, x)
+    @inbounds return (
+        U[1, 1, x...], U[1, 2, x...], U[1, 3, x...],
+        U[2, 1, x...], U[2, 2, x...], U[2, 3, x...],
+        U[3, 1, x...], U[3, 2, x...], U[3, 3, x...],
+    )
+end
+
+@inline function _clover_load_adjoint_matrix3(U, x)
+    @inbounds return (
+        conj(U[1, 1, x...]), conj(U[2, 1, x...]), conj(U[3, 1, x...]),
+        conj(U[1, 2, x...]), conj(U[2, 2, x...]), conj(U[3, 2, x...]),
+        conj(U[1, 3, x...]), conj(U[2, 3, x...]), conj(U[3, 3, x...]),
+    )
+end
+
+@inline function _clover_mul_matrix3(A, B)
+    return (
+        muladdmulti(A[1], B[1], A[2], B[4], A[3], B[7]),
+        muladdmulti(A[1], B[2], A[2], B[5], A[3], B[8]),
+        muladdmulti(A[1], B[3], A[2], B[6], A[3], B[9]),
+        muladdmulti(A[4], B[1], A[5], B[4], A[6], B[7]),
+        muladdmulti(A[4], B[2], A[5], B[5], A[6], B[8]),
+        muladdmulti(A[4], B[3], A[5], B[6], A[6], B[9]),
+        muladdmulti(A[7], B[1], A[8], B[4], A[9], B[7]),
+        muladdmulti(A[7], B[2], A[8], B[5], A[9], B[8]),
+        muladdmulti(A[7], B[3], A[8], B[6], A[9], B[9]),
+    )
+end
+
+@inline function _clover_add_matrix3(A, B)
+    return (
+        A[1] + B[1], A[2] + B[2], A[3] + B[3],
+        A[4] + B[4], A[5] + B[5], A[6] + B[6],
+        A[7] + B[7], A[8] + B[8], A[9] + B[9],
+    )
+end
+
+@inline function _clover_path_matrix3(A, B, C, D)
+    return _clover_mul_matrix3(
+        _clover_mul_matrix3(_clover_mul_matrix3(A, B), C), D)
+end
+
+@inline function _clover_store_antihermitian3!(F, x, q)
+    factor = one(real(q[1])) / 8
+    value11 = factor * (q[1] - conj(q[1]))
+    value12 = factor * (q[2] - conj(q[4]))
+    value13 = factor * (q[3] - conj(q[7]))
+    value22 = factor * (q[5] - conj(q[5]))
+    value23 = factor * (q[6] - conj(q[8]))
+    value33 = factor * (q[9] - conj(q[9]))
+    @inbounds begin
+        F[1, 1, x...] = value11
+        F[1, 2, x...] = value12
+        F[1, 3, x...] = value13
+        F[2, 1, x...] = -conj(value12)
+        F[2, 2, x...] = value22
+        F[2, 3, x...] = value23
+        F[3, 1, x...] = -conj(value13)
+        F[3, 2, x...] = -conj(value23)
+        F[3, 3, x...] = value33
+    end
+    return nothing
+end
+
+@inline function kernel_clover_field_strength_halo!(
+    site, F, Umu, Unu, ::Val{3}, nw, indexer,
+    shift_mu_p, shift_mu_m, shift_nu_p, shift_nu_m,
+    shift_nu_minus_mu, shift_minus_mu_minus_nu, shift_mu_minus_nu)
+
+    x = delinearize(indexer, site, nw)
+    xpmu = shiftindices(x, shift_mu_p)
+    xpnu = shiftindices(x, shift_nu_p)
+    xmmu = shiftindices(x, shift_mu_m)
+    xmnu = shiftindices(x, shift_nu_m)
+    xpnu_mmu = shiftindices(x, shift_nu_minus_mu)
+    xmmu_mnu = shiftindices(x, shift_minus_mu_minus_nu)
+    xpmu_mnu = shiftindices(x, shift_mu_minus_nu)
+
+    q = _clover_path_matrix3(
+        _clover_load_matrix3(Umu, x),
+        _clover_load_matrix3(Unu, xpmu),
+        _clover_load_adjoint_matrix3(Umu, xpnu),
+        _clover_load_adjoint_matrix3(Unu, x),
+    )
+    q = _clover_add_matrix3(q, _clover_path_matrix3(
+        _clover_load_matrix3(Unu, x),
+        _clover_load_adjoint_matrix3(Umu, xpnu_mmu),
+        _clover_load_adjoint_matrix3(Unu, xmmu),
+        _clover_load_matrix3(Umu, xmmu),
+    ))
+    q = _clover_add_matrix3(q, _clover_path_matrix3(
+        _clover_load_adjoint_matrix3(Umu, xmmu),
+        _clover_load_adjoint_matrix3(Unu, xmmu_mnu),
+        _clover_load_matrix3(Umu, xmmu_mnu),
+        _clover_load_matrix3(Unu, xmnu),
+    ))
+    q = _clover_add_matrix3(q, _clover_path_matrix3(
+        _clover_load_adjoint_matrix3(Unu, xmnu),
+        _clover_load_matrix3(Umu, xmnu),
+        _clover_load_matrix3(Unu, xpmu_mnu),
+        _clover_load_adjoint_matrix3(Umu, x),
+    ))
+
+    return _clover_store_antihermitian3!(F, x, q)
+end
+
 @inline function _clover_q_element_nowing(
     Umu, Unu, Unu_pmu, Umu_pnu, Umu_mmu_pnu, Unu_mmu, Umu_mmu,
     Unu_mnu, Umu_mmu_mnu, Unu_mmu_mnu, Umu_mnu, Unu_pmu_mnu,
@@ -169,6 +276,40 @@ end
         end
     end
     return nothing
+end
+
+@inline function kernel_clover_field_strength_nowing!(
+    site, F, Umu, Unu, Unu_pmu, Umu_pnu, Umu_mmu_pnu, Unu_mmu,
+    Umu_mmu, Unu_mnu, Umu_mmu_mnu, Unu_mmu_mnu, Umu_mnu, Unu_pmu_mnu,
+    ::Val{3}, indexer)
+
+    x = delinearize(indexer, site, 0)
+    q = _clover_path_matrix3(
+        _clover_load_matrix3(Umu, x),
+        _clover_load_matrix3(Unu_pmu, x),
+        _clover_load_adjoint_matrix3(Umu_pnu, x),
+        _clover_load_adjoint_matrix3(Unu, x),
+    )
+    q = _clover_add_matrix3(q, _clover_path_matrix3(
+        _clover_load_matrix3(Unu, x),
+        _clover_load_adjoint_matrix3(Umu_mmu_pnu, x),
+        _clover_load_adjoint_matrix3(Unu_mmu, x),
+        _clover_load_matrix3(Umu_mmu, x),
+    ))
+    q = _clover_add_matrix3(q, _clover_path_matrix3(
+        _clover_load_adjoint_matrix3(Umu_mmu, x),
+        _clover_load_adjoint_matrix3(Unu_mmu_mnu, x),
+        _clover_load_matrix3(Umu_mmu_mnu, x),
+        _clover_load_matrix3(Unu_mnu, x),
+    ))
+    q = _clover_add_matrix3(q, _clover_path_matrix3(
+        _clover_load_adjoint_matrix3(Unu_mnu, x),
+        _clover_load_matrix3(Umu_mnu, x),
+        _clover_load_matrix3(Unu_pmu_mnu, x),
+        _clover_load_adjoint_matrix3(Umu, x),
+    ))
+
+    return _clover_store_antihermitian3!(F, x, q)
 end
 
 @inline _clover_shift(mu, amount) = ntuple(d -> d == mu ? amount : 0, 4)

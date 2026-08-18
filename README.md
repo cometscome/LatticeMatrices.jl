@@ -218,7 +218,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <:
     nbr::NTuple{D,NTuple{2,Int}}  # neighbors (minus, plus)
     A::AT                         # local halo-padded array
     buf::Vector{AT}               # device-side communication buffers
-    buf_host::Vector{Array{T}}    # host-side communication buffers
+    buf_host::Vector{Array{T}}    # host communication buffers (pinned when supported)
     shift_buf_host::DirectShiftHostBuffers{T}
     myrank::Int
     PN::NTuple{D,Int}             # local interior size per dimension
@@ -247,6 +247,16 @@ LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
 - **Phases**: wrap-around phases per dimension. A positive-direction wrap applies `phase`,
   while a negative-direction wrap applies `inv(phase)`.
 - **Exchange**: `set_halo!(ls)` calls `exchange_dim!(ls, d)` for each spatial dimension `d`.
+
+Halo exchange uses receive-before-send nonblocking MPI without a per-direction
+global barrier.  Sequential directions send a staircase cross-section: halos
+from directions already exchanged are included to preserve corners, while
+not-yet-exchanged directions send only their core range.  Accelerator arrays
+use transparently registered/pinned host buffers for decomposed directions
+when the backend extension provides them; CPU arrays are passed directly to
+MPI.  This policy is selected by array-type dispatch, so application and HISQ
+code contain no CUDA/Threads backend branch and require no runtime
+communication flag.
 
 #### Halo epochs and automatic synchronization
 
@@ -450,7 +460,7 @@ fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 
 | Type | Meaning | Halo support |
 | --- | --- | --- |
-| `WilsonDiracOperator4D(U, kappa)` | Wilson operator, including the on-site identity term | `nw=0` or `nw>=1` |
+| `WilsonDiracOperator4D(U, kappa)` or `WilsonDiracOperator4D(U1, U2, U3, U4, kappa)` | Wilson operator, including the on-site identity term; the explicit-link form is suitable inside AD callbacks | `nw=0` or `nw>=1` |
 | `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
 | `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
@@ -508,6 +518,11 @@ kappa = 0.12
 D_wilson = WilsonDiracOperator4D(U, kappa)
 mul!(out, D_wilson, psi)
 mul!(out, adjoint(D_wilson), psi)
+
+# In a callback differentiated with respect to U1, ..., U4, use the
+# explicit-link constructor. It preserves concrete link types on Julia 1.12.
+D_wilson_callback = WilsonDiracOperator4D(
+    U[1], U[2], U[3], U[4], kappa)
 
 D_clover = WilsonDiracCloverOperator4D(U, kappa, 1.0)
 mul!(out, D_clover, psi)
@@ -671,12 +686,28 @@ mul_cached_hisq!(
     result, cache, U_hisq[1], U_hisq[2], U_hisq[3], U_hisq[4], psi_hisq)
 mul_cached_hisq_adjoint!(
     result, cache, U_hisq[1], U_hisq[2], U_hisq[3], U_hisq[4], psi_hisq)
+
+# Analytic thin-link pullback; no Enzyme import is required.
+dU_hisq = [similar(link) for link in U_hisq]
+clear_matrix!.(dU_hisq)
+hisq_link_pullback!(
+    dU_hisq, cache, U_hisq, result_cotangent, psi_hisq;
+    coefficient=1)
 ```
 
 The first call after a thin link changes rebuilds level-1, reunitarized, fat,
 and Naik links; later calls reuse them. Public lattice mutations advance the
 epoch used by this check. After writing through `link.A` directly, call
-`mark_halo_dirty!(link)`.
+`mark_halo_dirty!(link)`. The factorized Fat7 workspace is not global: six
+same-layout matrix fields are owned by this `cache` object and reused on every
+refresh. Thus ordinary cached CG/HMC code needs no workspace argument or
+`runtime_activity=true` setting.
+
+`hisq_link_pullback!` propagates a Dirac-output cotangent through the Naik
+term, both Fat7 levels, and the U(3) projection without Enzyme. It accumulates
+into its four destination fields, so clear them before the first contribution
+and leave them intact when summing rational or flavor terms. Force evaluation
+requires `NC=3` and `nw>=3`.
 
 The complete unphased `X` and forward-anchored `L` results, including their
 layout-sensitive numerical fingerprints, have been cross-checked against
@@ -716,17 +747,76 @@ the squared relative CG residual, so its `precision=1e-13` was compared with
 an ensemble-level physics comparison additionally requires matching gauge
 ensembles, source statistics, and taste normalization.
 
+##### HISQ Dirac and multi-GPU benchmark
+
+The HISQ stencil itself was benchmarked separately from smearing on two H100
+NVL GPUs.  One timed operation is a full-lattice, massless HISQ Dslash with
+`epsilon_N=-0.083`, including an output-halo refresh for the next Krylov
+iteration; the one-time smearing construction is excluded.  SIMULATeQCD's two
+parity calls are counted together so they match one LatticeMatrices `mul!`.
+
+SIMULATeQCD supports multiple GPUs through one MPI rank per GPU.  Distinct H100
+UUIDs were verified for its two ranks and for LatticeMatrices.  The
+LatticeMatrices communication path was then changed to pinned host staging,
+receive-before-send nonblocking MPI, and staircase face sections.  Direct
+CUDA-aware MPI was also tested, but on this intra-node OpenMPI/UCX path it was
+slower than pinned staging for every measured message size.
+
+With the same `2x1x1x1` split, the final LatticeMatrices medians at
+`16^4/24^4/32^4` are `0.395/0.954/2.914` ms, versus
+SIMULATeQCD's `0.435/0.849/1.054` ms.  The old LatticeMatrices values were
+`1.915/6.003/12.644` ms, so the communication revision improves them by
+`4.85x/6.29x/4.34x`.  At `16^4`, changing the two-rank process grid over the
+four axes gives `0.395/0.438/0.528/0.623` ms; the x split is now best because
+its first staircase face is the smallest.
+
+The full report records H100 results from `8^4` through `32^4`, the direct
+device/pageable/pinned MPI buffer comparison, the communication revision,
+Threads 1/2/4/8/16, MPI 1/2/4/8/16 with multiple process-grid shapes, hybrid
+rank/thread combinations, exact methodology, and reproduction commands:
+[`benchmark/HISQ_DIRAC_BENCHMARK_2026-08-17.md`](benchmark/HISQ_DIRAC_BENCHMARK_2026-08-17.md).
+The corresponding drivers are
+[`benchmark/hisq_dirac_scaling.jl`](benchmark/hisq_dirac_scaling.jl) and the
+external, unmodified-tree SIMULATeQCD target
+[`test/reference/simulateqcd/hisq_dirac_benchmark.cpp`](test/reference/simulateqcd/hisq_dirac_benchmark.cpp).
+
 ##### GPU smearing implementation and performance
 
 The halo-based Fat7 and Naik builders use fixed-size row kernels and split the
 5- and 7-link sign combinations into statically specialized launches.  For the
-physical `NC=3` CUDA case, Fat7 additionally uses flattened arrays and fully
-unrolled three-color path products; other color counts and non-CUDA backends
-retain the generic implementation.  In the 3-, 5-, and 7-link kernels this
+physical `NC=3` case, the allocating complete builder and `HISQDiracCache4D`
+additionally factor repeated Fat7 staples into three stages using six
+same-layout matrix fields. Caller-owned repeated construction can select the
+same path by passing `HISQFat7Workspace` to `hisq_links_from_thin!`. This
+changes neither `LatticeMatrix` storage nor the Dirac operator's memory layout.
+Other color counts and `nw=0` retain the direct implementation.
+Forward kernels enumerate a matrix row before the lattice site, matching
+the first (contiguous) `LatticeMatrix` array dimension. The much heavier
+`NC=3` Fat7 row-owner pullback deliberately retains site-first enumeration:
+adjacent threads then traverse the same path geometry at adjacent sites. Thus the
+two directions are tuned independently without changing the public layout.
+The index arithmetic and factorized stages use JACC launch abstractions and
+contain no backend-specific thread launch. Non-CUDA GPU correctness and the
+row-fast performance result have not yet been validated on hardware.
+The same source path was checked with the JACC Threads backend using four Julia
+threads: direct/factorized/U(3) smearing completed ten explicit-GC stress
+iterations with maximum difference `5.55e-16`, and the `NC=3` Enzyme pullback
+passed all six finite-difference checks. On the validation host, the locally
+built OpenMPI links UCX 1.20, whose default error-signal list includes
+`SIGSEGV`; that conflicts with Julia task-stack growth independently of JACC
+and also crashes plain `Threads.@threads`. For that MPI installation the
+threaded command must exclude `SEGV`, for example
+`UCX_ERROR_SIGNALS=ILL,BUS,FPE JULIA_NUM_THREADS=4 julia ...`. MPICH_jll passed
+the same stress test without this UCX setting.
+The backend-neutral JACC `NC=3` path uses flattened arrays and fully unrolled
+three-color path products. On CUDA, its 3-, 5-, and 7-link kernels
 reduced `ptxas`-reported local memory from `2624`, `1752`, and `1768` bytes per
 thread to `32` bytes each; the specialized Lepage kernel uses `128` bytes.
-Their reverse rules gather every contribution for one thin-link matrix element
-in a single owner thread, avoiding both device-side matrix allocation and
+The generic reverse rules gather every contribution for one thin-link matrix
+element in a single owner work item.  The `NC=3` JACC reverse path instead owns
+a complete matrix row, shares path geometry and one partial product across its
+three columns, and uses the same flat three-color access pattern as the forward
+kernels.  Both paths avoid device-side matrix allocation and
 complex-valued atomics.  No global cache, `CUDA.limit!`, or Enzyme
 `runtime_activity=true` setting is used.  `HISQDiracCache4D` is an ordinary
 caller-owned object; its epoch check transparently refreshes the derived links
@@ -748,27 +838,91 @@ guarantee.
 | `8^4` | 1132.06 | 20.66 | 3.443 | 6.00x | 0.733 | 4.70x |
 | `16^4` | 28615.26 | 222.10 | 36.278 | 6.12x | 6.791 | 5.34x |
 
-On the larger `24^4` check, level-1 Fat7 decreased from `427.08` to `69.44`
-ms and the complete forward builder from `885.99` to `148.24` ms.  The
-SIMULATeQCD level-1 time was `17.08` ms, or a remaining factor of `4.07`.
+A paired H100 rerun after staple factorization used seven synchronized groups
+and reports their minima because the shared GPU had scheduler outliers. The
+`direct NC=3` column invokes the previous path explicitly; the factorized
+column is the path now selected transparently by the allocating complete
+builder and cache. The comparison can be repeated with
+`LM_BENCH_EXTENTS=8,16 julia --project=. benchmark/hisq_fat7_factorized.jl`
+after selecting the desired JACC backend and device.
 
-The unchanged complete smearing pullback
-(`Naik -> level 2 -> U(3) -> level 1`) had seven-sample medians of `51.48`,
-`216.53`, and `3270.27` ms on `4^4`, `8^4`, and `16^4`, respectively.  A
-stress test also completed 1000
+| lattice | direct `NC=3` (ms) | factorized (ms) | forward speedup | SIMULATeQCD (ms) | factorized / SIMULATeQCD |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| `8^4` | 3.247 | 1.267 | 2.56x | 0.733 | 1.73x |
+| `16^4` | 29.680 | 9.242 | 3.21x | 6.791 | 1.36x |
+
+A subsequent row-fast forward-kernel rerun, again using synchronized minima
+on the shared H100, gave:
+
+| lattice | level-1 factorized (ms) | level-2 factorized (ms) | complete factorized (ms) | previous complete (ms) | SIMULATeQCD (ms) | complete / SIMULATeQCD |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `8^4` | 0.332 | 0.393 | 1.278 | 1.267 | 0.733 | 1.74x |
+| `16^4` | 1.104 | 1.824 | 3.933 | 9.242 | 6.791 | 0.58x |
+
+At `8^4`, halo refreshes and launch overhead dominate the complete builder,
+so the overall time is unchanged even though the two Fat7 levels improved.
+At `16^4`, the same mapping reduced the complete builder by `2.35x`; in this
+measurement it was `1.73x` faster than SIMULATeQCD `SmearAll`. These are shared
+GPU minima rather than cross-machine performance guarantees. Set
+`CUDA_VISIBLE_DEVICES` when running the benchmark; it prints the selected GPU
+name and UUID so results cannot silently mix devices.
+
+For a less scheduler-sensitive `16^4` kernel profile, level-1 Fat7 occupied
+the GPU for `13.21` ms on the direct path and `3.37` ms on the factorized
+path, a `3.92x` reduction. Direct and factorized complete links agreed to
+`7.4e-15` or better on `4^4`, `8^4`, and `16^4`. Before the row-fast change,
+the remaining gap to SIMULATeQCD was about `1.4--1.7x` at these sizes. The
+small-lattice candidates that remain are launch count, halo refreshes, U(3)
+projection, and the still-direct Lepage/Naik stages.
+
+For comparison, the earlier direct-path `24^4` check reduced level-1 Fat7
+from `427.08` to `69.44` ms and the complete forward builder from `885.99` to
+`148.24` ms. The SIMULATeQCD level-1 time was `17.08` ms. A factorized `24^4`
+rerun was not included because the shared GPU could not provide stable timing
+at that allocation size.
+
+The `NC=3` row-owner pullback reduced `ptxas`-reported local memory per thread
+from `2000`, `1032`, `1048`, and `2032` bytes to `80`, `72`, `88`, and `112`
+bytes for the 3-link, 5-link, 7-link, and Lepage kernels.  On the
+`8 x 8 x 8 x 4` diagnostic lattice, synchronized minimum times changed as
+follows:
+
+| pullback stage | scalar owner (ms) | `NC=3` row owner (ms) | speedup |
+| --- | ---: | ---: | ---: |
+| level-2 Fat7 including Lepage | 231.56 | 16.29 | 14.2x |
+| level-1 Fat7 | 76.91 | 15.99 | 4.81x |
+| complete smearing pullback | 245.42 | 46.98 | 5.22x |
+
+Applying the forward row-fast enumeration to this row-owner pullback was not
+beneficial: a paired H100 diagnostic changed the level-1 Fat7 minimum from
+`28.29` ms (site-first) to `35.40` ms (row-first). The implementation therefore
+keeps its dedicated site-first mapping; generic one-element-owner pullbacks
+continue to follow row/column/site array order.
+
+The comparison SIMULATeQCD `TestForce` executable took `52.05` ms for its
+complete force workflow on the same lattice shape.  The workflows are not
+identical, but the former result in which the Julia smearing pullback alone
+was more than `4.7x` slower than the entire SIMULATeQCD force workflow is no
+longer present.  Size-scaling checks gave synchronized minima of `30.09`,
+`55.02`, and `858.41` ms on `4^4`, `8^4`, and `16^4`; the GPU was shared and
+the medians contained scheduler wait outliers.  The preceding scalar-owner
+medians were `51.48`, `216.53`, and `3270.27` ms, so comparisons between those
+two sets of summary statistics are only indicative.
+
+A stress test also completed 1000
 consecutive full `4^4` rebuilds with CUDA's default device heap, without any
 user-side heap configuration.
 
 The cached thin-link force was additionally exercised in a `4^4` HISQ HMC
-trajectory with `m=0.37` and `epsilon_N=-0.083`.  Reducing the molecular
+trajectory with `m=0.5` and `epsilon_N=-0.05`.  Reducing the molecular
 dynamics step size at fixed trajectory length gave
 
 | MD steps | `dt` | `Delta H` | `Delta H / dt^2` |
 | ---: | ---: | ---: | ---: |
-| 1 | 0.05 | -0.391153 | -156.461 |
-| 2 | 0.025 | -0.0974064 | -155.850 |
-| 4 | 0.0125 | -0.0243280 | -155.699 |
-| 8 | 0.00625 | -0.00608053 | -155.662 |
+| 1 | 0.05 | -0.393101 | -157.240 |
+| 2 | 0.025 | -0.0978934 | -156.629 |
+| 4 | 0.0125 | -0.0244497 | -156.478 |
+| 8 | 0.00625 | -0.00611096 | -156.441 |
 
 Successive `|Delta H|` ratios were `4.016`, `4.004`, and `4.001`, corresponding
 to observed orders `2.006`, `2.001`, and `2.000`.  Thus the force gives the
@@ -1133,6 +1287,10 @@ The complete HISQ AD path requires `nw >= 3`; pass the caller-owned `V`, `W`,
 `X`, and `L` work vectors with `enzyme_duplicated` when differentiating
 through `hisq_links_from_thin!`.
 
+For HMC code that only needs the cached HISQ thin-link force, prefer the core
+`hisq_link_pullback!` API described above. It implements the same complex
+gradient convention and is available when Enzyme is not installed or loaded.
+
 `mul_cached_hisq!` has a dedicated static Enzyme reverse rule for the complete
 Dirac → Naik/level-2 → U(3) → level-1 → thin-link force chain. The cache is
 treated as derived storage, so `runtime_activity=true` is not required and
@@ -1241,6 +1399,7 @@ WilsonDiracCloverOperator4D(U, kappa, cSW)
 StaggeredDiracOperator4D(U, mass)
 hisq_fat7_level1(U)
 hisq_fat7_level1!(V, U)
+HISQFat7Workspace(U[1])
 hisq_project_u3(V)
 hisq_project_u3!(W, V)
 hisq_fat7_level2(W; naik_epsilon=0)
@@ -1256,6 +1415,7 @@ HISQDiracCache4D(U, mass; naik_epsilon=0)
 update_hisq_cache!(cache, U)
 mul_cached_hisq!(out, cache, U1, U2, U3, U4, psi)
 mul_cached_hisq_adjoint!(out, cache, U1, U2, U3, U4, psi)
+hisq_link_pullback!(dU, cache, U, result_cotangent, psi; coefficient=1)
 CloverFieldStrength4D(U)
 update_clover!(field_strength, U)
 update_clover!(clover_operator)

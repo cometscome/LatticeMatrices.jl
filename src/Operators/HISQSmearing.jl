@@ -3,8 +3,12 @@ using StaticArrays: SVector
 const _hisq_transverse_signs = (-1, 1)
 
 @inline function _hisq_parallel_for(args...)
-    threads = JACC.backend == "cuda" ? 128 : 0
-    specification = JACC.launch_spec(threads=threads, shmem_size=0)
+    specification = JACC.launch_spec(shmem_size=0)
+    return JACC.parallel_for(specification, args...)
+end
+
+@inline function _hisq_parallel_for_async(args...)
+    specification = JACC.launch_spec(shmem_size=0, sync=false)
     return JACC.parallel_for(specification, args...)
 end
 
@@ -101,12 +105,12 @@ end
 @inline _hisq_seven_signs(::Val{7}) = (-1, 1, -1)
 @inline _hisq_seven_signs(::Val{8}) = (1, -1, -1)
 
-# CUDA's register allocator spills the generic SVector/path-loop implementation
-# heavily for the physical NC=3 case.  These helpers keep the same row-per-thread
-# decomposition, but make the three color components and each path length
-# explicit.  Flattening the existing NC-first arrays also lets a link address be
-# formed once per matrix instead of once per scalar access.  The generic path
-# below remains the fallback for other color counts and non-CUDA backends.
+# The generic SVector/path-loop implementation creates substantial temporary
+# state for the physical NC=3 case.  These backend-neutral JACC kernels keep the
+# same row-per-work-item decomposition, but make the three color components and
+# each path length explicit.  Flattening the existing NC-first arrays also lets
+# a link address be formed once per matrix instead of once per scalar access.
+# The generic path below remains the fallback for other color counts.
 @inline function _hisq_flat_site_index3(site, padded_size)
     return site[1] + padded_size[1] * ((site[2] - 1) +
         padded_size[2] * ((site[3] - 1) +
@@ -268,6 +272,74 @@ end
         accumulator[2] + value[2],
         accumulator[3] + value[3],
     )
+end
+
+@inline function _hisq_scale_add_tuple3(accumulator, value, coefficient)
+    return (
+        muladd(coefficient, value[1], accumulator[1]),
+        muladd(coefficient, value[2], accumulator[2]),
+        muladd(coefficient, value[3], accumulator[3]),
+    )
+end
+
+@inline function _hisq_single_row3_flat(field, site, row, padded_size)
+    site_index = _hisq_flat_site_index3(site, padded_size)
+    index1 = row + 9 * (site_index - 1)
+    @inbounds return (
+        field[index1], field[index1 + 3], field[index1 + 6])
+end
+
+@inline function _hisq_row_times_single3_flat(
+    row_values, field, site, padded_size,
+)
+    site_index = _hisq_flat_site_index3(site, padded_size)
+    base = 9 * (site_index - 1)
+    r1, r2, r3 = row_values
+    @inbounds return (
+        muladd(r1, field[base + 1],
+            muladd(r2, field[base + 2], r3 * field[base + 3])),
+        muladd(r1, field[base + 4],
+            muladd(r2, field[base + 5], r3 * field[base + 6])),
+        muladd(r1, field[base + 7],
+            muladd(r2, field[base + 8], r3 * field[base + 9])),
+    )
+end
+
+@inline function _hisq_store_single_row3_flat!(
+    field, site, row, values, padded_size,
+)
+    site_index = _hisq_flat_site_index3(site, padded_size)
+    index1 = row + 9 * (site_index - 1)
+    @inbounds begin
+        field[index1] = values[1]
+        field[index1 + 3] = values[2]
+        field[index1 + 6] = values[3]
+    end
+    return nothing
+end
+
+# Transport a matrix field with the positive and negative staples in `axis`.
+# The matrix field is anchored like a link in direction `mu`, but otherwise it
+# may be an intermediate Fat7 field rather than one of the four thin links.
+@inline function _hisq_staple_transport_row3_flat(
+    field, U1, U2, U3, U4, origin, mu, axis, row, padded_size,
+)
+    positive, middle_site = _hisq_oriented_row3_flat(
+        U1, U2, U3, U4, origin, axis, row, padded_size)
+    positive = _hisq_row_times_single3_flat(
+        positive, field, middle_site, padded_size)
+    end_site = _hisq_shift_site(middle_site, mu)
+    positive, _ = _hisq_row_times_oriented3_flat(
+        positive, U1, U2, U3, U4, end_site, -axis, padded_size)
+
+    negative, middle_site = _hisq_oriented_row3_flat(
+        U1, U2, U3, U4, origin, -axis, row, padded_size)
+    negative = _hisq_row_times_single3_flat(
+        negative, field, middle_site, padded_size)
+    end_site = _hisq_shift_site(middle_site, mu)
+    negative, _ = _hisq_row_times_oriented3_flat(
+        negative, U1, U2, U3, U4, end_site, axis, padded_size)
+    return _hisq_add_tuple3(positive, negative)
 end
 
 @inline function _hisq_staple3_row3_flat(
@@ -543,11 +615,13 @@ end
 end
 
 @inline function _hisq_combined_row(combined_index, volume, ::Val{NC}) where NC
+    # A LatticeMatrix stores its row index first.  Let adjacent JACC work items
+    # own adjacent rows so forward matrix loads/stores follow that dimension.
     zero_based = combined_index - 1
-    site_index = mod(zero_based, volume) + 1
-    row_and_direction = div(zero_based, volume)
-    row = mod(row_and_direction, NC) + 1
-    mu = div(row_and_direction, NC) + 1
+    row = mod(zero_based, NC) + 1
+    site_and_direction = div(zero_based, NC)
+    site_index = mod(site_and_direction, volume) + 1
+    mu = div(site_and_direction, volume) + 1
     return site_index, row, mu
 end
 
@@ -621,7 +695,7 @@ end
     return nothing
 end
 
-@inline function kernel_hisq_fat7_initialize_nc3_cuda!(
+@inline function kernel_hisq_fat7_initialize_nc3_jacc!(
     combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
     coefficient, volume, padded_size, ::Val{nw}, indexer,
 ) where nw
@@ -635,7 +709,7 @@ end
     return nothing
 end
 
-@inline function kernel_hisq_fat7_staple3_nc3_cuda!(
+@inline function kernel_hisq_fat7_staple3_nc3_jacc!(
     combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
     coefficient, volume, padded_size, ::Val{nw}, indexer,
 ) where nw
@@ -649,7 +723,7 @@ end
     return nothing
 end
 
-@inline function kernel_hisq_fat7_staple5_nc3_cuda!(
+@inline function kernel_hisq_fat7_staple5_nc3_jacc!(
     combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
     coefficient, volume, part::Val{P}, padded_size, ::Val{nw}, indexer,
 ) where {P,nw}
@@ -663,7 +737,7 @@ end
     return nothing
 end
 
-@inline function kernel_hisq_fat7_staple7_nc3_cuda!(
+@inline function kernel_hisq_fat7_staple7_nc3_jacc!(
     combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
     coefficient, volume, part::Val{P}, padded_size, ::Val{nw}, indexer,
 ) where {P,nw}
@@ -677,7 +751,7 @@ end
     return nothing
 end
 
-@inline function kernel_hisq_fat7_lepage_nc3_cuda!(
+@inline function kernel_hisq_fat7_lepage_nc3_jacc!(
     combined_index, V1, V2, V3, V4, U1, U2, U3, U4,
     coefficient, volume, padded_size, ::Val{nw}, indexer,
 ) where nw
@@ -689,6 +763,214 @@ end
     _hisq_add_row3_flat!(
         V1, V2, V3, V4, mu, origin, row, staple, coefficient, padded_size)
     return nothing
+end
+
+struct HISQFat7Workspace{T}
+    first_stage::NTuple{3,T}
+    second_stage::NTuple{3,T}
+end
+
+"""
+    HISQFat7Workspace(reference_link)
+
+Allocate six same-layout matrix fields used by the factorized three-color
+Fat7 implementation.  A [`HISQDiracCache4D`](@ref) creates and reuses this
+workspace automatically; constructing one explicitly is useful only for
+allocation-free repeated calls to the workspace overloads of
+[`hisq_fat7_level1!`](@ref) and [`hisq_fat7_level2!`](@ref).
+"""
+function HISQFat7Workspace(reference_link::T) where {T<:LatticeMatrix{4}}
+    fields = ntuple(Val(6)) do _
+        _lattice_alias_with_array(
+            reference_link, similar(reference_link.A);
+            halo_epoch=HaloEpoch())
+    end
+    return HISQFat7Workspace{T}(
+        ntuple(i -> fields[i], Val(3)),
+        ntuple(i -> fields[i + 3], Val(3)))
+end
+
+export HISQFat7Workspace
+
+@inline function _hisq_factorized_domain_site(
+    site_index, starts, domain_indexer,
+)
+    relative = delinearize(domain_indexer, site_index, 0)
+    return ntuple(d -> relative[d] + starts[d] - 1, Val(4))
+end
+
+@inline function kernel_hisq_fat7_factorized_first_nc3!(
+    combined_index, output, U1, U2, U3, U4, volume, starts,
+    domain_indexer, padded_size, ::Val{mu}, ::Val{axis},
+) where {mu,axis}
+    # Match the row-fast ordering used by the direct forward kernels above.
+    zero_based = combined_index - 1
+    row = mod(zero_based, 3) + 1
+    site_index = div(zero_based, 3) + 1
+    origin = _hisq_factorized_domain_site(
+        site_index, starts, domain_indexer)
+    central = ifelse(
+        mu == 1, U1, ifelse(mu == 2, U2, ifelse(mu == 3, U3, U4)))
+    staple = _hisq_staple_transport_row3_flat(
+        central,
+        U1, U2, U3, U4, origin, mu, axis, row, padded_size)
+    _hisq_store_single_row3_flat!(
+        output, origin, row, staple, padded_size)
+    return nothing
+end
+
+@inline function kernel_hisq_fat7_factorized_second_nc3!(
+    combined_index, output, first_b, first_c, U1, U2, U3, U4,
+    volume, starts, domain_indexer, padded_size,
+    ::Val{mu}, ::Val{b}, ::Val{c},
+) where {mu,b,c}
+    zero_based = combined_index - 1
+    row = mod(zero_based, 3) + 1
+    site_index = div(zero_based, 3) + 1
+    origin = _hisq_factorized_domain_site(
+        site_index, starts, domain_indexer)
+    transported_b = _hisq_staple_transport_row3_flat(
+        first_c, U1, U2, U3, U4, origin, mu, b, row, padded_size)
+    transported_c = _hisq_staple_transport_row3_flat(
+        first_b, U1, U2, U3, U4, origin, mu, c, row, padded_size)
+    _hisq_store_single_row3_flat!(
+        output, origin, row,
+        _hisq_add_tuple3(transported_b, transported_c), padded_size)
+    return nothing
+end
+
+@inline function kernel_hisq_fat7_factorized_finish_nc3!(
+    combined_index, output, first_a, first_b, first_c,
+    second_a, second_b, second_c, U1, U2, U3, U4,
+    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+    volume, padded_size, ::Val{nw}, indexer,
+    ::Val{mu}, ::Val{a}, ::Val{b}, ::Val{c},
+) where {nw,mu,a,b,c}
+    zero_based = combined_index - 1
+    row = mod(zero_based, 3) + 1
+    site_index = div(zero_based, 3) + 1
+    origin = delinearize(indexer, site_index, nw)
+    central = ifelse(
+        mu == 1, U1, ifelse(mu == 2, U2, ifelse(mu == 3, U3, U4)))
+    accumulator = _hisq_scale_add_tuple3(
+        (zero(eltype(output)), zero(eltype(output)), zero(eltype(output))),
+        _hisq_single_row3_flat(central, origin, row, padded_size),
+        coefficient_1)
+
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, _hisq_single_row3_flat(
+            first_a, origin, row, padded_size), coefficient_3)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, _hisq_single_row3_flat(
+            first_b, origin, row, padded_size), coefficient_3)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, _hisq_single_row3_flat(
+            first_c, origin, row, padded_size), coefficient_3)
+
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, _hisq_single_row3_flat(
+            second_a, origin, row, padded_size), coefficient_5)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, _hisq_single_row3_flat(
+            second_b, origin, row, padded_size), coefficient_5)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, _hisq_single_row3_flat(
+            second_c, origin, row, padded_size), coefficient_5)
+
+    transported = _hisq_staple_transport_row3_flat(
+        second_a, U1, U2, U3, U4, origin, mu, a, row, padded_size)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, transported, coefficient_7)
+    transported = _hisq_staple_transport_row3_flat(
+        second_b, U1, U2, U3, U4, origin, mu, b, row, padded_size)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, transported, coefficient_7)
+    transported = _hisq_staple_transport_row3_flat(
+        second_c, U1, U2, U3, U4, origin, mu, c, row, padded_size)
+    accumulator = _hisq_scale_add_tuple3(
+        accumulator, transported, coefficient_7)
+    _hisq_store_single_row3_flat!(
+        output, origin, row, accumulator, padded_size)
+    return nothing
+end
+
+@inline _hisq_transverse_axes(mu) = ntuple(i -> i < mu ? i : i + 1, Val(3))
+
+function _hisq_factorized_domain(PN, nw, expanded_axes)
+    starts = ntuple(Val(4)) do d
+        nw + 1 - ifelse(d in expanded_axes, 1, 0)
+    end
+    extents = ntuple(Val(4)) do d
+        PN[d] + ifelse(d in expanded_axes, 2, 0)
+    end
+    return starts, DIndexer(extents), prod(extents)
+end
+
+function _hisq_fat7_factorized_nc3!(
+    fat_links, thin_links, coefficients, workspace::HISQFat7Workspace,
+)
+    U1, U2, U3, U4 = thin_links
+    first = workspace.first_stage
+    second = workspace.second_stage
+    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+        coefficient_lepage = coefficients
+    volume = prod(U1.PN)
+    padded_size = ntuple(d -> size(U1.A, d + 2), Val(4))
+    flat_U = (
+        reshape(U1.A, :), reshape(U2.A, :),
+        reshape(U3.A, :), reshape(U4.A, :))
+    flat_first = ntuple(i -> reshape(first[i].A, :), Val(3))
+    flat_second = ntuple(i -> reshape(second[i].A, :), Val(3))
+
+    for mu in 1:4
+        axes = _hisq_transverse_axes(mu)
+        for slot in 1:3
+            axis = axes[slot]
+            expanded_axes = ntuple(i -> axes[i < slot ? i : i + 1], Val(2))
+            starts, domain_indexer, domain_volume =
+                _hisq_factorized_domain(U1.PN, U1.nw, expanded_axes)
+            _hisq_parallel_for_async(
+                3 * domain_volume, kernel_hisq_fat7_factorized_first_nc3!,
+                flat_first[slot], flat_U..., domain_volume, starts,
+                domain_indexer, padded_size, Val(mu), Val(axis))
+        end
+
+        for slot in 1:3
+            a = axes[slot]
+            b = axes[slot == 1 ? 2 : 1]
+            c = axes[slot == 3 ? 2 : 3]
+            starts, domain_indexer, domain_volume =
+                _hisq_factorized_domain(U1.PN, U1.nw, (a,))
+            _hisq_parallel_for_async(
+                3 * domain_volume, kernel_hisq_fat7_factorized_second_nc3!,
+                flat_second[slot],
+                flat_first[slot == 1 ? 2 : 1],
+                flat_first[slot == 3 ? 2 : 3],
+                flat_U..., domain_volume, starts, domain_indexer, padded_size,
+                Val(mu), Val(b), Val(c))
+        end
+
+        _hisq_parallel_for_async(
+            3 * volume, kernel_hisq_fat7_factorized_finish_nc3!,
+            reshape(fat_links[mu].A, :), flat_first..., flat_second...,
+            flat_U..., coefficient_1, coefficient_3, coefficient_5,
+            coefficient_7, volume, padded_size, Val(U1.nw), U1.indexer,
+            Val(mu), Val(axes[1]), Val(axes[2]), Val(axes[3]))
+    end
+
+    if !iszero(coefficient_lepage)
+        V1, V2, V3, V4 = fat_links
+        common_arguments = (
+            reshape(V1.A, :), reshape(V2.A, :),
+            reshape(V3.A, :), reshape(V4.A, :), flat_U...)
+        _hisq_parallel_for_async(
+            12 * volume, kernel_hisq_fat7_lepage_nc3_jacc!,
+            common_arguments..., coefficient_lepage, volume,
+            padded_size, Val(U1.nw), U1.indexer)
+    end
+    JACC.synchronize()
+    mark_halo_dirty!.(fat_links)
+    return fat_links
 end
 
 function _validate_hisq_smearing_output(fat_links, thin_links)
@@ -829,6 +1111,7 @@ end
 
 """
     hisq_fat7_level1!(fat_links, thin_links)
+    hisq_fat7_level1!(fat_links, thin_links, workspace)
     hisq_fat7_level1(thin_links)
 
 Construct the unprojected level-1 Fat7 links used by HISQ. The coefficients
@@ -842,7 +1125,10 @@ V_mu = (1/8) U_mu + (1/16) sum(3-link paths)
 The four input links must be square, periodic, and share one four-dimensional
 lattice geometry. The halo path requires `nw >= 1`; `nw=0` is supported by a
 slower shift-materializing fallback. Staggered and fermion boundary phases
-are not included in the output.
+are not included in the output. For `NC=3`, passing a
+[`HISQFat7Workspace`](@ref) enables the factorized path and reuses its six
+same-layout work fields; other color counts and `nw=0` fall back to the
+direct path.
 """
 function hisq_fat7_level1!(
     fat_links::Union{Vector{TO},NTuple{4,TO}},
@@ -861,7 +1147,7 @@ function hisq_fat7_level1!(
     return _hisq_fat7!(fat_links, thin_links, coefficients)
 end
 
-function _hisq_fat7_nc3_cuda!(fat_links, thin_links, coefficients)
+function _hisq_fat7_nc3_jacc!(fat_links, thin_links, coefficients)
     U1, U2, U3, U4 = thin_links
     V1, V2, V3, V4 = fat_links
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
@@ -878,26 +1164,26 @@ function _hisq_fat7_nc3_cuda!(fat_links, thin_links, coefficients)
     geometry_arguments = (volume, padded_size, Val(V1.nw), V1.indexer)
 
     _hisq_parallel_for(
-        combined_volume, kernel_hisq_fat7_initialize_nc3_cuda!,
+        combined_volume, kernel_hisq_fat7_initialize_nc3_jacc!,
         common_arguments..., coefficient_1, geometry_arguments...)
     _hisq_parallel_for(
-        combined_volume, kernel_hisq_fat7_staple3_nc3_cuda!,
+        combined_volume, kernel_hisq_fat7_staple3_nc3_jacc!,
         common_arguments..., coefficient_3, geometry_arguments...)
     for part in 1:4
         _hisq_parallel_for(
-            combined_volume, kernel_hisq_fat7_staple5_nc3_cuda!,
+            combined_volume, kernel_hisq_fat7_staple5_nc3_jacc!,
             common_arguments..., coefficient_5, volume, Val(part),
             padded_size, Val(V1.nw), V1.indexer)
     end
     for part in 1:8
         _hisq_parallel_for(
-            combined_volume, kernel_hisq_fat7_staple7_nc3_cuda!,
+            combined_volume, kernel_hisq_fat7_staple7_nc3_jacc!,
             common_arguments..., coefficient_7, volume, Val(part),
             padded_size, Val(V1.nw), V1.indexer)
     end
     if !iszero(coefficient_lepage)
         _hisq_parallel_for(
-            combined_volume, kernel_hisq_fat7_lepage_nc3_cuda!,
+            combined_volume, kernel_hisq_fat7_lepage_nc3_jacc!,
             common_arguments..., coefficient_lepage, geometry_arguments...)
     end
     mark_halo_dirty!.(fat_links)
@@ -919,8 +1205,8 @@ function _hisq_fat7!(fat_links, thin_links, coefficients)
     V1, V2, V3, V4 = fat_links
     coefficient_1, coefficient_3, coefficient_5, coefficient_7,
         coefficient_lepage = coefficients
-    if V1.NC1 == 3 && JACC.backend == "cuda"
-        return _hisq_fat7_nc3_cuda!(fat_links, thin_links, coefficients)
+    if V1.NC1 == 3
+        return _hisq_fat7_nc3_jacc!(fat_links, thin_links, coefficients)
     end
     volume = prod(V1.PN)
     combined_volume = 4 * V1.NC1 * volume
@@ -955,16 +1241,76 @@ function _hisq_fat7!(fat_links, thin_links, coefficients)
     return fat_links
 end
 
+function _validate_hisq_fat7_workspace(
+    workspace::HISQFat7Workspace, fat_links, thin_links,
+)
+    reference = thin_links[1]
+    fields = (workspace.first_stage..., workspace.second_stage...)
+    for field in fields
+        field.NC1 == 3 && field.NC2 == 3 &&
+            field.gsize == reference.gsize && field.PN == reference.PN &&
+            field.dims == reference.dims && field.nw == reference.nw &&
+            typeof(field.A) == typeof(reference.A) &&
+            eltype(field.A) == eltype(reference.A) || throw(ArgumentError(
+                "HISQ Fat7 workspace and links must share one geometry and element type"))
+    end
+    for field_index in eachindex(fields)
+        field = fields[field_index]
+        for occupied in (fat_links..., thin_links...)
+            (field === occupied || field.A === occupied.A) &&
+                throw(ArgumentError(
+                    "HISQ Fat7 workspace must not alias input or output fields"))
+        end
+        for other_index in (field_index + 1):length(fields)
+            other = fields[other_index]
+            (field === other || field.A === other.A) && throw(ArgumentError(
+                "HISQ Fat7 workspace must not alias input, output, or another work field"))
+        end
+    end
+    return nothing
+end
+
+function _hisq_fat7!(
+    fat_links, thin_links, coefficients, workspace::HISQFat7Workspace,
+)
+    _validate_hisq_smearing_output(fat_links, thin_links)
+    if iszero(thin_links[1].nw) || thin_links[1].NC1 != 3
+        return _hisq_fat7!(fat_links, thin_links, coefficients)
+    end
+    _validate_hisq_fat7_workspace(workspace, fat_links, thin_links)
+    ensure_halo!.(thin_links)
+    return _hisq_fat7_factorized_nc3!(
+        fat_links, thin_links, coefficients, workspace)
+end
+
 function hisq_fat7_level1(thin_links::Vector{T}) where {T<:LatticeMatrix{4}}
     _validate_staggered_gauge_links(thin_links)
     fat_links = [similar(link) for link in thin_links]
     return hisq_fat7_level1!(fat_links, thin_links)
 end
 
+function hisq_fat7_level1!(
+    fat_links::Union{Vector{TO},NTuple{4,TO}},
+    thin_links::Union{Vector{TI},NTuple{4,TI}},
+    workspace::HISQFat7Workspace,
+) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
+    _validate_staggered_gauge_links(thin_links)
+    real_type = typeof(real(zero(eltype(thin_links[1].A))))
+    coefficients = (
+        one(real_type) / 8,
+        one(real_type) / 16,
+        one(real_type) / 64,
+        one(real_type) / 384,
+        zero(real_type),
+    )
+    return _hisq_fat7!(fat_links, thin_links, coefficients, workspace)
+end
+
 export hisq_fat7_level1!, hisq_fat7_level1
 
 """
     hisq_fat7_level2!(fat_links, reunitarized_links, naik_epsilon=0)
+    hisq_fat7_level2!(fat_links, reunitarized_links, workspace; naik_epsilon=0)
     hisq_fat7_level2(reunitarized_links, naik_epsilon=0)
 
 Construct the level-2 HISQ Fat7 links, including the five-link Lepage
@@ -973,7 +1319,8 @@ correction.  The SIMULATeQCD coefficients are
 three-link, five-link, seven-link, and Lepage paths respectively.
 
 The halo kernel requires `nw >= 2`; `nw=0` uses the periodic
-shift-materializing fallback.
+shift-materializing fallback. For `NC=3`, the workspace overload uses the
+same factorized Fat7 path as [`HISQDiracCache4D`](@ref).
 """
 function hisq_fat7_level2!(
     fat_links::Union{Vector{TO},NTuple{4,TO}},
@@ -1004,6 +1351,31 @@ function hisq_fat7_level2(
     return hisq_fat7_level2!(
         fat_links, reunitarized_links, naik_epsilon)
 end
+
+function hisq_fat7_level2!(
+    fat_links::Union{Vector{TO},NTuple{4,TO}},
+    reunitarized_links::Union{Vector{TI},NTuple{4,TI}}, naik_epsilon,
+    workspace::HISQFat7Workspace,
+) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
+    nw = reunitarized_links[1].nw
+    !iszero(nw) && nw < 2 && throw(ArgumentError(
+        "HISQ level-2 Fat7 smearing requires nw >= 2 or nw == 0"))
+    real_type = typeof(real(zero(eltype(reunitarized_links[1].A))))
+    epsilon = convert(real_type, naik_epsilon)
+    coefficients = (
+        one(real_type) + epsilon / 8,
+        one(real_type) / 16,
+        one(real_type) / 64,
+        one(real_type) / 384,
+        -one(real_type) / 8,
+    )
+    return _hisq_fat7!(
+        fat_links, reunitarized_links, coefficients, workspace)
+end
+
+hisq_fat7_level2!(fat_links, reunitarized_links, workspace::HISQFat7Workspace;
+    naik_epsilon=0) = hisq_fat7_level2!(
+        fat_links, reunitarized_links, naik_epsilon, workspace)
 
 hisq_fat7_level2(reunitarized_links; naik_epsilon=0) =
     hisq_fat7_level2(reunitarized_links, naik_epsilon)

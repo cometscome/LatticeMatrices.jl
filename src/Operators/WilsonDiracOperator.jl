@@ -1,12 +1,35 @@
 
 struct WilsonDiracOperator4D{T} <: OperatorOnKernel
     U::Vector{T}
-    κ::Float64
+    κ::Base.RefValue{Float64}
 
     function WilsonDiracOperator4D(U::Vector{T}, κ) where {T<:LatticeMatrix}
         @assert length(U) == 4 "U must be a vector of length 4."
-        return new{T}(U, κ)
+        return new{T}(U, Ref(Float64(κ)))
     end
+end
+
+@inline function Base.getproperty(operator::WilsonDiracOperator4D, name::Symbol)
+    name === :κ && return getfield(operator, :κ)[]
+    return getfield(operator, name)
+end
+
+"""
+    WilsonDiracOperator4D(U1, U2, U3, U4, κ)
+
+Construct a Wilson operator from four explicit links.  This form is also the
+AD-safe constructor for callbacks whose link arguments are differentiated:
+it preserves the concrete link type while assembling the internal collection.
+"""
+function WilsonDiracOperator4D(
+    U1::T, U2::T, U3::T, U4::T, κ,
+) where {T<:LatticeMatrix}
+    links = Vector{T}(undef, 4)
+    links[1] = U1
+    links[2] = U2
+    links[3] = U3
+    links[4] = U4
+    return WilsonDiracOperator4D(links, κ)
 end
 
 export WilsonDiracOperator4D

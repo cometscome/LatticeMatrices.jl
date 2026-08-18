@@ -34,9 +34,19 @@ end
 DirectShiftHostBuffers(::Type{T}) where {T} =
     DirectShiftHostBuffers{T}(Vector{T}(), Vector{T}())
 
-function _ensure_direct_shift_host_buffers!(buffers::DirectShiftHostBuffers, count::Int)
-    length(buffers.send) < count && resize!(buffers.send, count)
-    length(buffers.recv) < count && resize!(buffers.recv, count)
+@inline _prepare_mpi_host_buffer(::Any, buffer::Array) = buffer
+
+function _ensure_direct_shift_host_buffers!(
+    buffers::DirectShiftHostBuffers{T}, count::Int, device_array,
+) where {T}
+    if length(buffers.send) < count
+        buffers.send = _prepare_mpi_host_buffer(
+            device_array, Vector{T}(undef, count))
+    end
+    if length(buffers.recv) < count
+        buffers.recv = _prepare_mpi_host_buffer(
+            device_array, Vector{T}(undef, count))
+    end
     return buffers
 end
 
@@ -55,7 +65,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
 
     A::AT                           # main array (NC first)
     buf::Vector{AT}                   # 2D work buffers (minus/plus)
-    buf_host::Vector{Array{T}}      # Host array on CPUs to send and to receive 
+    buf_host::Vector{Array{T}}      # host send/receive arrays (backend may pin)
     shift_buf_host::DirectShiftHostBuffers{T}
 
     myrank::Int
@@ -113,7 +123,10 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
     buf_host = similar(ls.buf_host)
     for i in eachindex(ls.buf)
         buf[i] = zero(ls.buf[i])
-        buf_host[i] = similar(ls.buf_host[i])
+        host_buffer = Array{T}(undef, size(ls.buf_host[i]))
+        direction = cld(i, 4)
+        buf_host[i] = ls.dims[direction] == 1 ? host_buffer :
+            _prepare_mpi_host_buffer(tA, host_buffer)
     end
 
     return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
@@ -254,10 +267,11 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
             buf[4d-1] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
             buf[4d] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
 
-            buf_host[4d-3] = Array(buf[4d-3])
-            buf_host[4d-2] = Array(buf[4d-2])
-            buf_host[4d-1] = Array(buf[4d-1])
-            buf_host[4d] = Array(buf[4d])
+            for buffer_index in (4d-3):(4d)
+                host_buffer = Array{T}(undef, size(buf[buffer_index]))
+                buf_host[buffer_index] = dims[d] == 1 ? host_buffer :
+                    _prepare_mpi_host_buffer(A, host_buffer)
+            end
         end
     end
 
@@ -511,11 +525,45 @@ function _ghostMatrix(A::AbstractArray{T,6}, nw, d, side::Symbol) where T
     end
 end
 
+# A sequential halo exchange does not need the full padded cross-section in
+# every direction. At step d, halos in dimensions 1:d-1 are already valid and
+# must be propagated to form corners; dimensions d+1:D still need only their
+# core ranges. The final padded lattice is identical to a full-slab exchange,
+# while early-direction messages and pack kernels are substantially smaller.
+function _exchange_slab_matrix(ls::LatticeMatrix{D}, d::Int, side::Symbol,
+    ghost::Bool) where {D}
+    slab_range = if ghost
+        side === :minus ? (1:ls.nw) :
+            ((size(ls.A, d + 2)-ls.nw+1):size(ls.A, d + 2))
+    else
+        side === :minus ? ((ls.nw+1):(2 * ls.nw)) :
+            ((size(ls.A, d + 2)-2 * ls.nw+1):(size(ls.A, d + 2)-ls.nw))
+    end
+    indices = ntuple(D + 2) do array_dimension
+        array_dimension <= 2 && return Colon()
+        lattice_dimension = array_dimension - 2
+        lattice_dimension == d && return slab_range
+        lattice_dimension < d && return Colon()
+        return (ls.nw + 1):(ls.nw + ls.PN[lattice_dimension])
+    end
+    @views return ls.A[indices...]
+end
+
+@inline _exchange_face_matrix(ls, d, side) =
+    _exchange_slab_matrix(ls, d, side, false)
+@inline _exchange_ghost_matrix(ls, d, side) =
+    _exchange_slab_matrix(ls, d, side, true)
+
+@inline function _active_face_buffer(buffer, slab)
+    count = length(slab)
+    return @view(vec(buffer)[1:count])
+end
+
 function exchange_dim_local!(ls::LatticeMatrix{D}, d::Int) where D
-    gminus = _ghostMatrix(ls.A, ls.nw, d, :minus)
-    gplus = _ghostMatrix(ls.A, ls.nw, d, :plus)
-    fminus = _faceMatrix(ls.A, ls.nw, d, :minus)
-    fplus = _faceMatrix(ls.A, ls.nw, d, :plus)
+    gminus = _exchange_ghost_matrix(ls, d, :minus)
+    gplus = _exchange_ghost_matrix(ls, d, :plus)
+    fminus = _exchange_face_matrix(ls, d, :minus)
+    fplus = _exchange_face_matrix(ls, d, :plus)
 
     # minus ghost <= plus face
     copy!(gminus, fplus)
@@ -541,6 +589,15 @@ end
 #    then passed to MPI.Isend
 #  * recv-buffers are passed to MPI.Irecv!  and finally copied into `_ghostMatrix`
 ##############################################################################
+
+# Ordinary Arrays are always valid MPI buffers. Accelerator backends stage
+# through host memory by default: whether a device-aware MPI path is faster is
+# transport- and topology-dependent, and on common intra-node paths pinned
+# staging can be substantially faster. Backend extensions can opt a concrete
+# array type into direct MPI when that is known to be beneficial.
+@inline _mpi_direct_buffer_supported(::Array) = true
+@inline _mpi_direct_buffer_supported(::Any) = false
+
 function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     # buffer indices
     iSM, iRM = 4d - 3, 4d - 2
@@ -560,77 +617,98 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
         return
     end
 
-    reqs = MPI.Request[]
+    gminus = _exchange_ghost_matrix(ls, d, :minus)
+    gplus = _exchange_ghost_matrix(ls, d, :plus)
+    fminus = _exchange_face_matrix(ls, d, :minus)
+    fplus = _exchange_face_matrix(ls, d, :plus)
+    activeSM = _active_face_buffer(bufSM, fminus)
+    activeRM = _active_face_buffer(bufRM, gminus)
+    activeSP = _active_face_buffer(bufSP, fplus)
+    activeRP = _active_face_buffer(bufRP, gplus)
+    activeSM_host = _active_face_buffer(bufSM_host, fminus)
+    activeRM_host = _active_face_buffer(bufRM_host, gminus)
+    activeSP_host = _active_face_buffer(bufSP_host, fplus)
+    activeRP_host = _active_face_buffer(bufRP_host, gplus)
+    packedSM = reshape(activeSM, size(fminus))
+    packedRM = reshape(activeRM, size(gminus))
+    packedSP = reshape(activeSP, size(fplus))
+    packedRP = reshape(activeRP, size(gplus))
 
-    baseT = MPI.Datatype(eltype(ls.A))           # elementary datatype
-    #println("M ", rankM, "\t $me")
-    MPI.Barrier(ls.cart)
-    #println("P ", rankP, "\t $me")
-    gminus = _ghostMatrix(ls.A, ls.nw, d, :minus)
-    gplus = _ghostMatrix(ls.A, ls.nw, d, :plus)
-    fminus = _faceMatrix(ls.A, ls.nw, d, :minus)
-    fplus = _faceMatrix(ls.A, ls.nw, d, :plus)
-
-    # ---------------- minus direction -------------------
+    # Pack both outgoing faces before posting communication. One backend-
+    # neutral synchronization makes the packed buffers visible to device-aware
+    # MPI without introducing CUDA/Threads branches.
     if rankM == me
         copy!(gminus, fminus)
         if ls.coords[d] == 0                     # wrap ⇒ phase
             _mul_phase!(gminus, ls.phases[d])
         end
     else
-        copy!(bufSM, fminus)
+        copy!(packedSM, fminus)
         if ls.coords[d] == 0
-            _mul_phase!(bufSM, ls.phases[d])
+            _mul_phase!(activeSM, ls.phases[d])
         end
-
-        cnt = length(bufSM)
-
-        #push!(reqs, MPI.Isend(bufSM, rankM, d, ls.cart))#;
-        copyto!(bufSM_host, bufSM)
-        push!(reqs, MPI.Isend(bufSM_host, rankM, d, ls.cart))#;
-        #count=cnt, datatype=baseT))
-
-        #push!(reqs, MPI.Irecv!(bufRM, rankM, d + D, ls.cart))#;
-        push!(reqs, MPI.Irecv!(bufRM_host, rankM, d + D, ls.cart))#;
-        #count=cnt, datatype=baseT))
     end
 
-    # ---------------- plus direction --------------------
     if rankP == me
         copy!(gplus, fplus)
         if ls.coords[d] == ls.dims[d] - 1
             _mul_phase!(gplus, ls.phases[d])
         end
     else
-        copy!(bufSP, fplus)
+        copy!(packedSP, fplus)
         if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(bufSP, inv(ls.phases[d]))
+            _mul_phase!(activeSP, inv(ls.phases[d]))
         end
-
-        cnt = length(bufSP)
-
-        #push!(reqs, MPI.Isend(bufSP, rankP, d + D, ls.cart))#;
-        copyto!(bufSP_host, bufSP)
-        push!(reqs, MPI.Isend(bufSP_host, rankP, d + D, ls.cart))#;
-
-        #count=cnt, datatype=baseT))
-        #push!(reqs, MPI.Irecv!(bufRP, rankP, d, ls.cart))
-        push!(reqs, MPI.Irecv!(bufRP_host, rankP, d, ls.cart))
-        #count=cnt, datatype=baseT))
     end
 
-    # -------- overlap bulk computation -----------------
+    JACC.synchronize()
+    direct_mpi = _mpi_direct_buffer_supported(bufSM)
+    reqs = MPI.Request[]
+
+    # Post receives before sends. The direct path works for CPU Arrays and
+    # device buffers supported by MPI.jl plus the selected MPI library.
+    if direct_mpi
+        rankM != me && push!(
+            reqs, MPI.Irecv!(activeRM, rankM, d + D, ls.cart))
+        rankP != me && push!(
+            reqs, MPI.Irecv!(activeRP, rankP, d, ls.cart))
+        rankM != me && push!(
+            reqs, MPI.Isend(activeSM, rankM, d, ls.cart))
+        rankP != me && push!(
+            reqs, MPI.Isend(activeSP, rankP, d + D, ls.cart))
+    else
+        rankM != me && push!(reqs, MPI.Irecv!(
+            activeRM_host, rankM, d + D, ls.cart))
+        rankP != me && push!(
+            reqs, MPI.Irecv!(activeRP_host, rankP, d, ls.cart))
+        rankM != me && copyto!(
+            bufSM_host, 1, bufSM, 1, length(activeSM))
+        rankP != me && copyto!(
+            bufSP_host, 1, bufSP, 1, length(activeSP))
+        rankM != me && push!(
+            reqs, MPI.Isend(activeSM_host, rankM, d, ls.cart))
+        rankP != me && push!(
+            reqs, MPI.Isend(activeSP_host, rankP, d + D, ls.cart))
+    end
+
     compute_interior!(ls)
     isempty(reqs) || MPI.Waitall!(reqs)
 
-    # -------- copy received data into ghosts -----------
-    if rankM != me
-        #copy!(gminus, bufRM)
-        copy!(gminus, bufRM_host)
-    end
-    if rankP != me
-        #copy!(gplus, bufRP)
-        copy!(gplus, bufRP_host)
+    # Copy received faces into the padded lattice. Subsequent JACC work uses
+    # the same backend ordering, so no backend-specific synchronization is
+    # needed here.
+    if direct_mpi
+        rankM != me && copy!(gminus, packedRM)
+        rankP != me && copy!(gplus, packedRP)
+    else
+        if rankM != me
+            copyto!(bufRM, 1, bufRM_host, 1, length(activeRM))
+            copy!(gminus, packedRM)
+        end
+        if rankP != me
+            copyto!(bufRP, 1, bufRP_host, 1, length(activeRP))
+            copy!(gplus, packedRP)
+        end
     end
 end
 

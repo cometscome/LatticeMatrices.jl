@@ -1,7 +1,10 @@
 import LatticeMatrices: hisq_fat7_level1!, hisq_fat7_level2!,
     mark_halo_dirty!,
     _hisq_link_element, _hisq_shift_site, _hisq_row_times_oriented_link,
-    _hisq_five_signs, _hisq_seven_signs, _hisq_parallel_for
+    _hisq_five_signs, _hisq_seven_signs, _hisq_parallel_for,
+    _hisq_flat_site_index3, _hisq_flat_link_element3,
+    _hisq_row_times_oriented3_flat,
+    _hisq_add_row3_flat!
 
 using StaticArrays: SVector
 
@@ -130,13 +133,15 @@ end
 @inline function _hisq_pullback_element_indices(
     combined_index, volume, ::Val{NC},
 ) where NC
+    # Generic owner kernels write one matrix element, so follow Julia's
+    # column-major row -> column -> site ordering.
     zero_based = combined_index - 1
-    site_index = mod(zero_based, volume) + 1
-    matrix_element_and_axis = div(zero_based, volume)
-    row = mod(matrix_element_and_axis, NC) + 1
-    column_and_axis = div(matrix_element_and_axis, NC)
-    column = mod(column_and_axis, NC) + 1
-    axis = div(column_and_axis, NC) + 1
+    row = mod(zero_based, NC) + 1
+    column_site_and_axis = div(zero_based, NC)
+    column = mod(column_site_and_axis, NC) + 1
+    site_and_axis = div(column_site_and_axis, NC)
+    site_index = mod(site_and_axis, volume) + 1
+    axis = div(site_and_axis, volume) + 1
     return site_index, row, column, axis
 end
 
@@ -290,6 +295,463 @@ end
     return nothing
 end
 
+# The generic pullback above assigns one JACC work item to one matrix element.
+# That avoids atomics on every backend, but for the physical NC=3 case it also
+# repeats the same path geometry and one side of the path product for all three
+# columns of a row.  The flat helpers below retain the owner-thread property
+# while assigning one complete row to a thread.  For a forward-oriented target
+# link the left product and L' * dV are shared by all three columns; for a
+# backward-oriented target link the right product and dV * R' are shared.
+
+@inline function _hisq_basis_tuple3(index, ::Type{T}) where T
+    z = zero(T)
+    o = one(T)
+    return (
+        ifelse(index == 1, o, z),
+        ifelse(index == 2, o, z),
+        ifelse(index == 3, o, z),
+    )
+end
+
+@inline function _hisq_oriented_link_times_column3_flat(
+    U1, U2, U3, U4, site, direction, column_values, padded_size,
+)
+    matrix_site = ifelse(
+        direction > 0, site, _hisq_shift_site(site, direction))
+    site_index = _hisq_flat_site_index3(matrix_site, padded_size)
+    axis = abs(direction)
+    c1, c2, c3 = column_values
+
+    if direction > 0
+        return (
+            muladd(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 1, 1, site_index), c1,
+                muladd(_hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 1, 2, site_index), c2,
+                    _hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 1, 3, site_index) * c3)),
+            muladd(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 1, site_index), c1,
+                muladd(_hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 2, 2, site_index), c2,
+                    _hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 2, 3, site_index) * c3)),
+            muladd(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 3, 1, site_index), c1,
+                muladd(_hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 3, 2, site_index), c2,
+                    _hisq_flat_link_element3(
+                        U1, U2, U3, U4, axis, 3, 3, site_index) * c3)),
+        )
+    end
+
+    return (
+        muladd(conj(_hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 1, site_index)), c1,
+            muladd(conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 1, site_index)), c2,
+                conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 3, 1, site_index)) * c3)),
+        muladd(conj(_hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 2, site_index)), c1,
+            muladd(conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 2, site_index)), c2,
+                conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 3, 2, site_index)) * c3)),
+        muladd(conj(_hisq_flat_link_element3(
+                U1, U2, U3, U4, axis, 1, 3, site_index)), c1,
+            muladd(conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 2, 3, site_index)), c2,
+                conj(_hisq_flat_link_element3(
+                    U1, U2, U3, U4, axis, 3, 3, site_index)) * c3)),
+    )
+end
+
+@inline function _hisq_path_left_column3_flat(
+    U1, U2, U3, U4, origin, path::NTuple{L,Int}, occurrence, column,
+    padded_size,
+) where L
+    values = _hisq_basis_tuple3(column, eltype(U1))
+    @inbounds for path_index in (occurrence - 1):-1:1
+        site = _hisq_path_site_before(origin, path, path_index)
+        values = _hisq_oriented_link_times_column3_flat(
+            U1, U2, U3, U4, site, path[path_index], values, padded_size)
+    end
+    return values
+end
+
+@inline function _hisq_path_right_row3_flat(
+    U1, U2, U3, U4, origin, path::NTuple{L,Int}, occurrence, row,
+    padded_size,
+) where L
+    values = _hisq_basis_tuple3(row, eltype(U1))
+    site = _hisq_path_site_before(origin, path, occurrence + 1)
+    @inbounds for path_index in (occurrence + 1):L
+        values, site = _hisq_row_times_oriented3_flat(
+            values, U1, U2, U3, U4, site,
+            path[path_index], padded_size)
+    end
+    return values
+end
+
+@inline function _hisq_left_adjoint_times_dv3_flat(
+    dV1, dV2, dV3, dV4, output_direction, origin, left, padded_size,
+)
+    site_index = _hisq_flat_site_index3(origin, padded_size)
+    l1, l2, l3 = left
+    return (
+        muladd(conj(l1), _hisq_flat_link_element3(
+                dV1, dV2, dV3, dV4, output_direction, 1, 1, site_index),
+            muladd(conj(l2), _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4, output_direction, 2, 1, site_index),
+                conj(l3) * _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4,
+                    output_direction, 3, 1, site_index))),
+        muladd(conj(l1), _hisq_flat_link_element3(
+                dV1, dV2, dV3, dV4, output_direction, 1, 2, site_index),
+            muladd(conj(l2), _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4, output_direction, 2, 2, site_index),
+                conj(l3) * _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4,
+                    output_direction, 3, 2, site_index))),
+        muladd(conj(l1), _hisq_flat_link_element3(
+                dV1, dV2, dV3, dV4, output_direction, 1, 3, site_index),
+            muladd(conj(l2), _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4, output_direction, 2, 3, site_index),
+                conj(l3) * _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4,
+                    output_direction, 3, 3, site_index))),
+    )
+end
+
+@inline function _hisq_dv_times_right_adjoint3_flat(
+    dV1, dV2, dV3, dV4, output_direction, origin, right, padded_size,
+)
+    site_index = _hisq_flat_site_index3(origin, padded_size)
+    r1, r2, r3 = right
+    return (
+        muladd(_hisq_flat_link_element3(
+                dV1, dV2, dV3, dV4, output_direction, 1, 1, site_index),
+                conj(r1),
+            muladd(_hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4, output_direction, 1, 2, site_index),
+                    conj(r2),
+                _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4,
+                    output_direction, 1, 3, site_index) * conj(r3))),
+        muladd(_hisq_flat_link_element3(
+                dV1, dV2, dV3, dV4, output_direction, 2, 1, site_index),
+                conj(r1),
+            muladd(_hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4, output_direction, 2, 2, site_index),
+                    conj(r2),
+                _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4,
+                    output_direction, 2, 3, site_index) * conj(r3))),
+        muladd(_hisq_flat_link_element3(
+                dV1, dV2, dV3, dV4, output_direction, 3, 1, site_index),
+                conj(r1),
+            muladd(_hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4, output_direction, 3, 2, site_index),
+                    conj(r2),
+                _hisq_flat_link_element3(
+                    dV1, dV2, dV3, dV4,
+                    output_direction, 3, 3, site_index) * conj(r3))),
+    )
+end
+
+@inline function _hisq_dot_right_adjoint3(left_times_output, right)
+    v1, v2, v3 = left_times_output
+    r1, r2, r3 = right
+    return muladd(v1, conj(r1), muladd(v2, conj(r2), v3 * conj(r3)))
+end
+
+@inline function _hisq_left_adjoint_dot3(left, output_times_right)
+    l1, l2, l3 = left
+    v1, v2, v3 = output_times_right
+    return muladd(conj(l1), v1, muladd(conj(l2), v2, conj(l3) * v3))
+end
+
+@inline function _hisq_fat7_path_pullback_row3_occurrence_flat(
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    target, path::NTuple{L,Int}, output_direction, axis, row, padded_size,
+    occurrence,
+) where L
+    z = zero(eltype(U1))
+    direction = path[occurrence]
+    abs(direction) == axis || return (z, z, z)
+
+    link_offset = _hisq_fat7_path_link_offset(path, occurrence)
+    origin = ntuple(d -> target[d] - link_offset[d], 4)
+    if direction > 0
+        left = _hisq_path_left_column3_flat(
+            U1, U2, U3, U4, origin, path, occurrence, row, padded_size)
+        left_times_output = _hisq_left_adjoint_times_dv3_flat(
+            dV1, dV2, dV3, dV4,
+            output_direction, origin, left, padded_size)
+        right1 = _hisq_path_right_row3_flat(
+            U1, U2, U3, U4, origin, path, occurrence, 1, padded_size)
+        right2 = _hisq_path_right_row3_flat(
+            U1, U2, U3, U4, origin, path, occurrence, 2, padded_size)
+        right3 = _hisq_path_right_row3_flat(
+            U1, U2, U3, U4, origin, path, occurrence, 3, padded_size)
+        return (
+            _hisq_dot_right_adjoint3(left_times_output, right1),
+            _hisq_dot_right_adjoint3(left_times_output, right2),
+            _hisq_dot_right_adjoint3(left_times_output, right3),
+        )
+    end
+
+    right = _hisq_path_right_row3_flat(
+        U1, U2, U3, U4, origin, path, occurrence, row, padded_size)
+    output_times_right = _hisq_dv_times_right_adjoint3_flat(
+        dV1, dV2, dV3, dV4,
+        output_direction, origin, right, padded_size)
+    left1 = _hisq_path_left_column3_flat(
+        U1, U2, U3, U4, origin, path, occurrence, 1, padded_size)
+    left2 = _hisq_path_left_column3_flat(
+        U1, U2, U3, U4, origin, path, occurrence, 2, padded_size)
+    left3 = _hisq_path_left_column3_flat(
+        U1, U2, U3, U4, origin, path, occurrence, 3, padded_size)
+    return (
+        conj(_hisq_left_adjoint_dot3(left1, output_times_right)),
+        conj(_hisq_left_adjoint_dot3(left2, output_times_right)),
+        conj(_hisq_left_adjoint_dot3(left3, output_times_right)),
+    )
+end
+
+@inline function _hisq_fat7_path_pullback_row3_flat(
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    target, path::NTuple{L,Int}, output_direction, axis, row, padded_size,
+) where L
+    z = zero(eltype(U1))
+    gradient = (z, z, z)
+    @inbounds for occurrence in 1:L
+        value = _hisq_fat7_path_pullback_row3_occurrence_flat(
+            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+            target, path, output_direction, axis, row, padded_size,
+            occurrence)
+        gradient = (
+            gradient[1] + value[1],
+            gradient[2] + value[2],
+            gradient[3] + value[3],
+        )
+    end
+    return gradient
+end
+
+@inline function _hisq_add_pullback_row3(accumulator, value)
+    return (
+        accumulator[1] + value[1],
+        accumulator[2] + value[2],
+        accumulator[3] + value[3],
+    )
+end
+
+# The NC=3 pullback performs substantially more work per site than the forward
+# row kernels.  Keeping adjacent threads on adjacent sites gives its link reads
+# better locality; the forward path deliberately uses the opposite, row-fast
+# ordering so its stores follow the column-major matrix layout.
+@inline function _hisq_pullback_combined_row3(combined_index, volume)
+    zero_based = combined_index - 1
+    site_index = mod(zero_based, volume) + 1
+    row_and_axis = div(zero_based, volume)
+    row = mod(row_and_axis, 3) + 1
+    axis = div(row_and_axis, 3) + 1
+    return site_index, row, axis
+end
+
+@inline function _kernel_hisq_fat7_pullback_one_link_nc3_jacc!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, padded_size, ::Val{nw}, indexer,
+) where nw
+    site_index, row, axis = _hisq_pullback_combined_row3(
+        combined_index, volume)
+    target = delinearize(indexer, site_index, nw)
+    gradient = _hisq_fat7_path_pullback_row3_flat(
+        dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+        target, (axis,), axis, axis, row, padded_size)
+    _hisq_add_row3_flat!(
+        dU1, dU2, dU3, dU4, axis, target, row,
+        gradient, coefficient, padded_size)
+    return nothing
+end
+
+@inline function _kernel_hisq_fat7_pullback_staple3_nc3_jacc!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, padded_size, ::Val{nw}, indexer,
+) where nw
+    site_index, row, axis = _hisq_pullback_combined_row3(
+        combined_index, volume)
+    target = delinearize(indexer, site_index, nw)
+    z = zero(eltype(U1))
+    gradient = (z, z, z)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        if nu != output_direction
+            gradient = _hisq_add_pullback_row3(gradient,
+                _hisq_fat7_path_pullback_row3_flat(
+                    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                    target, (nu, output_direction, -nu),
+                    output_direction, axis, row, padded_size))
+            gradient = _hisq_add_pullback_row3(gradient,
+                _hisq_fat7_path_pullback_row3_flat(
+                    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                    target, (-nu, output_direction, nu),
+                    output_direction, axis, row, padded_size))
+        end
+    end
+    _hisq_add_row3_flat!(
+        dU1, dU2, dU3, dU4, axis, target, row,
+        gradient, coefficient, padded_size)
+    return nothing
+end
+
+@inline function _kernel_hisq_fat7_pullback_staple5_nc3_jacc!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, padded_size, ::Val{nw}, indexer,
+) where {P,nw}
+    site_index, row, axis = _hisq_pullback_combined_row3(
+        combined_index, volume)
+    target = delinearize(indexer, site_index, nw)
+    z = zero(eltype(U1))
+    gradient = (z, z, z)
+    sign_nu, sign_rho = _hisq_five_signs(part)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        if nu != output_direction
+            for rho in 1:4
+                if rho != output_direction && rho != nu
+                    signed_nu = sign_nu * nu
+                    signed_rho = sign_rho * rho
+                    path = (signed_nu, signed_rho, output_direction,
+                            -signed_rho, -signed_nu)
+                    gradient = _hisq_add_pullback_row3(gradient,
+                        _hisq_fat7_path_pullback_row3_flat(
+                            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                            target, path, output_direction,
+                            axis, row, padded_size))
+                end
+            end
+        end
+    end
+    _hisq_add_row3_flat!(
+        dU1, dU2, dU3, dU4, axis, target, row,
+        gradient, coefficient, padded_size)
+    return nothing
+end
+
+@inline function _kernel_hisq_fat7_pullback_staple7_nc3_jacc!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, part::Val{P}, padded_size, ::Val{nw}, indexer,
+) where {P,nw}
+    site_index, row, axis = _hisq_pullback_combined_row3(
+        combined_index, volume)
+    target = delinearize(indexer, site_index, nw)
+    z = zero(eltype(U1))
+    gradient = (z, z, z)
+    sign_nu, sign_rho, sign_sigma = _hisq_seven_signs(part)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        if nu != output_direction
+            for rho in 1:4
+                if rho != output_direction && rho != nu
+                    sigma = 10 - output_direction - nu - rho
+                    signed_nu = sign_nu * nu
+                    signed_rho = sign_rho * rho
+                    signed_sigma = sign_sigma * sigma
+                    path = (signed_nu, signed_rho, signed_sigma,
+                            output_direction, -signed_sigma,
+                            -signed_rho, -signed_nu)
+                    gradient = _hisq_add_pullback_row3(gradient,
+                        _hisq_fat7_path_pullback_row3_flat(
+                            dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                            target, path, output_direction,
+                            axis, row, padded_size))
+                end
+            end
+        end
+    end
+    _hisq_add_row3_flat!(
+        dU1, dU2, dU3, dU4, axis, target, row,
+        gradient, coefficient, padded_size)
+    return nothing
+end
+
+@inline function _kernel_hisq_fat7_pullback_lepage_nc3_jacc!(
+    combined_index, dU1, dU2, dU3, dU4,
+    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+    coefficient, volume, padded_size, ::Val{nw}, indexer,
+) where nw
+    site_index, row, axis = _hisq_pullback_combined_row3(
+        combined_index, volume)
+    target = delinearize(indexer, site_index, nw)
+    z = zero(eltype(U1))
+    gradient = (z, z, z)
+    @inbounds for output_direction in 1:4, nu in 1:4
+        if nu != output_direction
+            gradient = _hisq_add_pullback_row3(gradient,
+                _hisq_fat7_path_pullback_row3_flat(
+                    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                    target, (nu, nu, output_direction, -nu, -nu),
+                    output_direction, axis, row, padded_size))
+            gradient = _hisq_add_pullback_row3(gradient,
+                _hisq_fat7_path_pullback_row3_flat(
+                    dV1, dV2, dV3, dV4, U1, U2, U3, U4,
+                    target, (-nu, -nu, output_direction, nu, nu),
+                    output_direction, axis, row, padded_size))
+        end
+    end
+    _hisq_add_row3_flat!(
+        dU1, dU2, dU3, dU4, axis, target, row,
+        gradient, coefficient, padded_size)
+    return nothing
+end
+
+function _hisq_fat7_pullback_nc3_jacc!(dU, dV, U, coefficients)
+    coefficient_1, coefficient_3, coefficient_5, coefficient_7,
+        coefficient_lepage = coefficients
+    volume = prod(U[1].PN)
+    combined_volume = 12 * volume
+    padded_size = ntuple(d -> size(U[1].A, d + 2), 4)
+    common_arguments = (
+        reshape(dU[1].A, :), reshape(dU[2].A, :),
+        reshape(dU[3].A, :), reshape(dU[4].A, :),
+        reshape(dV[1].A, :), reshape(dV[2].A, :),
+        reshape(dV[3].A, :), reshape(dV[4].A, :),
+        reshape(U[1].A, :), reshape(U[2].A, :),
+        reshape(U[3].A, :), reshape(U[4].A, :),
+    )
+    geometry_arguments = (
+        volume, padded_size, Val(U[1].nw), U[1].indexer)
+    _hisq_parallel_for(
+        combined_volume, _kernel_hisq_fat7_pullback_one_link_nc3_jacc!,
+        common_arguments..., coefficient_1, geometry_arguments...)
+    _hisq_parallel_for(
+        combined_volume, _kernel_hisq_fat7_pullback_staple3_nc3_jacc!,
+        common_arguments..., coefficient_3, geometry_arguments...)
+    for part in 1:4
+        _hisq_parallel_for(
+            combined_volume, _kernel_hisq_fat7_pullback_staple5_nc3_jacc!,
+            common_arguments..., coefficient_5, volume, Val(part),
+            padded_size, Val(U[1].nw), U[1].indexer)
+    end
+    for part in 1:8
+        _hisq_parallel_for(
+            combined_volume, _kernel_hisq_fat7_pullback_staple7_nc3_jacc!,
+            common_arguments..., coefficient_7, volume, Val(part),
+            padded_size, Val(U[1].nw), U[1].indexer)
+    end
+    if !iszero(coefficient_lepage)
+        _hisq_parallel_for(
+            combined_volume, _kernel_hisq_fat7_pullback_lepage_nc3_jacc!,
+            common_arguments..., coefficient_lepage, geometry_arguments...)
+    end
+    mark_halo_dirty!.(dU)
+    return nothing
+end
+
 function ER.augmented_primal(
     cfg::ER.RevConfig,
     ::ER.Const{typeof(hisq_fat7_level1!)},
@@ -361,6 +823,14 @@ function _hisq_fat7_pullback!(
             coefficient_lepage = coefficients
         volume = prod(U[1].PN)
         NC = U[1].NC1
+        if NC == 3
+            _hisq_fat7_pullback_nc3_jacc!(dU, dV, U, coefficients)
+            for link in dV
+                _zero_shadow!(link)
+                zero_halo_region!(link)
+            end
+            return nothing
+        end
         combined_volume = 4 * NC * NC * volume
         common_arguments = (
             dU[1].A, dU[2].A, dU[3].A, dU[4].A,

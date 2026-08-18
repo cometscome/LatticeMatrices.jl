@@ -180,6 +180,15 @@ function hisq_end_to_end_ad_tests()
             enzyme_duplicated(cached_result, cached_dresult),
         )
 
+        analytic_dthin = [similar(link) for link in thin]
+        clear_matrix!.(analytic_dthin)
+        hisq_link_pullback!(
+            analytic_dthin, cache, thin, left, psi)
+        for mu in 1:4
+            @test _hisq_end_to_end_core(analytic_dthin[mu]) ≈
+                _hisq_end_to_end_core(cached_dthin[mu]) atol=8e-11 rtol=8e-11
+        end
+
         expected_dpsi = similar(psi)
         mul!(expected_dpsi, cache.operator', left)
         @test _hisq_end_to_end_core(cached_dpsi) ≈

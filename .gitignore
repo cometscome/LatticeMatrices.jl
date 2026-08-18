@@ -3,3 +3,9 @@
 /LocalPreferences.toml~
 /.ci-ad-env/
 /test/extended-env/
+*.tex
+*.pdf
+*.aux
+*.out
+*.log
+*report*

@@ -38,6 +38,60 @@ function ci_hisq_smoke_tests()
             @test all(isfinite, gathered)
             @test !iszero(norm(gathered))
         end
+
+        left_values = complex.(
+            sin.(real.(site_values) ./ 13),
+            cos.(real.(site_values) ./ 17),
+        )
+        left = LatticeMatrix(left_values, 4, process_grid;
+            nw, phases=(1, 1, 1, -1))
+        direction_links = [
+            LatticeMatrix(
+                complex.(
+                    sin.((reshape(
+                        Float64.(1:(NC * NC * prod(lattice_size))),
+                        NC, NC, lattice_size...) .+ 7mu) ./ 19) ./ 20,
+                    cos.((reshape(
+                        Float64.(1:(NC * NC * prod(lattice_size))),
+                        NC, NC, lattice_size...) .+ 11mu) ./ 23) ./ 20,
+                ),
+                4, process_grid; nw,
+            ) for mu in 1:4
+        ]
+        force_links = deepcopy(thin_links)
+        for mu in 1:4
+            add_matrix!(force_links[mu], direction_links[mu], 0.1)
+        end
+        gradient = [similar(link) for link in force_links]
+        clear_matrix!.(gradient)
+        cache = HISQDiracCache4D(force_links, 0.13; naik_epsilon)
+
+        @test hisq_link_pullback!(
+            gradient, cache, force_links, left, psi) === gradient
+
+        step = 1e-6
+        plus_links = deepcopy(force_links)
+        minus_links = deepcopy(force_links)
+        for mu in 1:4
+            add_matrix!(plus_links[mu], direction_links[mu], step)
+            add_matrix!(minus_links[mu], direction_links[mu], -step)
+        end
+        function contraction(links)
+            local_cache = HISQDiracCache4D(
+                links, 0.13; naik_epsilon)
+            local_result = similar(psi)
+            mul_cached_hisq!(
+                local_result, local_cache,
+                links[1], links[2], links[3], links[4], psi)
+            return real(dot(left, local_result))
+        end
+        finite_difference =
+            (contraction(plus_links) - contraction(minus_links)) / (2step)
+        pullback_directional = real(sum(
+            dot(gradient[mu], direction_links[mu]) for mu in 1:4))
+        @test isapprox(
+            pullback_directional, finite_difference;
+            atol=2e-5, rtol=2e-6)
     end
 
     return nothing

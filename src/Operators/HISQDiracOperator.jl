@@ -122,6 +122,49 @@ const hisq_long_shifts_m = (
     (0, 0, 0, -3),
 )
 
+# Compute all three output colors together so that each neighboring staggered
+# vector is loaded only once.  Keeping the specialization on Val{3} preserves
+# the generic-color implementation and the LatticeMatrix memory layout.
+@inline function _hisq_direction_matvec3(U, psi, x, xplus, xminus)
+    @inbounds begin
+        psi_plus_1 = psi[1, 1, xplus...]
+        psi_plus_2 = psi[2, 1, xplus...]
+        psi_plus_3 = psi[3, 1, xplus...]
+        psi_minus_1 = psi[1, 1, xminus...]
+        psi_minus_2 = psi[2, 1, xminus...]
+        psi_minus_3 = psi[3, 1, xminus...]
+
+        forward_1 = muladdmulti(
+            U[1, 1, x...], psi_plus_1,
+            U[1, 2, x...], psi_plus_2,
+            U[1, 3, x...], psi_plus_3)
+        forward_2 = muladdmulti(
+            U[2, 1, x...], psi_plus_1,
+            U[2, 2, x...], psi_plus_2,
+            U[2, 3, x...], psi_plus_3)
+        forward_3 = muladdmulti(
+            U[3, 1, x...], psi_plus_1,
+            U[3, 2, x...], psi_plus_2,
+            U[3, 3, x...], psi_plus_3)
+
+        backward_1 = muladdmulti(
+            conj(U[1, 1, xminus...]), psi_minus_1,
+            conj(U[2, 1, xminus...]), psi_minus_2,
+            conj(U[3, 1, xminus...]), psi_minus_3)
+        backward_2 = muladdmulti(
+            conj(U[1, 2, xminus...]), psi_minus_1,
+            conj(U[2, 2, xminus...]), psi_minus_2,
+            conj(U[3, 2, xminus...]), psi_minus_3)
+        backward_3 = muladdmulti(
+            conj(U[1, 3, xminus...]), psi_minus_1,
+            conj(U[2, 3, xminus...]), psi_minus_2,
+            conj(U[3, 3, xminus...]), psi_minus_3)
+    end
+    return forward_1 - backward_1,
+        forward_2 - backward_2,
+        forward_3 - backward_3
+end
+
 function _validate_hisq_application(result, operator, psi)
     result === psi && throw(ArgumentError(
         "HISQ mul! requires distinct result and input fields"))
@@ -216,6 +259,90 @@ end
             mass * psi[output_color, 1, x...] +
             fat_coefficient * fat_hopping +
             long_coefficient * long_hopping
+    end
+    return nothing
+end
+
+# Production SU(3) path.  One work item still owns one lattice site, but it
+# now reuses each six-component (+/-) neighboring vector across all three
+# matrix rows instead of loading it once per output color.
+@inline function kernel_HISQDiracOperator4D!(
+    site, result,
+    X1, X2, X3, X4, L1, L2, L3, L4,
+    mass, fat_coefficient, long_coefficient, psi,
+    ::Val{3}, ::Val{nw}, indexer, mpi_coordinates, local_size,
+) where {nw}
+    x = delinearize(indexer, site, nw)
+
+    x1p = shiftindices(x, shift_1p)
+    x1m = shiftindices(x, shift_1m)
+    x2p = shiftindices(x, shift_2p)
+    x2m = shiftindices(x, shift_2m)
+    x3p = shiftindices(x, shift_3p)
+    x3m = shiftindices(x, shift_3m)
+    x4p = shiftindices(x, shift_4p)
+    x4m = shiftindices(x, shift_4m)
+    x1p3 = shiftindices(x, hisq_long_shifts_p[1])
+    x1m3 = shiftindices(x, hisq_long_shifts_m[1])
+    x2p3 = shiftindices(x, hisq_long_shifts_p[2])
+    x2m3 = shiftindices(x, hisq_long_shifts_m[2])
+    x3p3 = shiftindices(x, hisq_long_shifts_p[3])
+    x3m3 = shiftindices(x, hisq_long_shifts_m[3])
+    x4p3 = shiftindices(x, hisq_long_shifts_p[4])
+    x4m3 = shiftindices(x, hisq_long_shifts_m[4])
+
+    eta2 = staggered_eta_global_halo(
+        x, 2, nw, mpi_coordinates, local_size)
+    eta3 = staggered_eta_global_halo(
+        x, 3, nw, mpi_coordinates, local_size)
+    eta4 = staggered_eta_global_halo(
+        x, 4, nw, mpi_coordinates, local_size)
+
+    fat_1, fat_2, fat_3 =
+        _hisq_direction_matvec3(X1, psi, x, x1p, x1m)
+    long_1, long_2, long_3 =
+        _hisq_direction_matvec3(L1, psi, x, x1p3, x1m3)
+
+    direction_1, direction_2, direction_3 =
+        _hisq_direction_matvec3(X2, psi, x, x2p, x2m)
+    fat_1 += eta2 * direction_1
+    fat_2 += eta2 * direction_2
+    fat_3 += eta2 * direction_3
+    direction_1, direction_2, direction_3 =
+        _hisq_direction_matvec3(L2, psi, x, x2p3, x2m3)
+    long_1 += eta2 * direction_1
+    long_2 += eta2 * direction_2
+    long_3 += eta2 * direction_3
+
+    direction_1, direction_2, direction_3 =
+        _hisq_direction_matvec3(X3, psi, x, x3p, x3m)
+    fat_1 += eta3 * direction_1
+    fat_2 += eta3 * direction_2
+    fat_3 += eta3 * direction_3
+    direction_1, direction_2, direction_3 =
+        _hisq_direction_matvec3(L3, psi, x, x3p3, x3m3)
+    long_1 += eta3 * direction_1
+    long_2 += eta3 * direction_2
+    long_3 += eta3 * direction_3
+
+    direction_1, direction_2, direction_3 =
+        _hisq_direction_matvec3(X4, psi, x, x4p, x4m)
+    fat_1 += eta4 * direction_1
+    fat_2 += eta4 * direction_2
+    fat_3 += eta4 * direction_3
+    direction_1, direction_2, direction_3 =
+        _hisq_direction_matvec3(L4, psi, x, x4p3, x4m3)
+    long_1 += eta4 * direction_1
+    long_2 += eta4 * direction_2
+    long_3 += eta4 * direction_3
+
+    @inbounds begin
+        result[1, 1, x...] = mass * psi[1, 1, x...] +
+            fat_coefficient * fat_1 + long_coefficient * long_1
+        result[2, 1, x...] = mass * psi[2, 1, x...] +
+            fat_coefficient * fat_2 + long_coefficient * long_2
+        result[3, 1, x...] = mass * psi[3, 1, x...] +
+            fat_coefficient * fat_3 + long_coefficient * long_3
     end
     return nothing
 end

@@ -248,13 +248,15 @@ end
 """
     hisq_links_from_thin!(
         fat_links, long_links, level1_links, reunitarized_links,
-        thin_links, naik_epsilon=0)
+        thin_links, naik_epsilon=0; fat7_workspace=nothing)
 
 Build all links used by [`HISQDiracOperator4D`](@ref) from thin gauge links.
 The caller owns the two work vectors `level1_links` and
 `reunitarized_links`, making repeated construction allocation-free after
-setup.  The stages are level-1 Fat7, U(3) reunitarization, level-2
-Fat7/Lepage, and forward-anchored Naik construction.
+setup.  Passing a reusable [`HISQFat7Workspace`](@ref) selects the factorized
+three-color Fat7 path; [`HISQDiracCache4D`](@ref) supplies one automatically.
+The stages are level-1 Fat7, U(3) reunitarization, level-2 Fat7/Lepage, and
+forward-anchored Naik construction.
 """
 function hisq_links_from_thin!(
     fat_links::Union{Vector{T},NTuple{4,T}},
@@ -272,12 +274,37 @@ function hisq_links_from_thin!(
     return HISQLinks4D(fat_links, long_links)
 end
 
-hisq_links_from_thin!(
+function hisq_links_from_thin!(
+    fat_links::Union{Vector{T},NTuple{4,T}},
+    long_links::Union{Vector{T},NTuple{4,T}},
+    level1_links::Union{Vector{T},NTuple{4,T}},
+    reunitarized_links::Union{Vector{T},NTuple{4,T}},
+    thin_links::Union{Vector{T},NTuple{4,T}}, naik_epsilon,
+    fat7_workspace::HISQFat7Workspace,
+) where {T<:LatticeMatrix{4}}
+    _validate_hisq_full_workspace(
+        fat_links, long_links, level1_links, reunitarized_links, thin_links)
+    hisq_fat7_level1!(level1_links, thin_links, fat7_workspace)
+    hisq_project_u3!(reunitarized_links, level1_links)
+    hisq_fat7_level2!(
+        fat_links, reunitarized_links, naik_epsilon, fat7_workspace)
+    hisq_naik_links!(long_links, reunitarized_links)
+    return HISQLinks4D(fat_links, long_links)
+end
+
+function hisq_links_from_thin!(
     fat_links, long_links, level1_links, reunitarized_links, thin_links;
-    naik_epsilon=0,
-) = hisq_links_from_thin!(
-    fat_links, long_links, level1_links, reunitarized_links, thin_links,
-    naik_epsilon)
+    naik_epsilon=0, fat7_workspace=nothing,
+)
+    if fat7_workspace === nothing
+        return hisq_links_from_thin!(
+            fat_links, long_links, level1_links, reunitarized_links,
+            thin_links, naik_epsilon)
+    end
+    return hisq_links_from_thin!(
+        fat_links, long_links, level1_links, reunitarized_links,
+        thin_links, naik_epsilon, fat7_workspace)
+end
 
 """
     hisq_links_from_thin(thin_links, naik_epsilon=0)
@@ -292,9 +319,10 @@ function hisq_links_from_thin(
     reunitarized_links = [similar(link) for link in thin_links]
     fat_links = [similar(link) for link in thin_links]
     long_links = [similar(link) for link in thin_links]
+    fat7_workspace = HISQFat7Workspace(thin_links[1])
     return hisq_links_from_thin!(
         fat_links, long_links, level1_links, reunitarized_links,
-        thin_links, naik_epsilon)
+        thin_links, naik_epsilon, fat7_workspace)
 end
 
 hisq_links_from_thin(thin_links; naik_epsilon=0) =
@@ -329,14 +357,15 @@ end
     HISQDiracCache4D(thin_links, mass; naik_epsilon=0)
 
 Reusable storage for a HISQ operator built from thin links.  The level-1,
-reunitarized, corrected-fat, and Naik links are retained so that repeated
-Dirac applications do not repeat the smearing construction.
+reunitarized, corrected-fat, and Naik links, together with the factorized
+Fat7 workspace, are retained so that repeated Dirac applications do not
+repeat allocations or the smearing construction.
 
 Use [`mul_cached_hisq!`](@ref) and [`mul_cached_hisq_adjoint!`](@ref) to apply
 the operator.  Those entry points transparently rebuild the derived links on
 the first call after a thin link is replaced or its core-data epoch changes.
 """
-struct HISQDiracCache4D{T,L,O,S}
+struct HISQDiracCache4D{T,L,O,S,W}
     level1_links::Vector{T}
     reunitarized_links::Vector{T}
     fat_links::Vector{T}
@@ -344,6 +373,7 @@ struct HISQDiracCache4D{T,L,O,S}
     links::L
     operator::O
     cache_state::S
+    fat7_workspace::W
 end
 
 function HISQDiracCache4D(
@@ -353,17 +383,19 @@ function HISQDiracCache4D(
     reunitarized_links = [similar(link) for link in thin_links]
     fat_links = [similar(link) for link in thin_links]
     long_links = [similar(link) for link in thin_links]
+    fat7_workspace = HISQFat7Workspace(thin_links[1])
     links = hisq_links_from_thin!(
         fat_links, long_links, level1_links, reunitarized_links,
-        thin_links, naik_epsilon)
+        thin_links, naik_epsilon, fat7_workspace)
     operator = HISQDiracOperator4D(links, mass; naik_epsilon)
     cache_state = HISQCacheState(
         _hisq_source_links(thin_links), _hisq_core_epochs(thin_links))
     return HISQDiracCache4D{
-        T,typeof(links),typeof(operator),typeof(cache_state)
+        T,typeof(links),typeof(operator),typeof(cache_state),
+        typeof(fat7_workspace)
     }(
         level1_links, reunitarized_links, fat_links, long_links,
-        links, operator, cache_state)
+        links, operator, cache_state, fat7_workspace)
 end
 
 export HISQDiracCache4D
@@ -381,7 +413,7 @@ function update_hisq_cache!(
     hisq_links_from_thin!(
         cache.fat_links, cache.long_links,
         cache.level1_links, cache.reunitarized_links,
-        thin_links, cache.operator.naik_epsilon)
+        thin_links, cache.operator.naik_epsilon, cache.fat7_workspace)
     return _record_hisq_cache_state!(cache, thin_links)
 end
 
@@ -417,9 +449,10 @@ application, so all smearing stages are rebuilt only on the first application
 after the thin links change and are then reused throughout a Krylov solve.
 
 Mutations through `link.A` must be followed by `mark_halo_dirty!(link)` so
-that the change is observable.  The Enzyme reverse rule propagates the force
-through the cached Dirac, Naik, level-2, U(3), and level-1 stages without
-differentiating through cache maintenance.
+that the change is observable. [`hisq_link_pullback!`](@ref) propagates the
+force analytically through the cached Dirac, Naik, level-2, U(3), and level-1
+stages without Enzyme. A dedicated Enzyme reverse rule remains available for
+general differentiated programs.
 """
 function mul_cached_hisq!(
     result::T,

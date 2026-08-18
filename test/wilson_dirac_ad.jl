@@ -6,7 +6,7 @@ end
 function _wilson_dirac_ad_loss_from_links(
     U1, U2, U3, U4, kappa, psi, left, result,
 )
-    operator = WilsonDiracOperator4D([U1, U2, U3, U4], kappa)
+    operator = WilsonDiracOperator4D(U1, U2, U3, U4, kappa)
     return _wilson_dirac_ad_loss(operator, psi, left, result)
 end
 
@@ -103,6 +103,28 @@ function wilson_dirac_ad_tests()
         enzyme_directional = real(sum(dot(dlinks[mu], directions[mu]) for mu in 1:4))
 
         @test enzyme_directional ≈ finite_difference atol=2e-6 rtol=2e-7
+        @test all(iszero, dresult.A)
+
+        # Constructing the high-level operator inside a differentiated
+        # callback exercises Julia 1.12's rooted/non-rooted calling convention.
+        clear_matrix!.(dlinks)
+        clear_matrix!.((result, dresult))
+        Enzyme.autodiff(
+            Enzyme.Reverse,
+            Enzyme.Const(_wilson_dirac_ad_loss_from_links),
+            Enzyme.Active,
+            enzyme_duplicated(links[1], dlinks[1]),
+            enzyme_duplicated(links[2], dlinks[2]),
+            enzyme_duplicated(links[3], dlinks[3]),
+            enzyme_duplicated(links[4], dlinks[4]),
+            Enzyme.Const(kappa),
+            Enzyme.Const(psi),
+            Enzyme.Const(left),
+            enzyme_duplicated(result, dresult),
+        )
+        callback_directional = real(sum(
+            dot(dlinks[mu], directions[mu]) for mu in 1:4))
+        @test callback_directional ≈ finite_difference atol=2e-6 rtol=2e-7
         @test all(iszero, dresult.A)
     end
 end

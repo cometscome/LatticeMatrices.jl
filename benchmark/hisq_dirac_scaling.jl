@@ -50,18 +50,19 @@ end
 function _hisq_dirac_thin_links(global_size, process_grid, element_type)
     arrays = [zeros(element_type, 3, 3, global_size...) for _ in 1:4]
     real_type = typeof(real(zero(element_type)))
-    for mu in 1:4, site in CartesianIndices(global_size)
-        coordinates = Tuple(site)
+    sites = CartesianIndices(global_size)
+    Threads.@threads :static for linear_site in eachindex(sites)
+        coordinates = Tuple(@inbounds sites[linear_site])
         coordinate = coordinates[1] + 3coordinates[2] +
             5coordinates[3] + 7coordinates[4]
-        @inbounds for column in 1:3, row in 1:3
-            deterministic_re = real_type(0.013) * (
-                2row - column + coordinate + 3mu)
-            deterministic_im = real_type(0.017) * (
-                row + 2column - coordinate + mu)
-            arrays[mu][row, column, coordinates...] =
-                real_type(0.05) * deterministic_re + (row == column) +
-                real_type(0.05) * deterministic_im * im
+        @inbounds for mu in 1:4, column in 1:3, row in 1:3
+            deterministic_re = real_type(0.013) *
+                (2row - column + coordinate + 3mu)
+            deterministic_im = real_type(0.017) *
+                (row + 2column - coordinate + mu)
+            arrays[mu][row, column, coordinates...] = real_type(0.05) *
+                (deterministic_re + deterministic_im * im) +
+                (row == column)
         end
     end
     return [LatticeMatrix(array, 4, process_grid; nw=3) for array in arrays]

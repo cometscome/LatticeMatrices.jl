@@ -8,22 +8,22 @@ import Pkg
 
 using TOML
 
-const BENCHMARK_VERSION = "0.3.0"
+const BENCHMARK_VERSION = "0.4.0"
 const SUPPORTED_BACKENDS = ("threads", "cuda", "amdgpu", "oneapi", "metal")
 const BACKEND_PACKAGES = Dict(
-    "cuda" => (name="CUDA", version=v"6.2.1"),
-    "amdgpu" => (name="AMDGPU", version=v"2.7.2"),
-    "oneapi" => (name="oneAPI", version=v"2.8.1"),
-    "metal" => (name="Metal", version=v"1.10.2"),
+    "cuda" => "CUDA",
+    "amdgpu" => "AMDGPU",
+    "oneapi" => "oneAPI",
+    "metal" => "Metal",
 )
 const OFFICIAL_PACKAGES = (
-    (name="LatticeMatrices", version=v"1.1.2"),
-    (name="Gaugefields", version=v"1.0.1"),
-    (name="LatticeDiracOperators", version=v"1.0.0"),
-    (name="JACC", version=v"1.3.1"),
-    (name="MPI", version=v"0.20.26"),
+    "LatticeMatrices",
+    "Gaugefields",
+    "LatticeDiracOperators",
+    "JACC",
+    "MPI",
 )
-const OFFICIAL_STACK_ID = "registry-lm1.1.2-gf1.0.1-ldo1.0.0-jacc1.3.1-mpi0.20.26"
+const OFFICIAL_STACK_ID = "general-latest-compatible"
 const SUPPORTED_OPTIONS = Set([
     "help", "setup", "list-devices", "backend", "devices", "operator",
     "lattice", "grid", "ranks", "threads", "precision", "gauge", "seed", "halo",
@@ -146,17 +146,36 @@ function ensure_backend_preference!(backend, environment_directory)
     return nothing
 end
 
-function setup_environment!(backend)
-    package_specs = Pkg.PackageSpec[
-        Pkg.PackageSpec(name=package.name, version=package.version)
-        for package in OFFICIAL_PACKAGES
-    ]
-    if backend != "threads"
-        package = BACKEND_PACKAGES[backend]
-        push!(package_specs,
-            Pkg.PackageSpec(name=package.name, version=package.version))
+function installed_package_version(name)
+    for (_, package) in Pkg.dependencies()
+        package.name == name && return string(package.version)
     end
+    return "not-installed"
+end
+
+function environment_package_names(backend)
+    package_names = collect(OFFICIAL_PACKAGES)
+    if backend != "threads"
+        push!(package_names, BACKEND_PACKAGES[backend])
+    end
+    return package_names
+end
+
+function resolved_package_versions(backend)
+    return join((
+        "$name=$(installed_package_version(name))"
+        for name in environment_package_names(backend)
+    ), ", ")
+end
+
+function setup_environment!(backend)
+    # No PackageSpec contains a version: every setup resolves the newest set of
+    # mutually compatible General-registry releases supported by this Julia.
+    package_specs = Pkg.PackageSpec[
+        Pkg.PackageSpec(name=name) for name in environment_package_names(backend)
+    ]
     Pkg.add(package_specs)
+    Pkg.update()
     Pkg.instantiate()
     Pkg.precompile()
     return nothing
@@ -166,9 +185,10 @@ function print_help()
     println("""
     D†D CG benchmark (LatticeMatrices/LatticeDiracOperators v1)
 
-    All packages are pinned releases from the Julia General registry.
+    All packages are official Julia General-registry releases. Each --setup
+    resolves and updates to the latest mutually compatible versions available.
 
-    Initial setup (run once, without mpiexec):
+    Setup/update (run without mpiexec):
       julia ddagd_cg.jl --setup --backend=threads
       julia ddagd_cg.jl --setup --backend=cuda
       julia ddagd_cg.jl --setup --backend=amdgpu
@@ -260,10 +280,12 @@ REQUESTED_BACKEND == "threads" && lowercase(REQUESTED_DEVICES) != "auto" &&
     throw(ArgumentError("--devices is not meaningful with --backend=threads"))
 
 if SETUP_REQUESTED
-    launcher_rank() == 0 || error("run --setup once without mpiexec")
+    launcher_rank() == 0 || error("run --setup without mpiexec")
     setup_environment!(REQUESTED_BACKEND)
     println("Official benchmark environment is ready " *
-            "(stack=$OFFICIAL_STACK_ID, backend=$REQUESTED_BACKEND).")
+            "(policy=$OFFICIAL_STACK_ID, backend=$REQUESTED_BACKEND).")
+    println("Resolved packages: " *
+            resolved_package_versions(REQUESTED_BACKEND))
     exit()
 end
 
@@ -650,13 +672,6 @@ function append_csv(path, row)
     end
 end
 
-function installed_package_version(name)
-    for (_, package) in Pkg.dependencies()
-        package.name == name && return string(package.version)
-    end
-    return "not-installed"
-end
-
 function main(options)
     operator_name = lowercase(option(options, "operator", "wilson"))
     haskey(OPERATOR_ALIASES, operator_name) || throw(ArgumentError(
@@ -727,7 +742,8 @@ function main(options)
     if verbose >= 1 && RANK == 0
         println("D†D CG benchmark v$BENCHMARK_VERSION")
         println("  package source: General registry releases")
-        println("  official stack: $OFFICIAL_STACK_ID")
+        println("  version policy: $OFFICIAL_STACK_ID")
+        println("  packages:       $(resolved_package_versions(JACC.backend))")
         println("  operator:       $(operator.label)")
         println("  lattice:        $global_size")
         println("  MPI:            ranks=$NRANKS grid=$process_grid local=$local_size")
@@ -827,10 +843,9 @@ function main(options)
         official_stack=OFFICIAL_STACK_ID,
         jacc_version=installed_package_version("JACC"),
         mpi_version=installed_package_version("MPI"),
-        backend_package=get(BACKEND_PACKAGES, JACC.backend,
-            (name="threads", version=v"0.0.0")).name,
+        backend_package=get(BACKEND_PACKAGES, JACC.backend, "threads"),
         backend_package_version=JACC.backend == "threads" ? "stdlib" :
-            installed_package_version(BACKEND_PACKAGES[JACC.backend].name),
+            installed_package_version(BACKEND_PACKAGES[JACC.backend]),
         operator=operator.label,
         backend=JACC.backend,
         device=device_name,

@@ -17,28 +17,24 @@ domain wall、Möbius domain wall、generalized domain wall です。domain-wall
 ## バックエンドと初期セットアップ
 
 ベンチマークでローカル開発版が混入しないよう、すべてJulia General
-registryのリリース版を使用します。主要パッケージは次のバージョンに固定
-されています。
-
-| パッケージ | バージョン |
-|---|---:|
-| LatticeMatrices | 1.1.2 |
-| Gaugefields | 1.0.1 |
-| LatticeDiracOperators | 1.0.0 |
-| JACC | 1.3.1 |
-| MPI | 0.20.26 |
+registryの公式リリース版を使用します。パッケージのバージョン番号はコード
+内で固定しません。`--setup` の実行時点で、使用中のJuliaと相互に互換性が
+あるLatticeMatrices、Gaugefields、LatticeDiracOperators、JACC、MPIの最新版を
+解決します。同じバックエンドで `--setup` を再実行すると `Pkg.update()` も
+行い、その時点の最新互換版へ環境を更新します。
 
 次の5種類を同じスクリプトの `--backend` で選べます。
 
 | `--backend` | 対象 |
 |---|---|
 | `threads` | マルチスレッドCPU |
-| `cuda` | NVIDIA GPU / CUDA.jl 6.2.1 |
-| `amdgpu` | AMD GPU / AMDGPU.jl 2.7.2 (ROCm) |
-| `oneapi` | Intel GPU / oneAPI.jl 2.8.1 |
-| `metal` | Apple GPU / Metal.jl 1.10.2 |
+| `cuda` | NVIDIA GPU / CUDA.jl |
+| `amdgpu` | AMD GPU / AMDGPU.jl (ROCm) |
+| `oneapi` | Intel GPU / oneAPI.jl |
+| `metal` | Apple GPU / Metal.jl |
 
-使用するマシンで、必要なバックエンドだけを一度セットアップします。
+使用するマシンで、必要なバックエンドだけをまずセットアップします。同じ
+コマンドを後日再実行すると、その時点の最新版へ更新できます。
 
 ```bash
 julia ddagd_cg.jl --setup --backend=threads
@@ -48,15 +44,23 @@ julia ddagd_cg.jl --setup --backend=oneapi
 julia ddagd_cg.jl --setup --backend=metal
 ```
 
-バックエンドごとの環境は `.environments/<official-stack>/<backend>` に生成
-され、Gitには含まれません。ローカルの `LatticeMatrices-v1.1.0`、
+バックエンドごとの環境は
+`.environments/general-latest-compatible/<backend>` に生成され、Gitには
+含まれません。ローカルの `LatticeMatrices-v1.1.0`、
 `Gaugefields-v1`、`LatticeDiracOperators-v1` は参照しません。これにより、
 開発中のworking treeや未登録変更がベンチマークへ混入しません。
 
 別マシンへは `ddagd_cg.jl` だけをコピーしても実行できます。移動先で使う
-バックエンドについて `--setup` を実行すると、固定した公式版がregistryから
-導入されます。インターネットへ接続できない計算ノードでは、事前にlogin
-nodeでセットアップするか、Julia depot/artifact cacheも転送してください。
+バックエンドについて `--setup` を実行すると、その時点の最新互換版が
+registryから導入されます。インターネットへ接続できない計算ノードでは、
+事前にlogin nodeでセットアップするか、Julia depot/artifact cacheも転送
+してください。
+
+実際に解決された主要パッケージとGPUパッケージのバージョンは、セットアップ
+完了時とベンチマーク開始時に表示され、CSVにも保存されます。後から完全に同じ
+依存関係を再現する必要がある場合は、結果CSVと一緒に該当バックエンドの
+`Project.toml` と `Manifest.toml` を保存してください。保存済みManifestを再現に
+使う場合は `Pkg.instantiate()` のみを実行し、更新を行う `--setup` は実行しません。
 
 ## GPU選択
 

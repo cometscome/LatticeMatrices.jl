@@ -306,6 +306,28 @@ function hisq_dirac_tests()
             similar(bad_phase_psi), operator3, bad_phase_psi)
 
         small_size = (3 * nprocs, 3, 3, 3)
+        fat3f, long3f = _hisq_test_links(
+            small_size, 3; elementtype=ComplexF32)
+        psi3f_array = _staggered_test_fermion(
+            small_size, 3; elementtype=ComplexF32)
+        reference3f = _hisq_test_reference(
+            fat3f, long3f, psi3f_array, Float32(mass),
+            Float32(naik_epsilon), phases)
+        X3f = [LatticeMatrix(link, 4, process_grid; nw=3)
+               for link in fat3f]
+        L3f = [LatticeMatrix(link, 4, process_grid; nw=3)
+               for link in long3f]
+        psi3f = LatticeMatrix(
+            psi3f_array, 4, process_grid; nw=3, phases)
+        result3f = similar(psi3f)
+        operator3f = HISQDiracOperator4D(
+            X3f, L3f, mass; naik_epsilon)
+        mul!(result3f, operator3f, psi3f)
+        global3f = gather_matrix(result3f)
+        if rank == 0
+            @test global3f ≈ reference3f atol=5f-5 rtol=5f-5
+        end
+
         fat32, long32 = _hisq_test_links(
             small_size, 2; elementtype=ComplexF32)
         psi32_array = _staggered_test_fermion(

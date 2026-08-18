@@ -35,7 +35,14 @@ constexpr size_t halo_depth_gauge = 2;
 // Three is sufficient for the farthest (Naik) hop and matches nw=3 in
 // LatticeMatrices.  SIMULATeQCD requires a decomposed local extent > 2*halo.
 constexpr size_t halo_depth_spinor = 3;
-constexpr double naik_epsilon = -0.083;
+#ifdef HISQ_BENCH_SINGLE
+using BenchmarkReal = float;
+constexpr const char* benchmark_precision = "Float32";
+#else
+using BenchmarkReal = double;
+constexpr const char* benchmark_precision = "Float64";
+#endif
+constexpr BenchmarkReal naik_epsilon = static_cast<BenchmarkReal>(-0.083);
 using Dimensions = std::array<int, 4>;
 
 Dimensions parse_dimensions(const char* name, const Dimensions& fallback)
@@ -68,11 +75,11 @@ int environment_integer(const char* name, int fallback)
 }
 
 template <size_t HaloDepth>
-void fill_thin_links(Gaugefield<double, true, HaloDepth, R18>& gauge,
+void fill_thin_links(Gaugefield<BenchmarkReal, true, HaloDepth, R18>& gauge,
                      CommunicationBase& comm)
 {
     using GInd = GIndexer<All, HaloDepth>;
-    Gaugefield<double, false, HaloDepth, R18> host_gauge(comm);
+    Gaugefield<BenchmarkReal, false, HaloDepth, R18> host_gauge(comm);
     auto accessor = host_gauge.getAccessor();
     auto lattice = GInd::getLatData();
 
@@ -88,19 +95,25 @@ void fill_thin_links(Gaugefield<double, true, HaloDepth, R18>& gauge,
                         + 7 * (global[3] + 1);
                     const gSite site = GInd::getSite(x, y, z, t);
                     for (int mu = 0; mu < 4; ++mu) {
-                        SU3<double> link;
+                        SU3<BenchmarkReal> link;
                         for (int row = 0; row < 3; ++row) {
                             for (int column = 0; column < 3; ++column) {
-                                const double deterministic_re = 0.013 * (
+                                const BenchmarkReal deterministic_re =
+                                    static_cast<BenchmarkReal>(0.013) * (
                                     2 * (row + 1) - (column + 1)
                                     + coordinate + 3 * (mu + 1));
-                                const double deterministic_im = 0.017 * (
+                                const BenchmarkReal deterministic_im =
+                                    static_cast<BenchmarkReal>(0.017) * (
                                     (row + 1) + 2 * (column + 1)
                                     - coordinate + (mu + 1));
-                                link(row, column) = COMPLEX(double)(
-                                    0.05 * deterministic_re
-                                        + (row == column ? 1.0 : 0.0),
-                                    0.05 * deterministic_im);
+                                link(row, column) = COMPLEX(BenchmarkReal)(
+                                    static_cast<BenchmarkReal>(0.05)
+                                        * deterministic_re
+                                        + (row == column
+                                            ? static_cast<BenchmarkReal>(1)
+                                            : static_cast<BenchmarkReal>(0)),
+                                    static_cast<BenchmarkReal>(0.05)
+                                        * deterministic_im);
                             }
                         }
                         accessor.setLink(GInd::getSiteMu(site, mu), link);
@@ -160,20 +173,24 @@ int main(int argc, char** argv)
     initIndexer(halo_depth_gauge, parameters, comm);
     initIndexer(halo_depth_spinor, parameters, comm);
 
-    using ThinGauge = Gaugefield<double, true, halo_depth_gauge, R18>;
-    using FatGauge = Gaugefield<double, true, halo_depth_gauge, R18>;
-    using NaikGauge = Gaugefield<double, true, halo_depth_gauge, U3R14>;
+    using ThinGauge =
+        Gaugefield<BenchmarkReal, true, halo_depth_gauge, R18>;
+    using FatGauge =
+        Gaugefield<BenchmarkReal, true, halo_depth_gauge, R18>;
+    using NaikGauge =
+        Gaugefield<BenchmarkReal, true, halo_depth_gauge, U3R14>;
     ThinGauge thin(comm);
     FatGauge fat(comm);
     NaikGauge naik(comm);
     fill_thin_links(thin, comm);
-    HisqSmearing<double, true, halo_depth_gauge,
+    HisqSmearing<BenchmarkReal, true, halo_depth_gauge,
         R18, R18, R18, U3R14> smearing(
-            thin, fat, naik, naik_epsilon);
+            thin, fat, naik, static_cast<double>(naik_epsilon));
     // SIMULATeQCD stores staggered and antiperiodic boundary phases in links.
     smearing.SmearAll(0.0, true);
 
-    using Spinor = SpinorfieldAll<double, true, halo_depth_spinor, 1>;
+    using Spinor =
+        SpinorfieldAll<BenchmarkReal, true, halo_depth_spinor, 1>;
     Spinor first(comm, "hisq_dirac_benchmark_first");
     Spinor second(comm, "hisq_dirac_benchmark_second");
     first.one();
@@ -181,12 +198,12 @@ int main(int argc, char** argv)
     Spinor* input = &first;
     Spinor* output = &second;
 
-    HisqDSlash<double, true, Even,
+    HisqDSlash<BenchmarkReal, true, Even,
         halo_depth_gauge, halo_depth_spinor, 1> even_to_odd(
-            fat, naik, 0.0, naik_epsilon);
-    HisqDSlash<double, true, Odd,
+            fat, naik, 0.0, static_cast<double>(naik_epsilon));
+    HisqDSlash<BenchmarkReal, true, Odd,
         halo_depth_gauge, halo_depth_spinor, 1> odd_to_even(
-            fat, naik, 0.0, naik_epsilon);
+            fat, naik, 0.0, static_cast<double>(naik_epsilon));
 
     auto apply_full_lattice = [&]() {
         even_to_odd.Dslash(output->odd, input->even, true);
@@ -228,6 +245,7 @@ int main(int argc, char** argv)
         std::cout << std::setprecision(12)
                   << "RESULT operation=HISQDirac code=SIMULATeQCD"
                   << " backend=cuda ranks=" << world_size
+                  << " precision=" << benchmark_precision
                   << " global=" << dimensions_text(global, 'x')
                   << " grid=" << dimensions_text(grid, 'x')
                   << " iterations=" << repetitions << " samples=" << samples

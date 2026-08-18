@@ -460,7 +460,7 @@ fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 
 | Type | Meaning | Halo support |
 | --- | --- | --- |
-| `WilsonDiracOperator4D(U, kappa)` | Wilson operator, including the on-site identity term | `nw=0` or `nw>=1` |
+| `WilsonDiracOperator4D(U, kappa)` or `WilsonDiracOperator4D(U1, U2, U3, U4, kappa)` | Wilson operator, including the on-site identity term; the explicit-link form is suitable inside AD callbacks | `nw=0` or `nw>=1` |
 | `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
 | `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
@@ -518,6 +518,11 @@ kappa = 0.12
 D_wilson = WilsonDiracOperator4D(U, kappa)
 mul!(out, D_wilson, psi)
 mul!(out, adjoint(D_wilson), psi)
+
+# In a callback differentiated with respect to U1, ..., U4, use the
+# explicit-link constructor. It preserves concrete link types on Julia 1.12.
+D_wilson_callback = WilsonDiracOperator4D(
+    U[1], U[2], U[3], U[4], kappa)
 
 D_clover = WilsonDiracCloverOperator4D(U, kappa, 1.0)
 mul!(out, D_clover, psi)

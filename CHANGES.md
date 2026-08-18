@@ -4,6 +4,28 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the v1.1 series are
 backward compatible with v1.0.
 
+## v1.1.3
+
+### Domain-wall adjoint performance
+
+- The physical `NC=3` Möbius and generalized domain-wall adjoints use a
+  backend-independent two-stage path: one four-dimensional Wilson-adjoint
+  evaluation per fifth slice followed by element-owned fifth-direction
+  mixing.
+- The intermediate field is borrowed from the input field's existing
+  temporary pool and returned after every application. There is no global
+  cache, field-layout change, backend-specific launch branch, or public API
+  change.
+- Other color counts retain the generic implementation.
+
+### Validation
+
+- Möbius and nonuniform generalized adjoints are checked against dense
+  references and the adjoint inner-product identity.
+- The optimized path is covered by CUDA, JACC Threads, and optional Enzyme
+  reverse-mode tests. Tests also verify that the borrowed temporary is
+  released after use.
+
 ## v1.1.2
 
 ### Fermion operators and pullbacks

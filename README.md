@@ -1019,21 +1019,9 @@ The optimized path was checked for both Möbius and genuinely nonuniform
 generalized coefficients against the dense reference implementation and the
 adjoint inner-product identity.  CUDA tests pass on H100, Enzyme reverse-mode
 tests pass for `NC=3`, and the same implementation passes the JACC Threads
-test with four Julia threads.  On a fixed general, non-diagonal SU(3) field
-read independently from the same ILDG file, the full `24^4 x L5=8` adjoint
-timings were:
-
-| GPU | Precision | previous adjoint | v1.1.3 adjoint | speedup |
-| --- | --- | ---: | ---: | ---: |
-| NVIDIA H100 NVL | FP64 | 5.9511 ms | 4.0434 ms | 1.47x |
-| NVIDIA H100 NVL | FP32 | 3.2078 ms | 2.8281 ms | 1.13x |
-| NVIDIA Blackwell | FP64 | 11.3538 ms | 6.9415 ms | 1.64x |
-| NVIDIA Blackwell | FP32 | 3.7805 ms | 2.9946 ms | 1.26x |
-
-These are complete full-lattice Möbius adjoint applications, including both
-the four-dimensional Wilson part and fifth-direction couplings.  The gauge
-field was not a cold or diagonal configuration.  Forward timings are not
-changed by this adjoint-specific optimization.
+test with four Julia threads.  The cross-implementation check uses a general,
+non-diagonal SU(3) gauge field read independently from the same ILDG file;
+benchmark measurements are maintained separately from this README.
 
 Loading Enzyme enables reverse rules for both `D5` and `adjoint(D5)`.  The
 following example differentiates `real(dot(left, D5*psi))` with respect to

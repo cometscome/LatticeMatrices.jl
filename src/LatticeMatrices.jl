@@ -645,7 +645,11 @@ function _unpack_direct_shift!(
 end
 
 function _exchange_direct_shift!(receive, send, data::LatticeMatrix, plan::_DirectShiftPlan)
-    if send isa Array && receive isa Array
+    # The pack kernels may still be in flight. Device-aware MPI is not assumed
+    # to participate in the JACC stream, and host staging must not start before
+    # the packed data is complete.
+    JACC.synchronize()
+    if _uses_direct_mpi(data.mpi_transport)
         send_buffer = reshape(send, :)
         receive_buffer = reshape(receive, :)
         MPI.Alltoallv!(

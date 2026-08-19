@@ -4,26 +4,24 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-Version 1.1.4 is the current backward-compatible release in the stable v1 line.
+Version 1.1.5 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 
-Version 1.1.4 removes AMDGPU `malloc_hostcall`s from Float32 SU(3) normalization by keeping squared norms real.
+Version 1.1.5 adds selectable host-staged and device-direct MPI transports for
+CUDA/ROCm-aware MPI. Version 1.1.4 removed AMDGPU `malloc_hostcall`s from
+Float32 SU(3) normalization by keeping squared norms real.
 
-## What's new in v1.1.3
+## What's new in v1.1.5
 
-- Optimized `NC=3` adjoints for Möbius and generalized five-dimensional
-  domain-wall operators.  A two-stage implementation evaluates `D_W'` once
-  per fifth-dimensional slice and then performs the fifth-direction mixing.
-- The adjoint scratch field is borrowed from the input field's existing
-  temporary pool and always returned after use; no global cache or new public
-  API is introduced.
-- The implementation remains backend-independent through JACC and keeps the
-  existing field layout.  Existing calls such as
-  `mul!(out, adjoint(D5), psi)` require no changes.
-- The v1.1 line also adds analytic HISQ pullbacks, MPI-aware measurement
-  building blocks, stable SU(2)/SU(3) exponential pullbacks, optimized Wilson
-  and clover kernels, and domain-wall measurement APIs.
+- `mpi_transport=:auto`, `:host_staged`, or `:device_direct` selects the MPI
+  data path independently for each lattice.
+- CUDA and ROCm use MPI.jl's official device-buffer support when the MPI
+  implementation reports the matching GPU-aware capability.
+- Halo exchange, long-distance shifts, and reverse halo exchange share the
+  same resolved transport policy.
+- `mpi_transport_info` records the requested and resolved route together with
+  the MPI implementation for reproducible benchmarks.
 
 Existing v1.0 code requires no source changes. See [CHANGES.md](CHANGES.md) for
 the complete v1 release history and upgrade notes.
@@ -155,6 +153,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <:
     buf::Vector{AT}               # device-side communication buffers
     buf_host::Vector{Array{T}}    # host communication buffers (pinned when supported)
     shift_buf_host::DirectShiftHostBuffers{T}
+    mpi_transport::MPITransportConfig
     myrank::Int
     PN::NTuple{D,Int}             # local interior size per dimension
     comm::MPI.Comm                # original communicator
@@ -172,10 +171,12 @@ and halo epochs so shifted reads can synchronize stale halo data automatically.
 ```julia
 LatticeMatrix(NC1, NC2, dim, gsize, PEs;
               nw=1, elementtype=ComplexF64, phases=ones(dim),
-              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
+              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto,
+              mpi_transport=:auto)
 
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
-              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
+              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto,
+              mpi_transport=:auto)
 ```
 
 - **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.
@@ -186,12 +187,30 @@ LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
 Halo exchange uses receive-before-send nonblocking MPI without a per-direction
 global barrier.  Sequential directions send a staircase cross-section: halos
 from directions already exchanged are included to preserve corners, while
-not-yet-exchanged directions send only their core range.  Accelerator arrays
-use transparently registered/pinned host buffers for decomposed directions
-when the backend extension provides them; CPU arrays are passed directly to
-MPI.  This policy is selected by array-type dispatch, so application and HISQ
-code contain no CUDA/Threads backend branch and require no runtime
-communication flag.
+not-yet-exchanged directions send only their core range.
+
+`mpi_transport` selects how accelerator buffers reach MPI:
+
+- `:auto` uses device-direct MPI when both MPI.jl and the selected MPI library
+  report support, and otherwise falls back to host staging;
+- `:host_staged` always copies accelerator buffers through host memory;
+- `:device_direct` requires device-aware MPI and throws during construction if
+  the capability cannot be confirmed.
+
+CPU arrays are already passed directly to MPI. CUDA and ROCm device buffers use
+MPI.jl's official GPU-buffer integration together with `MPI.has_cuda()` or
+`MPI.has_rocm()`. oneAPI and Metal remain on the portable host-staged path until
+MPI.jl provides a corresponding direct-buffer integration. The resolved route
+and the MPI implementation can be recorded in benchmark output:
+
+```julia
+info = mpi_transport_info(M)
+# (requested=:auto, resolved=:device_direct, backend=:cuda, ...)
+```
+
+For reproducible transport comparisons, construct separate fields with
+`mpi_transport=:host_staged` and `mpi_transport=:device_direct`; do not infer a
+performance comparison from `:auto`.
 
 #### Halo epochs and automatic synchronization
 
@@ -1183,9 +1202,11 @@ shiftindices(indices, shift)
 # Lattice
 LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64,
               phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
-              device_mapping=:auto)
+              device_mapping=:auto, mpi_transport=:auto)
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
-              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
+              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto,
+              mpi_transport=:auto)
+mpi_transport_info(ls)
 
 set_halo!(ls)
 ensure_halo!(ls)

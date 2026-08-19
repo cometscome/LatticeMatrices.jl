@@ -36,6 +36,111 @@ DirectShiftHostBuffers(::Type{T}) where {T} =
 
 @inline _prepare_mpi_host_buffer(::Any, buffer::Array) = buffer
 
+@enum _MPITransportRoute::UInt8 begin
+    _MPI_HOST_DIRECT
+    _MPI_HOST_STAGED
+    _MPI_DEVICE_DIRECT
+end
+
+struct MPITransportConfig
+    requested::Symbol
+    resolved::_MPITransportRoute
+    backend::Symbol
+    reason::Symbol
+end
+
+@inline _mpi_device_buffer_supported(::Any) = false
+@inline _mpi_device_aware_available(::Any) = false
+@inline _mpi_device_kind(::Any) = Symbol(JACC.backend)
+
+@inline function _mpi_transport_symbol(route::_MPITransportRoute)
+    route === _MPI_HOST_DIRECT && return :host_direct
+    route === _MPI_HOST_STAGED && return :host_staged
+    return :device_direct
+end
+
+@inline _uses_direct_mpi(config::MPITransportConfig) =
+    config.resolved !== _MPI_HOST_STAGED
+
+function _validate_mpi_transport(mpi_transport)
+    mpi_transport isa Symbol || throw(ArgumentError(
+        "mpi_transport must be :auto, :host_staged, or :device_direct, " *
+        "got $(repr(mpi_transport))"))
+    mpi_transport in (:auto, :host_staged, :device_direct) || throw(ArgumentError(
+        "mpi_transport must be :auto, :host_staged, or :device_direct, " *
+        "got $(repr(mpi_transport))"))
+    return mpi_transport
+end
+
+@inline function _mpi_transport_code(mpi_transport::Symbol)
+    mpi_transport === :auto && return Int32(1)
+    mpi_transport === :host_staged && return Int32(2)
+    return Int32(3)
+end
+
+function _resolve_mpi_transport(mpi_transport, array, comm::MPI.Comm)
+    requested = _validate_mpi_transport(mpi_transport)
+
+    # Construction is already collective because it creates a Cartesian
+    # communicator. Detect a mismatched command-line/configuration choice here
+    # instead of letting ranks enter different communication paths later.
+    code = _mpi_transport_code(requested)
+    minimum_code = MPI.Allreduce(code, MPI.MIN, comm)
+    maximum_code = MPI.Allreduce(code, MPI.MAX, comm)
+    minimum_code == maximum_code || throw(ArgumentError(
+        "all MPI ranks must use the same mpi_transport setting"))
+
+    backend = Symbol(JACC.backend)
+    local_host = array isa Array
+    all_host = MPI.Allreduce(local_host ? Int32(1) : Int32(0), MPI.MIN, comm) == 1
+    any_host = MPI.Allreduce(local_host ? Int32(1) : Int32(0), MPI.MAX, comm) == 1
+    if all_host
+        requested === :device_direct && throw(ArgumentError(
+            "mpi_transport=:device_direct requires accelerator arrays; " *
+            "CPU arrays are already passed directly to MPI"))
+        return MPITransportConfig(
+            requested, _MPI_HOST_DIRECT, backend, :host_array)
+    end
+    any_host && throw(ArgumentError(
+        "mixing host and accelerator arrays in one LatticeMatrix communicator " *
+        "is not supported"))
+
+    requested === :host_staged && return MPITransportConfig(
+        requested, _MPI_HOST_STAGED, backend, :explicit_host_staging)
+
+    local_buffer_supported = _mpi_device_buffer_supported(array)
+    local_runtime_available = local_buffer_supported &&
+        _mpi_device_aware_available(array)
+    all_buffer_supported = MPI.Allreduce(
+        local_buffer_supported ? Int32(1) : Int32(0), MPI.MIN, comm) == 1
+    all_runtime_available = MPI.Allreduce(
+        local_runtime_available ? Int32(1) : Int32(0), MPI.MIN, comm) == 1
+
+    if requested === :device_direct
+        all_buffer_supported || throw(ArgumentError(
+            "mpi_transport=:device_direct is not supported for the $backend " *
+            "array type; use mpi_transport=:host_staged"))
+        all_runtime_available || throw(ArgumentError(
+            "mpi_transport=:device_direct was requested for " *
+            "$(_mpi_device_kind(array)), but $(MPI.MPI_LIBRARY) did not report " *
+            "device-aware support; configure a matching GPU-aware system MPI " *
+            "or use mpi_transport=:host_staged"))
+        return MPITransportConfig(
+            requested, _MPI_DEVICE_DIRECT, backend, :explicit_device_direct)
+    end
+
+    if all_buffer_supported && all_runtime_available
+        return MPITransportConfig(
+            requested, _MPI_DEVICE_DIRECT, backend, :device_aware_detected)
+    elseif !all_buffer_supported
+        return MPITransportConfig(
+            requested, _MPI_HOST_STAGED, backend, :mpi_buffer_unsupported)
+    else
+        return MPITransportConfig(
+            requested, _MPI_HOST_STAGED, backend, :device_aware_not_detected)
+    end
+end
+
 function _ensure_direct_shift_host_buffers!(
     buffers::DirectShiftHostBuffers{T}, count::Int, device_array,
 ) where {T}
@@ -67,6 +172,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
     buf::Vector{AT}                   # 2D work buffers (minus/plus)
     buf_host::Vector{Array{T}}      # host send/receive arrays (backend may pin)
     shift_buf_host::DirectShiftHostBuffers{T}
+    mpi_transport::MPITransportConfig
 
     myrank::Int
     PN::NTuple{D,Int}
@@ -142,6 +248,7 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
         buf,
         buf_host,
         DirectShiftHostBuffers(T),
+        ls.mpi_transport,
         ls.myrank,
         ls.PN,
         ls.comm,
@@ -174,6 +281,7 @@ end
         ls.buf,
         ls.buf_host,
         shift_buf_host,
+        ls.mpi_transport,
         ls.myrank,
         ls.PN,
         ls.comm,
@@ -187,22 +295,22 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
-    comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto)
+    comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto, mpi_transport=:auto)
     return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs;
-        nw, elementtype, phases, comm0, numtemps, device_mapping)
+        nw, elementtype, phases, comm0, numtemps, device_mapping, mpi_transport)
 end
 
 function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
-    device_mapping=:auto)
+    device_mapping=:auto, mpi_transport=:auto)
     return LatticeMatrix_standard(A, dim, PEs;
-        nw, phases, comm0, numtemps, device_mapping)
+        nw, phases, comm0, numtemps, device_mapping, mpi_transport)
 end
 
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD,
-    numtemps=1, device_mapping=:auto)
+    numtemps=1, device_mapping=:auto, mpi_transport=:auto)
 
     nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
     dim > 0 || throw(ArgumentError("dim must be positive, got $dim"))
@@ -253,6 +361,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     locS = ntuple(i -> gsize[i] ÷ dims[i] + 2nw, D)
     loc = (NC1, NC2, locS...)
     A = JACC.zeros(T, loc...)
+    mpi_transport_config = _resolve_mpi_transport(mpi_transport, A, comm0)
     #stride = ntuple(i -> (i == 1 ? 1 : prod(locS[1:i-1])), D)
 
     # contiguous buffers for each face
@@ -288,12 +397,13 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
     return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
-        A, buf, buf_host, DirectShiftHostBuffers(T), MPI.Comm_rank(cart), PN, comm0,
+        A, buf, buf_host, DirectShiftHostBuffers(T), mpi_transport_config,
+        MPI.Comm_rank(cart), PN, comm0,
         indexer, temps, HaloEpoch())
 end
 
 function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
-    device_mapping=:auto)
+    device_mapping=:auto, mpi_transport=:auto)
 
     NC1, NC2, NN... = size(A)
     #println(NN)
@@ -308,7 +418,7 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
     gsize = NN
 
     ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs;
-        elementtype, nw, phases, comm0, numtemps, device_mapping)
+        elementtype, nw, phases, comm0, numtemps, device_mapping, mpi_transport)
     MPI.Bcast!(A, ls.cart)
     Acpu = Array(ls.A)
 
@@ -353,8 +463,29 @@ end
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims;
         nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1,
-        device_mapping=:current)
+        device_mapping=:current, mpi_transport=ls.mpi_transport.requested)
 end
+
+"""
+    mpi_transport_info(lattice)
+
+Report the requested and resolved MPI communication transport for `lattice`.
+`resolved` is one of `:host_direct`, `:host_staged`, or `:device_direct`.
+"""
+function mpi_transport_info(ls::LatticeMatrix)
+    config = ls.mpi_transport
+    return (
+        requested=config.requested,
+        resolved=_mpi_transport_symbol(config.resolved),
+        backend=config.backend,
+        device_aware=config.resolved === _MPI_DEVICE_DIRECT,
+        reason=config.reason,
+        mpi_library=MPI.MPI_LIBRARY,
+        mpi_library_version=MPI.MPI_LIBRARY_VERSION,
+    )
+end
+
+export mpi_transport_info
 
 
 
@@ -559,6 +690,20 @@ end
     return @view(vec(buffer)[1:count])
 end
 
+@inline _mpi_transfer_parent(buffer::SubArray) = parent(buffer)
+@inline _mpi_transfer_parent(buffer) = buffer
+
+@inline function _copy_active_mpi_buffer!(destination, source)
+    length(destination) == length(source) || throw(DimensionMismatch(
+        "MPI staging buffers have different lengths: " *
+        "$(length(destination)) and $(length(source))"))
+    return copyto!(
+        _mpi_transfer_parent(destination), 1,
+        _mpi_transfer_parent(source), 1,
+        length(destination),
+    )
+end
+
 function exchange_dim_local!(ls::LatticeMatrix{D}, d::Int) where D
     gminus = _exchange_ghost_matrix(ls, d, :minus)
     gplus = _exchange_ghost_matrix(ls, d, :plus)
@@ -590,13 +735,100 @@ end
 #  * recv-buffers are passed to MPI.Irecv!  and finally copied into `_ghostMatrix`
 ##############################################################################
 
-# Ordinary Arrays are always valid MPI buffers. Accelerator backends stage
-# through host memory by default: whether a device-aware MPI path is faster is
-# transport- and topology-dependent, and on common intra-node paths pinned
-# staging can be substantially faster. Backend extensions can opt a concrete
-# array type into direct MPI when that is known to be beneficial.
-@inline _mpi_direct_buffer_supported(::Array) = true
-@inline _mpi_direct_buffer_supported(::Any) = false
+# Post one pair of minus/plus receives and sends using the transport selected
+# when the lattice was constructed. This helper is also used by reverse halo
+# exchanges in the AD extension so those paths cannot accidentally require a
+# device-aware MPI implementation while the primal path uses host staging.
+function _post_packed_halo_exchange!(
+    ls::LatticeMatrix,
+    d::Int,
+    device_buffers,
+    host_buffers,
+    tags,
+)
+    rankM, rankP = ls.nbr[d]
+    me = ls.myrank
+    requests = MPI.Request[]
+
+    # Packing kernels and phase multiplication may be asynchronous. MPI is not
+    # assumed to understand JACC streams, so make the send buffers visible
+    # before either a direct device send or a device-to-host copy.
+    JACC.synchronize()
+
+    if _uses_direct_mpi(ls.mpi_transport)
+        rankM != me && push!(requests, MPI.Irecv!(
+            device_buffers.recv_minus, rankM, tags.recv_minus, ls.cart))
+        rankP != me && push!(requests, MPI.Irecv!(
+            device_buffers.recv_plus, rankP, tags.recv_plus, ls.cart))
+        rankM != me && push!(requests, MPI.Isend(
+            device_buffers.send_minus, rankM, tags.send_minus, ls.cart))
+        rankP != me && push!(requests, MPI.Isend(
+            device_buffers.send_plus, rankP, tags.send_plus, ls.cart))
+    else
+        rankM != me && push!(requests, MPI.Irecv!(
+            host_buffers.recv_minus, rankM, tags.recv_minus, ls.cart))
+        rankP != me && push!(requests, MPI.Irecv!(
+            host_buffers.recv_plus, rankP, tags.recv_plus, ls.cart))
+        rankM != me && _copy_active_mpi_buffer!(
+            host_buffers.send_minus, device_buffers.send_minus)
+        rankP != me && _copy_active_mpi_buffer!(
+            host_buffers.send_plus, device_buffers.send_plus)
+        rankM != me && push!(requests, MPI.Isend(
+            host_buffers.send_minus, rankM, tags.send_minus, ls.cart))
+        rankP != me && push!(requests, MPI.Isend(
+            host_buffers.send_plus, rankP, tags.send_plus, ls.cart))
+    end
+    return requests
+end
+
+function _finish_packed_halo_exchange!(
+    ls::LatticeMatrix,
+    d::Int,
+    requests,
+    device_buffers,
+    host_buffers,
+)
+    isempty(requests) || MPI.Waitall!(requests)
+    _uses_direct_mpi(ls.mpi_transport) && return nothing
+
+    rankM, rankP = ls.nbr[d]
+    me = ls.myrank
+    rankM != me && _copy_active_mpi_buffer!(
+        device_buffers.recv_minus, host_buffers.recv_minus)
+    rankP != me && _copy_active_mpi_buffer!(
+        device_buffers.recv_plus, host_buffers.recv_plus)
+    return nothing
+end
+
+function _exchange_packed_halo_buffers!(
+    ls::LatticeMatrix,
+    d::Int,
+    send_minus,
+    recv_minus,
+    send_plus,
+    recv_plus;
+    send_minus_tag,
+    recv_minus_tag,
+    send_plus_tag,
+    recv_plus_tag,
+)
+    iSM, iRM = 4d - 3, 4d - 2
+    iSP, iRP = 4d - 1, 4d
+    device_buffers = (; send_minus, recv_minus, send_plus, recv_plus)
+    host_buffers = (
+        send_minus=_active_face_buffer(ls.buf_host[iSM], send_minus),
+        recv_minus=_active_face_buffer(ls.buf_host[iRM], recv_minus),
+        send_plus=_active_face_buffer(ls.buf_host[iSP], send_plus),
+        recv_plus=_active_face_buffer(ls.buf_host[iRP], recv_plus),
+    )
+    tags = (; send_minus=send_minus_tag, recv_minus=recv_minus_tag,
+        send_plus=send_plus_tag, recv_plus=recv_plus_tag)
+    requests = _post_packed_halo_exchange!(
+        ls, d, device_buffers, host_buffers, tags)
+    _finish_packed_halo_exchange!(
+        ls, d, requests, device_buffers, host_buffers)
+    return nothing
+end
 
 function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     # buffer indices
@@ -661,55 +893,31 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
         end
     end
 
-    JACC.synchronize()
-    direct_mpi = _mpi_direct_buffer_supported(bufSM)
-    reqs = MPI.Request[]
-
-    # Post receives before sends. The direct path works for CPU Arrays and
-    # device buffers supported by MPI.jl plus the selected MPI library.
-    if direct_mpi
-        rankM != me && push!(
-            reqs, MPI.Irecv!(activeRM, rankM, d + D, ls.cart))
-        rankP != me && push!(
-            reqs, MPI.Irecv!(activeRP, rankP, d, ls.cart))
-        rankM != me && push!(
-            reqs, MPI.Isend(activeSM, rankM, d, ls.cart))
-        rankP != me && push!(
-            reqs, MPI.Isend(activeSP, rankP, d + D, ls.cart))
-    else
-        rankM != me && push!(reqs, MPI.Irecv!(
-            activeRM_host, rankM, d + D, ls.cart))
-        rankP != me && push!(
-            reqs, MPI.Irecv!(activeRP_host, rankP, d, ls.cart))
-        rankM != me && copyto!(
-            bufSM_host, 1, bufSM, 1, length(activeSM))
-        rankP != me && copyto!(
-            bufSP_host, 1, bufSP, 1, length(activeSP))
-        rankM != me && push!(
-            reqs, MPI.Isend(activeSM_host, rankM, d, ls.cart))
-        rankP != me && push!(
-            reqs, MPI.Isend(activeSP_host, rankP, d + D, ls.cart))
-    end
+    device_buffers = (
+        send_minus=activeSM,
+        recv_minus=activeRM,
+        send_plus=activeSP,
+        recv_plus=activeRP,
+    )
+    host_buffers = (
+        send_minus=activeSM_host,
+        recv_minus=activeRM_host,
+        send_plus=activeSP_host,
+        recv_plus=activeRP_host,
+    )
+    tags = (send_minus=d, recv_minus=d + D, send_plus=d + D, recv_plus=d)
+    reqs = _post_packed_halo_exchange!(
+        ls, d, device_buffers, host_buffers, tags)
 
     compute_interior!(ls)
-    isempty(reqs) || MPI.Waitall!(reqs)
+    _finish_packed_halo_exchange!(
+        ls, d, reqs, device_buffers, host_buffers)
 
     # Copy received faces into the padded lattice. Subsequent JACC work uses
     # the same backend ordering, so no backend-specific synchronization is
     # needed here.
-    if direct_mpi
-        rankM != me && copy!(gminus, packedRM)
-        rankP != me && copy!(gplus, packedRP)
-    else
-        if rankM != me
-            copyto!(bufRM, 1, bufRM_host, 1, length(activeRM))
-            copy!(gminus, packedRM)
-        end
-        if rankP != me
-            copyto!(bufRP, 1, bufRP_host, 1, length(activeRP))
-            copy!(gplus, packedRP)
-        end
-    end
+    rankM != me && copy!(gminus, packedRM)
+    rankP != me && copy!(gplus, packedRP)
 end
 
 # ---------------------------------------------------------------------------

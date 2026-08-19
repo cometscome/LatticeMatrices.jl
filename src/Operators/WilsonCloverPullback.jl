@@ -10,6 +10,7 @@ using StaticArrays: SMatrix
         primal.nw, primal.phases, primal.NC1, primal.NC2, primal.gsize,
         primal.cart, primal.coords, primal.dims, primal.nbr,
         array, primal.buf, primal.buf_host, primal.shift_buf_host,
+        primal.mpi_transport,
         primal.myrank, primal.PN, primal.comm, primal.indexer,
         primal.temps, HaloEpoch(),
     )

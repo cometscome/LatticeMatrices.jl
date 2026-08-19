@@ -4993,12 +4993,13 @@ function fold_halo_dim_to_core_grad!(ls::LatticeMatrix, d::Int)
     copy!(bufSM, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :minus))
     copy!(bufSP, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus))
 
-    reqs = MPI.Request[]
-    push!(reqs, MPI.Isend(bufSM, rankM, d, ls.cart))
-    push!(reqs, MPI.Isend(bufSP, rankP, d + length(PN), ls.cart))
-    push!(reqs, MPI.Irecv!(bufRM, rankM, d + length(PN), ls.cart))
-    push!(reqs, MPI.Irecv!(bufRP, rankP, d, ls.cart))
-    MPI.Waitall!(reqs)
+    LatticeMatrices._exchange_packed_halo_buffers!(
+        ls, d, bufSM, bufRM, bufSP, bufRP;
+        send_minus_tag=d,
+        recv_minus_tag=d + length(PN),
+        send_plus_tag=d + length(PN),
+        recv_plus_tag=d,
+    )
 
     dims_s = ntuple(i -> (i == d ? ls.nw : PN[i] + 2 * ls.nw), length(PN))
     slab_indexer = LatticeMatrices.DIndexer(dims_s)
@@ -5048,12 +5049,13 @@ function fold_halo_dim_to_core_grad_phase!(ls::LatticeMatrix, d::Int, phase)
     copy!(bufSP, LatticeMatrices._ghostMatrix(ls.A, ls.nw, d, :plus))
 
     # NOTE: reverse of exchange_dim! (gradient) with phase from primal
-    MPI.Waitall([
-        MPI.Irecv!(bufRM, ls.nbr[d][1], iRP, ls.comm),
-        MPI.Irecv!(bufRP, ls.nbr[d][2], iRM, ls.comm),
-        MPI.Isend(bufSM, ls.nbr[d][1], iSM, ls.comm),
-        MPI.Isend(bufSP, ls.nbr[d][2], iSP, ls.comm),
-    ])
+    LatticeMatrices._exchange_packed_halo_buffers!(
+        ls, d, bufSM, bufRM, bufSP, bufRP;
+        send_minus_tag=iSM,
+        recv_minus_tag=iRP,
+        send_plus_tag=iSP,
+        recv_plus_tag=iRM,
+    )
 
     phase_conj = conj(phase)
     face_minus = LatticeMatrices._faceMatrix(ls.A, ls.nw, d, :minus)

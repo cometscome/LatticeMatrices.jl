@@ -4,6 +4,17 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the v1.1 series are
 backward compatible with v1.0.
 
+## v1.1.5
+
+### MPI transport selection
+
+- `LatticeMatrix(...; mpi_transport=...)` accepts `:auto`, `:host_staged`, and
+  `:device_direct`. CUDA and ROCm use MPI.jl's official device-buffer support;
+  unsupported accelerator backends fall back to host staging in `:auto` mode.
+- Halo exchange, long-distance `Alltoallv!` shifts, and reverse halo exchanges
+  use the same per-lattice transport policy. `mpi_transport_info` reports the
+  requested and resolved route for reproducible benchmark output.
+
 ## v1.1.4
 
 ### GPU normalization

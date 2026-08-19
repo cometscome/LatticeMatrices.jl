@@ -41,6 +41,16 @@ If `MPIEXEC` points at another MPI installation, update the matching `libmpi` an
 `mpiexec` entries in `LocalPreferences.toml` as well; the launcher and MPI library must
 come from the same implementation.
 
+To compare pinned host staging with CUDA-aware MPI on two GPUs and verify that
+both halo exchange and long-distance shifts produce identical results:
+
+```bash
+JULIA_CUDA_MEMORY_POOL=none \
+CUDA_VISIBLE_DEVICES=0,1 \
+/opt/ompi-cuda/bin/mpirun --bind-to core -np 2 \
+    julia --project=test/multigpu test/multigpu/mpi_transport.jl
+```
+
 For the four-GPU direct-shift regression on the global `12×12×12×24` lattice:
 
 ```bash

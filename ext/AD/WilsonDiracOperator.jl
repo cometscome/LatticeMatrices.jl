@@ -18,6 +18,7 @@ end
         primal.nw, primal.phases, primal.NC1, primal.NC2, primal.gsize,
         primal.cart, primal.coords, primal.dims, primal.nbr,
         shadow.A, shadow.buf, shadow.buf_host, shadow.shift_buf_host,
+        primal.mpi_transport,
         primal.myrank, primal.PN, primal.comm, primal.indexer,
         shadow.temps, shadow.halo_epoch,
     )

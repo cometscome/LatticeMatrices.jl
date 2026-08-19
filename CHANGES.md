@@ -4,6 +4,16 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the v1.1 series are
 backward compatible with v1.0.
 
+## v1.1.4
+
+### GPU normalization
+
+- SU(3) normalization accumulates squared row norms with `abs2`, keeping them
+  real.  This avoids the checked conversion path in `sqrt(::ComplexF32)` and
+  its AMDGPU `malloc_hostcall` without changing the normalization algorithm.
+- Float32 and Float64 normalization are checked for unitarity and unit
+  determinant with halo widths one and three.
+
 ## v1.1.3
 
 ### Domain-wall adjoint performance

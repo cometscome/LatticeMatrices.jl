@@ -4,9 +4,11 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-Version 1.1.3 is the current backward-compatible release in the stable v1 line.
+Version 1.1.4 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
+
+Version 1.1.4 removes AMDGPU `malloc_hostcall`s from Float32 SU(3) normalization by keeping squared norms real.
 
 ## What's new in v1.1.3
 

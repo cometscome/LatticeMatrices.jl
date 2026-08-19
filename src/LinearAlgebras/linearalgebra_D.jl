@@ -2357,22 +2357,21 @@ end
 
 @inline function kernel_normalize_NC3!(i, u, dindexer, ::Val{nw}) where nw
     indices = delinearize(dindexer, i, nw)
-    w1 = 0
-    w2 = 0
+    T = eltype(u)
+    w1 = zero(T)
+    w2 = real(zero(T))
     @inbounds for ic = 1:3
-        w1 += u[2, ic, indices...] * conj(u[1, ic, indices...])
-        w2 += u[1, ic, indices...] * conj(u[1, ic, indices...])
+        u1 = u[1, ic, indices...]
+        w1 += u[2, ic, indices...] * conj(u1)
+        w2 += abs2(u1)
     end
-    zerock2 = w2
     w1 = -w1 / w2
 
     x4 = (u[2, 1, indices...]) + w1 * u[1, 1, indices...]
     x5 = (u[2, 2, indices...]) + w1 * u[1, 2, indices...]
     x6 = (u[2, 3, indices...]) + w1 * u[1, 3, indices...]
 
-    w3 = x4 * conj(x4) + x5 * conj(x5) + x6 * conj(x6)
-
-    zerock3 = w3
+    w3 = abs2(x4) + abs2(x5) + abs2(x6)
 
     u[2, 1, indices...] = x4
     u[2, 2, indices...] = x5
@@ -2413,7 +2412,6 @@ end
     u[3, 1, indices...] = aa13 + im * aa14
     u[3, 2, indices...] = aa15 + im * aa16
     u[3, 3, indices...] = aa17 + im * aa18
-
 end
 
 

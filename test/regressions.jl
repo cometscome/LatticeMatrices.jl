@@ -1,3 +1,5 @@
+using Random: MersenneTwister
+
 function _reduce_three_lattices_with_scale(i, C, A, B, scale,
     ::Val{NC1}, ::Val{NG}, ::Val{nw},
     ::Val{NC2}, ::Val{NG2}, ::Val{nw2},
@@ -36,6 +38,27 @@ end
 
 function regressiontests()
     nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+
+    @testset "NC3 normalization in Float32 and Float64" begin
+        lattice_size = (2, 2, 2, 2)
+        indexer = DIndexer(lattice_size)
+        rng = MersenneTwister(0x4c4d)
+
+        for (T, tolerance) in ((ComplexF32, 5f-5), (ComplexF64, 1e-12))
+            for nw in (1, 3)
+                storage_size = ntuple(d -> lattice_size[d] + 2nw, 4)
+                data = rand(rng, T, 3, 3, storage_size...)
+                for site in 1:prod(lattice_size)
+                    LatticeMatrices.kernel_normalize_NC3!(
+                        site, data, indexer, Val(nw))
+                    indices = delinearize(indexer, site, nw)
+                    matrix = @view data[:, :, indices...]
+                    @test matrix * matrix' ≈ Matrix{T}(I, 3, 3) atol=tolerance rtol=tolerance
+                    @test det(matrix) ≈ one(T) atol=tolerance rtol=tolerance
+                end
+            end
+        end
+    end
 
     @testset "Dirac operator adjoint involution" begin
         lattice_size = (2 * nprocs, 2, 2, 2)

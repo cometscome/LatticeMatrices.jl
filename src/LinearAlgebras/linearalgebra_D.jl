@@ -2329,15 +2329,21 @@ export partial_trace
     return s
 end
 
-# ========== host side ==========
+"""
+    normalize_matrix!(C)
+
+Project every site of the square lattice matrix `C` onto SU(N) (or SO(N)
+for real element types). The NC=2 and NC=3 paths use specialized kernels;
+larger matrices use modified Gram–Schmidt followed by a determinant-phase
+correction.
+"""
 function normalize_matrix!(C::LatticeMatrix{D,T,AT,NC,NC,nw,DI}) where {D,T,AT,NC,nw,DI}
     if NC == 2
         _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_NC2!, C.A, C.indexer, Val(nw))
     elseif NC == 3
         _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_NC3!, C.A, C.indexer, Val(nw))
     else
-        # Generic: modified Gram–Schmidt per site (unitarize columns)
-        _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_generic!, C.A, C.indexer, NC, Val(nw))
+        _parallel_for_mutating!(C, prod(C.PN), kernel_normalize_generic!, C.A, C.indexer, Val(NC), Val(nw))
     end
     #set_halo!(C)
 end
@@ -2416,78 +2422,97 @@ end
 
 
 
-# ========== device side (generic N) ==========
-# Normalize columns in-place to form a unitary (QR with Q-only), per lattice site
-@inline function kernel_normalize_generic!(i, u, dindexer, NC, ::Val{nw}) where nw
-    # Index decode
+# Modified Gram–Schmidt followed by a determinant-phase correction. The
+# fixed-size LU workspace stays local to each CPU/GPU kernel invocation.
+@inline function kernel_normalize_generic!(
+    i, u, dindexer, ::Val{NC}, ::Val{nw},
+) where {NC,nw}
     indices = delinearize(dindexer, i, nw)
 
-    # Type helpers
     T = eltype(u)
     rT = real(one(T))
-    epsT = sqrt(eps(rT))  # tolerance for near-zero norms
+    epsT = sqrt(eps(rT))
 
-    # Modified Gram–Schmidt over columns j = 1..NC
     @inbounds for j = 1:NC
-        # Orthogonalize column j against columns 1..j-1
         for k = 1:j-1
-            # inner = ⟨u[:,k], u[:,j]⟩ = sum(conj(u[k]) * u[j])
             inner = zero(T)
             for r = 1:NC
                 inner += conj(u[r, k, indices...]) * u[r, j, indices...]
             end
-            # u[:,j] -= inner * u[:,k]
             for r = 1:NC
                 u[r, j, indices...] -= inner * u[r, k, indices...]
             end
         end
 
-        # Compute 2-norm of column j
         nrm2 = zero(rT)
         for r = 1:NC
             nrm2 += abs2(u[r, j, indices...])
         end
         nrm = sqrt(nrm2)
 
-        # Handle near-zero; fall back to a canonical basis vector
         if nrm < epsT
-            # Zero column then set j-th row to 1 (produces consistent unitary completion)
-            for r = 1:NC
-                u[r, j, indices...] = zero(T)
+            # Complete a rank-deficient input with the canonical basis vector
+            # having the largest component outside the existing span.
+            best_row = 1
+            best_nrm2 = zero(rT)
+            for candidate = 1:NC
+                candidate_nrm2 = one(rT)
+                for k = 1:j-1
+                    candidate_nrm2 -= abs2(u[candidate, k, indices...])
+                end
+                if candidate_nrm2 > best_nrm2
+                    best_nrm2 = candidate_nrm2
+                    best_row = candidate
+                end
             end
-            u[j, j, indices...] = one(T)
-        else
-            # Normalize column j
-            invn = one(rT) / nrm
-            invnT = convert(T, invn)  # keep type stability for Complex/Real T
+
             for r = 1:NC
-                u[r, j, indices...] *= invnT
+                value = r == best_row ? one(T) : zero(T)
+                for k = 1:j-1
+                    value -= conj(u[best_row, k, indices...]) *
+                             u[r, k, indices...]
+                end
+                u[r, j, indices...] = value
             end
+
+            nrm2 = zero(rT)
+            for r = 1:NC
+                nrm2 += abs2(u[r, j, indices...])
+            end
+            nrm = sqrt(nrm2)
+        end
+
+        invn = one(rT) / nrm
+        invnT = convert(T, invn)
+        for r = 1:NC
+            u[r, j, indices...] *= invnT
         end
     end
 
-    # Optional: single re-orthogonalization sweep for improved numerical stability
-    # (uncomment if needed)
-    # @inbounds for j = 1:NC
-    #     for k = 1:j-1
-    #         inner = zero(T)
-    #         for r = 1:NC
-    #             inner += conj(u[r,k,ix,iy,iz,it]) * u[r,j,ix,iy,iz,it]
-    #         end
-    #         for r = 1:NC
-    #             u[r,j,ix,iy,iz,it] -= inner * u[r,k,ix,iy,iz,it]
-    #         end
-    #     end
-    #     nrm2 = zero(rT)
-    #     for r = 1:NC
-    #         nrm2 += abs2(u[r,j,ix,iy,iz,it])
-    #     end
-    #     nrm = sqrt(nrm2)
-    #     invnT = convert(T, one(rT)/max(nrm, epsT))
-    #     for r = 1:NC
-    #         u[r,j,ix,iy,iz,it] *= invnT
-    #     end
-    # end
+    LU = MMatrix{NC,NC,T}(undef)
+    pivots = MVector{NC,Int}(undef)
+    @inbounds for column = 1:NC
+        for row = 1:NC
+            LU[row, column] = u[row, column, indices...]
+        end
+    end
+    lu_factor!(LU, pivots)
+
+    determinant = one(T)
+    @inbounds for k = 1:NC
+        if pivots[k] != k
+            determinant = -determinant
+        end
+        determinant *= LU[k, k]
+    end
+
+    determinant_magnitude = abs(determinant)
+    if determinant_magnitude > epsT
+        phase = conj(determinant) / determinant_magnitude
+        @inbounds for row = 1:NC
+            u[row, NC, indices...] *= phase
+        end
+    end
 
     return nothing
 end

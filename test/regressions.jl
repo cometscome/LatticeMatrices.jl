@@ -60,6 +60,73 @@ function regressiontests()
         end
     end
 
+    @testset "generic SU(N)/SO(N) normalization in Float32 and Float64" begin
+        lattice_size = (2, 2, 2, 2)
+        indexer = DIndexer(lattice_size)
+        rng = MersenneTwister(0x53554e)
+
+        for NC in (4, 5)
+            for (T, tolerance) in (
+                (Float32, 2f-4),
+                (Float64, 2e-12),
+                (ComplexF32, 2f-4),
+                (ComplexF64, 2e-12),
+            )
+                for nw in (1, 3)
+                    storage_size = ntuple(d -> lattice_size[d] + 2nw, 4)
+                    data = rand(rng, T, NC, NC, storage_size...)
+                    for site in 1:prod(lattice_size)
+                        LatticeMatrices.kernel_normalize_generic!(
+                            site, data, indexer, Val(NC), Val(nw))
+                        indices = delinearize(indexer, site, nw)
+                        matrix = @view data[:, :, indices...]
+                        @test matrix' * matrix ≈ Matrix{T}(I, NC, NC) atol=tolerance rtol=tolerance
+                        @test det(matrix) ≈ one(T) atol=tolerance rtol=tolerance
+                    end
+                end
+            end
+        end
+    end
+
+    @testset "generic SU(N) normalization completes rank-deficient input" begin
+        NC = 4
+        nw = 1
+        lattice_size = (1, 1, 1, 1)
+        storage_size = ntuple(d -> lattice_size[d] + 2nw, 4)
+        indexer = DIndexer(lattice_size)
+        data = ones(ComplexF64, NC, NC, storage_size...)
+
+        LatticeMatrices.kernel_normalize_generic!(
+            1, data, indexer, Val(NC), Val(nw))
+        indices = delinearize(indexer, 1, nw)
+        matrix = @view data[:, :, indices...]
+        @test matrix' * matrix ≈ Matrix{ComplexF64}(I, NC, NC) atol=2e-12 rtol=2e-12
+        @test det(matrix) ≈ 1 atol=2e-12 rtol=2e-12
+    end
+
+    @testset "generic SU(N) normalization public API" begin
+        NC = 4
+        nw = 1
+        lattice_size = (2 * nprocs, 2, 2, 2)
+        process_grid = (nprocs, 1, 1, 1)
+        data = rand(MersenneTwister(0x53554150), ComplexF64,
+            NC, NC, lattice_size...)
+        matrix_field = LatticeMatrix(data, 4, process_grid; nw)
+        epochs_before = halo_epochs(matrix_field)
+
+        normalize_matrix!(matrix_field)
+
+        @test halo_epochs(matrix_field).core == epochs_before.core + 1
+        @test halo_is_dirty(matrix_field)
+        host_data = Array(matrix_field.A)
+        for site in 1:prod(matrix_field.PN)
+            indices = delinearize(matrix_field.indexer, site, nw)
+            matrix = @view host_data[:, :, indices...]
+            @test matrix' * matrix ≈ Matrix{ComplexF64}(I, NC, NC) atol=2e-12 rtol=2e-12
+            @test det(matrix) ≈ 1 atol=2e-12 rtol=2e-12
+        end
+    end
+
     @testset "Dirac operator adjoint involution" begin
         lattice_size = (2 * nprocs, 2, 2, 2)
         process_grid = (nprocs, 1, 1, 1)

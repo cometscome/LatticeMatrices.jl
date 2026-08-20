@@ -4,24 +4,15 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-Version 1.1.5 is the current backward-compatible release in the stable v1 line.
+🎉 **LatticeMatrices.jl v1 is available!**
+
+Version 1.1.6 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 
-Version 1.1.5 adds selectable host-staged and device-direct MPI transports for
-CUDA/ROCm-aware MPI. Version 1.1.4 removed AMDGPU `malloc_hostcall`s from
-Float32 SU(3) normalization by keeping squared norms real.
+Version 1.1.6 adds generic SU(N) normalization for NC > 3; see [CHANGES.md](CHANGES.md) for details.
 
-## What's new in v1.1.5
-
-- `mpi_transport=:auto`, `:host_staged`, or `:device_direct` selects the MPI
-  data path independently for each lattice.
-- CUDA and ROCm use MPI.jl's official device-buffer support when the MPI
-  implementation reports the matching GPU-aware capability.
-- Halo exchange, long-distance shifts, and reverse halo exchange share the
-  same resolved transport policy.
-- `mpi_transport_info` records the requested and resolved route together with
-  the MPI implementation for reproducible benchmarks.
+Version 1.1.5 added selectable host-staged and device-direct MPI transports for CUDA/ROCm-aware MPI.
 
 Existing v1.0 code requires no source changes. See [CHANGES.md](CHANGES.md) for
 the complete v1 release history and upgrade notes.

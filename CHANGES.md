@@ -4,6 +4,16 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the v1.1 series are
 backward compatible with v1.0.
 
+## v1.1.6
+
+### Generic SU(N) normalization
+
+- `normalize_matrix!` now applies a determinant-phase correction after the
+  generic modified Gram–Schmidt path, so color counts above three are projected
+  to SU(N) rather than only U(N).
+- Rank-deficient inputs receive a stable orthonormal basis completion, and the
+  generic path remains allocation-free inside CPU and accelerator kernels.
+
 ## v1.1.5
 
 ### MPI transport selection

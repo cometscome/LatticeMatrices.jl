@@ -72,10 +72,19 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - name: Fast CPU test suite
         uses: julia-actions/julia-runtest@v1
+      - name: Prepare MPI test environment
+        if: matrix.version != 'pre'
+        run: |
+          julia --startup-file=no -e '
+            using Pkg
+            Pkg.activate(joinpath(pwd(), ".ci-mpi-env"))
+            Pkg.develop(path=pwd())
+            Pkg.add(["MPI", "JACC", "Test", "Random", "LinearAlgebra"])
+          '
       - name: MPI initialization guard and explicit serial selection
         if: matrix.version != 'pre'
         run: |
-          julia --project=. --startup-file=no -e '
+          julia --project=.ci-mpi-env --startup-file=no -e '
             using LatticeMatrices, MPI
             @assert !MPI.Initialized()
             error = try
@@ -98,7 +107,7 @@ jobs:
       - name: MPI halo epoch regression (2 ranks)
         if: matrix.version != 'pre'
         run: |
-          julia --project=. --startup-file=no -e '
+          julia --project=.ci-mpi-env --startup-file=no -e '
             using MPI
             MPI.Initialized() || MPI.Init()
             using LatticeMatrices
@@ -115,13 +124,13 @@ jobs:
             @assert mpi_transport_info(serial_lattice).resolved === :local
             MPI.install_mpiexecjl(destdir=".ci-bin", force=true)
           '
-          .ci-bin/mpiexecjl --project=. -n 2 \
-            julia --project=. --startup-file=no test/mpi_halo.jl
+          .ci-bin/mpiexecjl --project=.ci-mpi-env -n 2 \
+            julia --project=.ci-mpi-env --startup-file=no test/mpi_halo.jl
       - name: README smoke test (2 ranks)
         if: matrix.version != 'pre'
         run: |
-          .ci-bin/mpiexecjl --project=. -n 2 \
-            julia --project=. --startup-file=no test/readmetest.jl
+          .ci-bin/mpiexecjl --project=.ci-mpi-env -n 2 \
+            julia --project=.ci-mpi-env --startup-file=no test/readmetest.jl
       - name: Prepare Enzyme smoke-test environment
         if: matrix.version != 'pre'
         run: |

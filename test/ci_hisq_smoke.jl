@@ -1,5 +1,5 @@
 function ci_hisq_smoke_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     lattice_size = (3 * nprocs, 3, 3, 3)
     process_grid = (nprocs, 1, 1, 1)
     NC = 3
@@ -34,7 +34,7 @@ function ci_hisq_smoke_tests()
         mul!(result, operator, psi)
 
         gathered = gather_matrix(result)
-        if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        if test_comm_rank() == 0
             @test all(isfinite, gathered)
             @test !iszero(norm(gathered))
         end

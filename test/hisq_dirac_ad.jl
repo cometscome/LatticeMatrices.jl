@@ -40,7 +40,7 @@ function _hisq_dirac_ad_shifted_links(links, directions, epsilon)
 end
 
 function hisq_dirac_ad_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     local_x = iseven(nprocs) ? 3 : 4
     global_size = (local_x * nprocs, 3, 3, 3)
     process_grid = (nprocs, 1, 1, 1)

@@ -34,8 +34,8 @@ function _reference_site_adjoint(A)
 end
 
 function nw0test()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
 
     @testset "nw=0 halo-free lattice" begin
         dim = 2

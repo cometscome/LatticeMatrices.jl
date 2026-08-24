@@ -43,7 +43,7 @@ end
 
 function random_fill_tests()
     @testset "global-site random lattice fills" begin
-        nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+        nprocs = test_comm_size()
         process_grid = (nprocs, 1)
         global_size = (8, 3)
 

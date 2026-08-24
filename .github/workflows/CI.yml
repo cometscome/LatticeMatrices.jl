@@ -40,7 +40,7 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
-      - name: Verify base package without Enzyme
+      - name: Full serial test suite without MPI or Enzyme
         env:
           JULIA_LOAD_PATH: "@:@stdlib"
         run: |
@@ -48,19 +48,71 @@ jobs:
             using Pkg
             Pkg.activate(; temp=true)
             Pkg.develop(path=pwd())
+            Pkg.add(["JACC", "StaticArrays", "Test"])
             @assert Base.find_package("Enzyme") === nothing
+            @assert Base.find_package("MPI") === nothing
             using LatticeMatrices
             @assert Base.get_extension(
               LatticeMatrices, :LatticeMatricesEnzymeExt) === nothing
+            @assert Base.get_extension(
+              LatticeMatrices, :LatticeMatricesMPIExt) === nothing
+            @eval LatticeMatrices.JACC.@init_backend
+            lattice = LatticeMatrix(
+              2, 2, 2, (4, 4), (1, 1); nw=1, device_mapping=:current)
+            @assert lattice.comm isa SerialCommunicator
+            lattice.A .= 1
+            mark_halo_dirty!(lattice)
+            set_halo!(lattice)
+            @assert !halo_is_dirty(lattice)
+            @assert mpi_transport_info(lattice).mpi_library === nothing
+            @assert mpi_transport_info(lattice).resolved === :local
+            ENV["LATTICEMATRICES_TEST_MPI"] = "false"
+            include(joinpath(pwd(), "test", "runtests.jl"))
           '
       - uses: julia-actions/julia-buildpkg@v1
       - name: Fast CPU test suite
         uses: julia-actions/julia-runtest@v1
+      - name: MPI initialization guard and explicit serial selection
+        if: matrix.version != 'pre'
+        run: |
+          julia --project=. --startup-file=no -e '
+            using LatticeMatrices, MPI
+            @assert !MPI.Initialized()
+            error = try
+              LatticeMatrix(
+                1, 1, 1, (4,), (1,); device_mapping=:current)
+              nothing
+            catch caught
+              caught
+            end
+            @assert error isa ArgumentError
+            @assert occursin(
+              "MPI must be initialized and not finalized", sprint(showerror, error))
+            serial = LatticeMatrix(
+              1, 1, 1, (4,), (1,);
+              comm0=SerialCommunicator(), device_mapping=:current)
+            @assert serial.comm isa SerialCommunicator
+            @assert isempty(serial.buf)
+            @assert isempty(serial.buf_host)
+          '
       - name: MPI halo epoch regression (2 ranks)
         if: matrix.version != 'pre'
         run: |
           julia --project=. --startup-file=no -e '
             using MPI
+            MPI.Initialized() || MPI.Init()
+            using LatticeMatrices
+            @assert Base.get_extension(
+              LatticeMatrices, :LatticeMatricesMPIExt) !== nothing
+            mpi_lattice = LatticeMatrix(
+              1, 1, 1, (4,), (1,);
+              comm0=MPI.COMM_SELF, device_mapping=:current)
+            serial_lattice = LatticeMatrix(
+              1, 1, 1, (4,), (1,);
+              comm0=SerialCommunicator(), device_mapping=:current)
+            @assert mpi_lattice.comm === MPI.COMM_SELF
+            @assert serial_lattice.comm isa SerialCommunicator
+            @assert mpi_transport_info(serial_lattice).resolved === :local
             MPI.install_mpiexecjl(destdir=".ci-bin", force=true)
           '
           .ci-bin/mpiexecjl --project=. -n 2 \
@@ -77,7 +129,21 @@ jobs:
             using Pkg
             Pkg.activate(joinpath(pwd(), ".ci-ad-env"))
             Pkg.develop(path=pwd())
-            Pkg.add(["Enzyme", "JACC", "MPI"])
+            Pkg.add(["Enzyme", "JACC"])
+          '
+      - name: Enzyme AD smoke tests without MPI
+        if: matrix.version != 'pre'
+        env:
+          JULIA_LOAD_PATH: "@:@stdlib"
+          LATTICEMATRICES_TEST_MPI: "false"
+        run: |
+          julia --project=.ci-ad-env --startup-file=no test/runtests_ad_ci.jl
+      - name: Add MPI to Enzyme smoke-test environment
+        if: matrix.version != 'pre'
+        run: |
+          julia --project=.ci-ad-env --startup-file=no -e '
+            using Pkg
+            Pkg.add("MPI")
           '
       - name: Enzyme AD smoke tests
         if: matrix.version != 'pre'

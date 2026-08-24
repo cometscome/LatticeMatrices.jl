@@ -5,6 +5,7 @@ import JACC
 using LinearAlgebra
 
 JACC.@init_backend
+include("communication_helpers.jl")
 include("nw0.jl")
 
 MPI.Init()

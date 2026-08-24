@@ -70,7 +70,7 @@ function _su3_basis_reference(input, t, ::Type{T}) where {T<:Complex}
 end
 
 function matrixexp_su3_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     process_grid = (nprocs, 1)
     global_size = (2 * nprocs, 2)
 

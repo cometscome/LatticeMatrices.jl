@@ -150,8 +150,8 @@ function _clover_test_gauge_transform(links, psi)
 end
 
 function wilson_clover_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     lattice_size = (2 * nprocs, 2, 2, 2)
     process_grid = (nprocs, 1, 1, 1)
     phases = (1, 1, 1, -1)

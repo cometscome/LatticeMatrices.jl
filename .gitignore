@@ -1,4 +1,5 @@
 /Manifest*.toml
+/test/adtest/Manifest.toml
 /LocalPreferences.toml
 /LocalPreferences.toml~
 /.ci-ad-env/
@@ -9,3 +10,4 @@
 *.out
 *.log
 *report*
+SQCD_HISQ_STRONG_SCALING_2026-08-19*

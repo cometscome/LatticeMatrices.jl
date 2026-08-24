@@ -4,7 +4,7 @@ using Random
     Random.seed!(0x443557414c4c)
     NC = 3
     L5 = 4
-    number_of_processes = MPI.Comm_size(MPI.COMM_WORLD)
+    number_of_processes = test_comm_size()
     physical_size = (2 * number_of_processes, 2, 2, 4)
     process_grid4 = (number_of_processes, 1, 1, 1)
     process_grid5 = (number_of_processes, 1, 1, 1, 1)

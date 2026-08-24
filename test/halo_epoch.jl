@@ -1,8 +1,8 @@
 function halo_epoch_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
 
     @testset "halo epochs synchronize before shifts" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (4 * nprocs,)
         process_grid = (nprocs,)
         zeros_global = zeros(ComplexF64, 1, 1, global_size...)
@@ -67,7 +67,7 @@ function halo_epoch_tests()
     end
 
     @testset "explicit shift kernels synchronize their inputs" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (4 * nprocs,)
         process_grid = (nprocs,)
         values = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)
@@ -150,7 +150,7 @@ function halo_epoch_tests()
     end
 
     @testset "Wilson operators synchronize dirty halos" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (2 * nprocs, 2, 2, 2)
         process_grid = (nprocs, 1, 1, 1)
         NC = 2

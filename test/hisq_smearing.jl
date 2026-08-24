@@ -119,8 +119,8 @@ function _hisq_smearing_test_gather(links)
 end
 
 function hisq_smearing_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     process_grid = (nprocs, 1, 1, 1)
     local_x = iseven(nprocs) ? 3 : 4
     lattice_size = (local_x * nprocs, 3, 3, 3)

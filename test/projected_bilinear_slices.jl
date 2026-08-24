@@ -40,7 +40,7 @@ end
     Random.seed!(0x4d45534f4e)
     NS = 4
     NC = 2
-    number_of_processes = MPI.Comm_size(MPI.COMM_WORLD)
+    number_of_processes = test_comm_size()
     lattice_size = (2 * number_of_processes, 3, 2, 4)
     process_grid = (number_of_processes, 1, 1, 1)
     arrays1 = ntuple(
@@ -87,9 +87,8 @@ end
         zeros(ComplexF64, 3, 4, lattice_size...), 4, process_grid; nw=0)
     set_global_component!(source_field, 2 - 3im, 2, 3, (2, 2, 1, 4))
     source_array = Array(source_field.A)
-    global_sum = MPI.Allreduce(sum(source_array), MPI.SUM, MPI.COMM_WORLD)
-    global_nonzeros = MPI.Allreduce(
-        count(!iszero, source_array), MPI.SUM, MPI.COMM_WORLD)
+    global_sum = test_allreduce_sum(sum(source_array))
+    global_nonzeros = test_allreduce_sum(count(!iszero, source_array))
     @test global_sum == 2 - 3im
     @test global_nonzeros == 1
 

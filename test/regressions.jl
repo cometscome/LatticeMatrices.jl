@@ -37,7 +37,7 @@ Base.@noinline function _abandon_materialized_shift(M, shift)
 end
 
 function regressiontests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
 
     @testset "NC3 normalization in Float32 and Float64" begin
         lattice_size = (2, 2, 2, 2)
@@ -178,7 +178,7 @@ function regressiontests()
     end
 
     @testset "long shifts with halos" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (4 * nprocs,)
         process_grid = (nprocs,)
         A = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)
@@ -230,7 +230,7 @@ function regressiontests()
     end
 
     @testset "direct multidimensional shifts" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (4 * nprocs, 3, 4, 5)
         process_grid = (nprocs, 1, 1, 1)
         phases = (cis(0.17), cis(-0.31), -1.0 + 0im, im)
@@ -296,7 +296,7 @@ function regressiontests()
     end
 
     @testset "complex boundary phases are reversible" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (4 * nprocs,)
         process_grid = (nprocs,)
         A = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)
@@ -322,7 +322,7 @@ function regressiontests()
     end
 
     @testset "checkerboard clear uses global coordinates" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (3 * nprocs, 2, 2, 2)
         process_grid = (nprocs, 1, 1, 1)
         original = reshape(
@@ -363,7 +363,7 @@ function regressiontests()
     end
 
     @testset "checkerboard addition" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (3 * nprocs, 2, 2, 2)
         process_grid = (nprocs, 1, 1, 1)
         zero_shift = (0, 0, 0, 0)
@@ -431,7 +431,7 @@ function regressiontests()
     end
 
     @testset "checkerboard site map" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (3 * nprocs, 2, 2, 2)
         process_grid = (nprocs, 1, 1, 1)
         shift = (1, 0, 0, 0)
@@ -484,7 +484,7 @@ function regressiontests()
     end
 
     @testset "checkerboard shifted multiplication" begin
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
+        rank = test_comm_rank()
         global_size = (3 * nprocs, 2, 2, 2)
         process_grid = (nprocs, 1, 1, 1)
         shift_a = (1, 0, 0, 0)

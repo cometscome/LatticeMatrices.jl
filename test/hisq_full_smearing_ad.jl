@@ -87,7 +87,7 @@ function _hisq_full_chain_ad_loss(
 end
 
 function hisq_full_smearing_ad_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     process_grid = (nprocs, 1, 1, 1)
     global_size = (3 * nprocs, 3, 3, 3)
     nw = 1

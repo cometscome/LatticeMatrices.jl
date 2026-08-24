@@ -1,5 +1,5 @@
 """
-    select_device_by_mpi_rank!([comm=MPI.COMM_WORLD])
+    select_device_by_mpi_rank!([comm])
 
 Select one accelerator for the calling MPI process from its rank among the
 processes that share the same node.  The selected JACC backend determines the
@@ -16,17 +16,12 @@ be loaded, normally by calling `JACC.@init_backend`.  Call this function before
 allocating any JACC arrays.  `threads` requires no device selection.  Multi-rank
 device selection for the Metal backend is not currently supported.
 """
-function select_device_by_mpi_rank!(comm::MPI.Comm=MPI.COMM_WORLD)
-    MPI.Initialized() || throw(ArgumentError(
+function select_device_by_mpi_rank!(comm=nothing)
+    comm = _resolve_communicator(comm)
+    _communicator_ready(comm) || throw(ArgumentError(
         "MPI must be initialized before selecting a device by MPI rank"))
 
-    rank = MPI.Comm_rank(comm)
-    local_comm = MPI.Comm_split_type(comm, MPI.COMM_TYPE_SHARED, rank)
-    local_rank, local_size = try
-        MPI.Comm_rank(local_comm), MPI.Comm_size(local_comm)
-    finally
-        MPI.free(local_comm)
-    end
+    local_rank, local_size = _shared_rank_and_size(comm)
 
     backend = Symbol(JACC.backend)
     if backend === :threads
@@ -98,7 +93,7 @@ function _device_ordinal_for_local_rank(
     return local_rank + 1
 end
 
-function _prepare_backend_device!(comm::MPI.Comm, device_mapping::Symbol)
+function _prepare_backend_device!(comm, device_mapping::Symbol)
     device_mapping === :current && return nothing
     device_mapping === :auto || throw(ArgumentError(
         "device_mapping must be :auto or :current, got $device_mapping"))

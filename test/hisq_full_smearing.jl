@@ -51,8 +51,8 @@ function _hisq_full_test_naik_reference(reunitarized_links)
 end
 
 function hisq_full_smearing_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     process_grid = (nprocs, 1, 1, 1)
     lattice_size = (3 * nprocs, 3, 3, 3)
     NC = 3

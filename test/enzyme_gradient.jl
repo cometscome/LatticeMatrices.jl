@@ -30,7 +30,7 @@ function _enzyme_expt_ta_weighted_loss(U1, U2, U3, U4, temp)
 end
 
 function enzyme_gradient_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     global_size = (4 * nprocs, 2, 2, 2)
     process_grid = (nprocs, 1, 1, 1)
     NC = 2

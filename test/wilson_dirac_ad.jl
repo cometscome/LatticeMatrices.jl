@@ -23,7 +23,7 @@ function _wilson_dirac_ad_core(field)
 end
 
 function _wilson_dirac_ad_tests(NC)
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     global_size = (2 * nprocs, 2, 2, 2)
     process_grid = (nprocs, 1, 1, 1)
     nw = 1

@@ -5,7 +5,6 @@ import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add
     fold_halo_dim_to_core_grad!, Staggered_Lattice, staggered_eta_halo,
     kernel_exp_ta_pullback_su2!, kernel_exp_ta_pullback_su3!
 using PreallocatedArrays
-using MPI
 
 const ER = Enzyme.EnzymeRules
 
@@ -2499,7 +2498,7 @@ function ER.reverse(cfg::ER.RevConfig,
             C.val.indexer, Val(C.val.NC1), Val(C.val.nw);
             init=init, op=+
         )
-        dt = MPI.Allreduce(dt_local, MPI.SUM, C.val.comm)
+        dt = _allreduce_sum(dt_local, C.val.comm)
     end
 
     if C.val.NC1 == 2 && C.val.NC2 == 2
@@ -2517,15 +2516,15 @@ function ER.reverse(cfg::ER.RevConfig,
             )
             comm = C.val.comm
             stats = (
-                min_c1=MPI.Allreduce(stats_local.min_c1, MPI.MIN, comm),
-                max_c1=MPI.Allreduce(stats_local.max_c1, MPI.MAX, comm),
-                min_abs_denom=MPI.Allreduce(stats_local.min_abs_denom, MPI.MIN, comm),
-                max_abs_arg_raw=MPI.Allreduce(stats_local.max_abs_arg_raw, MPI.MAX, comm),
-                clamp_count=MPI.Allreduce(stats_local.clamp_count, MPI.SUM, comm),
-                small_c1_count=MPI.Allreduce(stats_local.small_c1_count, MPI.SUM, comm),
-                nsites=MPI.Allreduce(stats_local.nsites, MPI.SUM, comm),
+                min_c1=_allreduce_min(stats_local.min_c1, comm),
+                max_c1=_allreduce_max(stats_local.max_c1, comm),
+                min_abs_denom=_allreduce_min(stats_local.min_abs_denom, comm),
+                max_abs_arg_raw=_allreduce_max(stats_local.max_abs_arg_raw, comm),
+                clamp_count=_allreduce_sum(stats_local.clamp_count, comm),
+                small_c1_count=_allreduce_sum(stats_local.small_c1_count, comm),
+                nsites=_allreduce_sum(stats_local.nsites, comm),
             )
-            rank = MPI.Comm_rank(comm)
+            rank = _comm_rank(comm)
             if rank == 0
                 _expt_ta_su3_diag_seq[] += 1
                 seq = _expt_ta_su3_diag_seq[]
@@ -2634,7 +2633,7 @@ function ER.reverse(cfg::ER.RevConfig,
             C.val.indexer, Val(C.val.NC1), Val(C.val.nw);
             init=init, op=+
         )
-        dt = MPI.Allreduce(dt_local, MPI.SUM, C.val.comm)
+        dt = _allreduce_sum(dt_local, C.val.comm)
     end
 
     if C.val.NC1 == 2 && C.val.NC2 == 2

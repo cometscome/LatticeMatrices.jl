@@ -1,8 +1,42 @@
 # Changes
 
 This file records the user-visible changes in the stable v1 release line.
-LatticeMatrices follows semantic versioning; releases in the v1.1 series are
-backward compatible with v1.0.
+LatticeMatrices follows semantic versioning; releases in the stable v1 series
+preserve the public v1 API.
+
+## v1.2.0
+
+### Optional MPI backend
+
+- MPI.jl is now a weak dependency. Loading LatticeMatrices without MPI uses a
+  type-stable `SerialCommunicator` for one-process lattices and local periodic
+  halo updates.
+- MPI applications must add MPI.jl to their own environment, load it with
+  `using MPI`, and call `MPI.Init()` before constructing an MPI-backed lattice.
+  With MPI loaded, `comm0=nothing` continues to select `MPI.COMM_WORLD`.
+- LatticeMatrices does not call `MPI.Init()` or `MPI.Finalize()` automatically;
+  MPI lifecycle management remains the application's responsibility.
+- One-rank MPI applications can explicitly select either implementation with
+  `comm0=SerialCommunicator()` or `comm0=MPI.COMM_WORLD`.
+- One-process lattices no longer allocate unused packed MPI halo buffers on the
+  host or accelerator.
+- Loading MPI.jl activates `LatticeMatricesMPIExt` and preserves the existing
+  `MPI.COMM_WORLD`, Cartesian decomposition, halo exchange, reductions,
+  gathers, and direct-shift behavior.
+- CUDA/ROCm device-aware MPI detection is isolated in combined GPU+MPI
+  extensions, while non-MPI accelerator use remains available.
+- MPIPreferences is no longer a direct dependency; MPI.jl continues to provide
+  it transitively when MPI support is installed.
+- `mpi_transport_info` reports `resolved=:local` and
+  `reason=:serial_communicator` when no inter-process transport is present.
+
+### Validation
+
+- Version 1.2.0 was validated with Gaugefields 1.0.4 and
+  LatticeDiracOperators 1.0.0 using threaded CPU execution, two-rank MPI, and
+  CUDA execution on an NVIDIA H100. CUDA execution without MPI was also
+  validated with `SerialCommunicator`. Enzyme AD smoke tests run both with and
+  without MPI.jl installed.
 
 ## v1.1.6
 

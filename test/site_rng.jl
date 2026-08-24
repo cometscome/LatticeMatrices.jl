@@ -181,7 +181,7 @@ function site_rng_tests()
 end
 
 @testset "LatticeMatrix global site ids" begin
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     global_size = (4, 2, 2, 2)
     process_grid = (nprocs, 1, 1, 1)
     lattice = LatticeMatrix(1, 1, 4, global_size, process_grid; nw=0)

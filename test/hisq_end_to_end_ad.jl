@@ -44,7 +44,7 @@ function _hisq_end_to_end_core(field)
 end
 
 function hisq_end_to_end_ad_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     process_grid = (nprocs, 1, 1, 1)
     global_size = (3 * nprocs, 3, 3, 3)
     nw = 3

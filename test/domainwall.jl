@@ -127,8 +127,8 @@ function _domainwall_test_generalized_reference(
 end
 
 function _domainwall_nc3_fastpath_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     lattice_size = (2 * nprocs, 2, 2, 2)
     L5 = 3
     process_grid = (nprocs, 1, 1, 1)
@@ -203,8 +203,8 @@ function _domainwall_nc3_fastpath_tests()
 end
 
 function domainwall_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     lattice_size = (2 * nprocs, 2, 2, 2)
     L5 = 3
     process_grid = (nprocs, 1, 1, 1)

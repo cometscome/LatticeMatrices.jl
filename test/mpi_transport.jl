@@ -1,5 +1,24 @@
 function mpi_transport_tests()
     @testset "MPI transport selection" begin
+        serial_one_rank = LatticeMatrix(
+            1, 1, 1, (4,), (1,);
+            comm0=SerialCommunicator(), device_mapping=:current)
+        mpi_one_rank = LatticeMatrix(
+            1, 1, 1, (4,), (1,);
+            comm0=MPI.COMM_SELF, device_mapping=:current)
+
+        @test serial_one_rank.comm isa SerialCommunicator
+        @test mpi_one_rank.comm isa MPI.Comm
+        @test mpi_one_rank.comm === MPI.COMM_SELF
+        @test isempty(serial_one_rank.buf)
+        @test isempty(serial_one_rank.buf_host)
+        @test isempty(mpi_one_rank.buf)
+        @test isempty(mpi_one_rank.buf_host)
+        @test @inferred(LatticeMatrices._cart_coords(
+            mpi_one_rank.cart, 0, Val(1))) == (0,)
+        @test mpi_transport_info(serial_one_rank).resolved === :local
+        @test mpi_transport_info(mpi_one_rank).resolved === :host_direct
+
         number_of_processes = MPI.Comm_size(MPI.COMM_WORLD)
         global_size = (4 * number_of_processes,)
         process_grid = (number_of_processes,)

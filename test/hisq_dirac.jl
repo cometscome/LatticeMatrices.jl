@@ -101,8 +101,8 @@ function _hisq_test_scaled_unit_link(
 end
 
 function hisq_dirac_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     process_grid = (nprocs, 1, 1, 1)
     # The fused three-hop path needs three local sites in every direction.
     # For an even rank count, an odd local x extent also exercises global eta.

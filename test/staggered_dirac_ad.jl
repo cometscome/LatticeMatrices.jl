@@ -29,7 +29,7 @@ function _staggered_dirac_ad_core(field)
 end
 
 function staggered_dirac_ad_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     # An odd local x extent exercises global staggered signs across MPI ranks.
     global_size = (3 * nprocs, 3, 3, 3)
     process_grid = (nprocs, 1, 1, 1)

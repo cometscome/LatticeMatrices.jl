@@ -217,7 +217,7 @@ function projected_bilinear_slices(
         separation = mod(global_axis_position - origin_tuple[axis], reference.gsize[axis]) + 1
         local_result[separation] += value
     end
-    return MPI.Allreduce(local_result, MPI.SUM, reference.comm)
+    return _allreduce_sum(local_result, reference.comm)
 end
 
 export projected_bilinear_slices

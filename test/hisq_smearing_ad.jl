@@ -26,7 +26,7 @@ function _hisq_smearing_ad_loss(U, left)
 end
 
 function hisq_smearing_ad_tests(NCs=(2, 3))
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     process_grid = (nprocs, 1, 1, 1)
     global_size = (3 * nprocs, 3, 3, 3)
     nw = 1

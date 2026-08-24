@@ -441,7 +441,7 @@ function _domainwall_coefficient_pullback!(
     end
     unused!(prototype.temps, temporary_index)
 
-    global_gradient = MPI.Allreduce(local_gradient, MPI.SUM, prototype.comm)
+    global_gradient = _allreduce_sum(local_gradient, prototype.comm)
     a_host, b_host, c_host = Array(parent.a), Array(parent.b), Array(parent.c)
     @inbounds for s in 1:L5
         base = global_gradient[s]

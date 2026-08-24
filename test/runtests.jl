@@ -1,12 +1,25 @@
 using LatticeMatrices
 using Test
-using MPI
-MPI.Initialized() || MPI.Init()
+
+const LATTICEMATRICES_TEST_MPI = lowercase(get(
+    ENV, "LATTICEMATRICES_TEST_MPI", "true")) in
+    ("1", "true", "yes", "on")
+
+if LATTICEMATRICES_TEST_MPI
+    @eval using MPI
+    MPI.Initialized() || MPI.Init()
+else
+    @assert Base.find_package("MPI") === nothing
+    @assert Base.get_extension(LatticeMatrices, :LatticeMatricesMPIExt) === nothing
+end
+
 import JACC
 using LinearAlgebra
 using InteractiveUtils
 JACC.@init_backend
-using MPI, JACC, StaticArrays
+using JACC, StaticArrays
+
+include("communication_helpers.jl")
 
 const LATTICEMATRICES_EXTENDED_TESTS = lowercase(get(
     ENV, "LATTICEMATRICES_EXTENDED_TESTS", "false")) in
@@ -17,7 +30,8 @@ include("site_rng.jl")
 include("random_fill.jl")
 include("halo_epoch.jl")
 include("device_selection.jl")
-include("mpi_transport.jl")
+LATTICEMATRICES_TEST_MPI && include("mpi_transport.jl")
+include("serial_communicator.jl")
 include("regressions.jl")
 include("projected_bilinear_slices.jl")
 include("domainwall_physical.jl")
@@ -70,14 +84,14 @@ end
 
 function diracoperatortest(NC, dim)
     NX = 16
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    myrank = test_comm_rank()
     gsize = ntuple(_ -> NX, dim)
     #gsize = (NX, NY)
     nw = 1
     NG = 4
 
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     if length(ARGS) == 0
         n1 = nprocs ÷ 2
         if n1 == 0
@@ -201,14 +215,14 @@ end
 
 function operatortest(NC, dim)
     NX = 16
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    myrank = test_comm_rank()
     gsize = ntuple(_ -> NX, dim)
     #gsize = (NX, NY)
     nw = 1
     NG = 4
 
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     if length(ARGS) == 0
         n1 = nprocs ÷ 2
         if n1 == 0
@@ -392,14 +406,14 @@ end
 
 function operatortest2(NC, dim)
     NX = 16
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    myrank = test_comm_rank()
     gsize = ntuple(_ -> NX, dim)
     #gsize = (NX, NY)
     nw = 1
     NG = 4
 
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     if length(ARGS) == 0
         n1 = nprocs ÷ 2
         if n1 == 0
@@ -519,8 +533,8 @@ function operatortest2(NC, dim)
 end
 
 function multtest(NC, dim; NX=16)
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    myrank = test_comm_rank()
     #=
     if dim == 1
         gsize = (NX,)
@@ -538,7 +552,7 @@ function multtest(NC, dim; NX=16)
     #gsize = (NX, NY)
     nw = 1
 
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     if length(ARGS) == 0
         n1 = nprocs ÷ 2
         if n1 == 0
@@ -850,14 +864,14 @@ end
 
 function wilsondiractest(NC; NX=32, repetitions=10)
     dim = 4
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    myrank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    myrank = test_comm_rank()
     gsize = ntuple(_ -> NX, dim)
     #gsize = (NX, NY)
     nw = 1
     NG = 4
 
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     if length(ARGS) == 0
         n1 = nprocs ÷ 2
         if n1 == 0
@@ -975,13 +989,15 @@ function wilsondiractest(NC; NX=32, repetitions=10)
 end
 
 function main()
-    MPI.Initialized() || MPI.Init()
+    if LATTICEMATRICES_TEST_MPI
+        MPI.Initialized() || MPI.Init()
+    end
     site_rng_tests()
     random_fill_tests()
     nw0test()
     halo_epoch_tests()
     device_selection_tests()
-    mpi_transport_tests()
+    LATTICEMATRICES_TEST_MPI && mpi_transport_tests()
     regressiontests()
     matrixexp_su3_tests()
     matrixexp_ta_pullback_tests()

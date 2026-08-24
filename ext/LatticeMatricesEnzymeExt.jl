@@ -4,7 +4,8 @@ using LatticeMatrices
 using Enzyme
 using JACC
 import LatticeMatrices: Wirtinger_derivative!, toann, DiffArg, NoDiffArg, Enzyme_derivative!, fold_halo_to_core_grad!, dSFdU,
-    zero_halo_region!, zero_halo_dim!, fold_halo_dim_to_core_grad!, enzyme_duplicated
+    zero_halo_region!, zero_halo_dim!, fold_halo_dim_to_core_grad!, enzyme_duplicated,
+    _allreduce_max, _allreduce_min, _allreduce_sum, _comm_rank
 
 
 include("./AD/AD.jl")

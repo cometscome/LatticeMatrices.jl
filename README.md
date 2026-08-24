@@ -6,16 +6,20 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.1.6 is the current backward-compatible release in the stable v1 line.
+Version 1.2.0 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 
-Version 1.1.6 adds generic SU(N) normalization for NC > 3; see [CHANGES.md](CHANGES.md) for details.
+Version 1.2.0 makes MPI.jl optional while preserving the existing MPI execution
+paths and performance; see [CHANGES.md](CHANGES.md) for details.
+
+Version 1.1.6 added generic SU(N) normalization for NC > 3.
 
 Version 1.1.5 added selectable host-staged and device-direct MPI transports for CUDA/ROCm-aware MPI.
 
-Existing v1.0 code requires no source changes. See [CHANGES.md](CHANGES.md) for
-the complete v1 release history and upgrade notes.
+Existing serial code requires no source changes. MPI applications must declare
+MPI.jl in their own environment, load it, and initialize MPI explicitly; see
+[CHANGES.md](CHANGES.md) for the complete v1 release history and upgrade notes.
 
 ## Installation
 
@@ -26,6 +30,19 @@ pkg> add LatticeMatrices
 Requirements:
 
 - Julia ≥ 1.11
+
+MPI.jl is optional. Without MPI.jl, a one-process lattice uses the built-in
+`SerialCommunicator`. Add and load MPI.jl only when using an MPI process grid:
+
+```julia
+pkg> add MPI
+
+julia> using LatticeMatrices, MPI
+julia> MPI.Init()
+```
+
+Call `MPI.Init()` before constructing an MPI-backed `LatticeMatrix`.
+LatticeMatrices does not call `MPI.Init()` or `MPI.Finalize()` automatically.
 
 ---
 
@@ -86,14 +103,30 @@ shiftindices(indices, shift)
 
 ---
 
-### 2) Lattice containers (MPI + halos + JACC arrays)
+### 2) Lattice containers (serial/MPI + halos + JACC arrays)
 
-The core container stores a **halo-padded** array on each rank and manages halo exchange without MPI derived datatypes (faces are packed into contiguous buffers).
+The core container stores a **halo-padded** array on each rank. Without MPI.jl,
+`PEs = (1, ..., 1)` selects the MPI-free serial communicator and periodic halos
+are copied locally. When MPI.jl is loaded, the default communicator is
+`MPI.COMM_WORLD`; distributed faces are packed into contiguous buffers without
+MPI derived datatypes.
+
+Serial construction does not require MPI.jl:
+
+```julia
+using LatticeMatrices
+
+dim = 4
+gsize = (16, 16, 16, 16)
+M = LatticeMatrix(3, 3, dim, gsize, (1, 1, 1, 1); nw=1)
+```
+
+For MPI decomposition:
 
 ```julia
 using LatticeMatrices, MPI, JACC, LinearAlgebra
 JACC.@init_backend
-MPI.Init()
+MPI.Init()  # required before constructing an MPI-backed lattice
 
 dim   = 4
 nw    = 1                      # ghost width
@@ -129,14 +162,14 @@ mutable struct HaloEpoch
     halo::UInt64
 end
 
-struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <:
+struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI,C} <:
        LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}
     nw::Int                       # ghost width
     phases::SVector{D,T}          # per-direction phase
     NC1::Int
     NC2::Int
     gsize::NTuple{D,Int}
-    cart::MPI.Comm                # Cartesian communicator
+    cart::C                       # serial or MPI Cartesian communicator
     coords::NTuple{D,Int}         # 0-based Cartesian coordinates
     dims::NTuple{D,Int}           # process grid (PEs)
     nbr::NTuple{D,NTuple{2,Int}}  # neighbors (minus, plus)
@@ -147,7 +180,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <:
     mpi_transport::MPITransportConfig
     myrank::Int
     PN::NTuple{D,Int}             # local interior size per dimension
-    comm::MPI.Comm                # original communicator
+    comm::C                       # original communicator
     indexer::DI                   # DIndexer for global sizes
     temps::PreallocatedArray{AT,Union{Nothing,String},false}
     halo_epoch::HaloEpoch
@@ -162,17 +195,28 @@ and halo epochs so shifted reads can synchronize stale halo data automatically.
 ```julia
 LatticeMatrix(NC1, NC2, dim, gsize, PEs;
               nw=1, elementtype=ComplexF64, phases=ones(dim),
-              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto,
+              comm0=nothing, numtemps=1, device_mapping=:auto,
               mpi_transport=:auto)
 
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
-              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto,
+              comm0=nothing, numtemps=1, device_mapping=:auto,
               mpi_transport=:auto)
 ```
 
 - **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.
 - **Phases**: wrap-around phases per dimension. A positive-direction wrap applies `phase`,
   while a negative-direction wrap applies `inv(phase)`.
+- **Communicator**: `comm0=nothing` selects `MPI.COMM_WORLD` when MPI.jl is
+  loaded, otherwise `SerialCommunicator()`. Pass either communicator explicitly
+  to override the default. In particular, a one-rank MPI process can choose
+  either path explicitly:
+
+  ```julia
+  serial = LatticeMatrix(3, 3, 4, gsize, (1, 1, 1, 1);
+                         comm0=SerialCommunicator())
+  mpi = LatticeMatrix(3, 3, 4, gsize, (1, 1, 1, 1);
+                      comm0=MPI.COMM_WORLD)
+  ```
 - **Exchange**: `set_halo!(ls)` calls `exchange_dim!(ls, d)` for each spatial dimension `d`.
 
 Halo exchange uses receive-before-send nonblocking MPI without a per-direction
@@ -182,6 +226,8 @@ not-yet-exchanged directions send only their core range.
 
 `mpi_transport` selects how accelerator buffers reach MPI:
 
+- a serial lattice resolves to `:local`, because it performs no inter-process
+  transport;
 - `:auto` uses device-direct MPI when both MPI.jl and the selected MPI library
   report support, and otherwise falls back to host staging;
 - `:host_staged` always copies accelerator buffers through host memory;
@@ -1192,10 +1238,10 @@ shiftindices(indices, shift)
 
 # Lattice
 LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64,
-              phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+              phases=ones(dim), comm0=nothing, numtemps=1,
               device_mapping=:auto, mpi_transport=:auto)
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
-              comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto,
+              comm0=nothing, numtemps=1, device_mapping=:auto,
               mpi_transport=:auto)
 mpi_transport_info(ls)
 

@@ -1,10 +1,10 @@
 module LatticeMatrices
-using MPI
 using LinearAlgebra
 using JACC
 #using Enzyme
 
 include("utilities/randomgenerator.jl")
+include("communication.jl")
 
 abstract type AbstractLattice end
 
@@ -440,7 +440,7 @@ function _direct_outgoing_fragments(
         destination_start = ntuple(d -> selected[d].destination_start, D)
         lengths = ntuple(d -> selected[d].length, D)
         destination_coords = ntuple(d -> selected[d].destination_coord, D)
-        destination_rank = MPI.Cart_rank(data.cart, destination_coords)
+        destination_rank = _cart_rank(data.cart, destination_coords)
 
         factor = one(T)
         @inbounds for d in 1:D
@@ -498,7 +498,7 @@ end
 function _direct_shift_plan(
     data::LatticeMatrix{D,T,AT,NC1,NC2}, shift::NTuple{D,Int}
 ) where {D,T,AT,NC1,NC2}
-    nranks = MPI.Comm_size(data.cart)
+    nranks = _comm_size(data.cart)
     colors = NC1 * NC2
     outgoing = _direct_outgoing_fragments(data, data.coords, shift)
     send_fragments, send_counts, send_displacements, send_total =
@@ -506,7 +506,7 @@ function _direct_shift_plan(
 
     incoming = _DirectShiftFragment{D,T}[]
     for source_rank in 0:(nranks-1)
-        source_coords = MPI.Cart_coords(data.cart, source_rank)
+        source_coords = _cart_coords(data.cart, source_rank, Val(D))
         source_fragments = _direct_outgoing_fragments(data, source_coords, shift)
         @inbounds for fragment in source_fragments
             if fragment.peer == data.myrank
@@ -652,19 +652,17 @@ function _exchange_direct_shift!(receive, send, data::LatticeMatrix, plan::_Dire
     if _uses_direct_mpi(data.mpi_transport)
         send_buffer = reshape(send, :)
         receive_buffer = reshape(receive, :)
-        MPI.Alltoallv!(
-            MPI.VBuffer(send_buffer, plan.send_counts, plan.send_displacements),
-            MPI.VBuffer(receive_buffer, plan.recv_counts, plan.recv_displacements),
-            data.cart,
+        _alltoallv!(
+            receive_buffer, send_buffer, plan.send_counts, plan.recv_counts,
+            plan.send_displacements, plan.recv_displacements, data.cart,
         )
     else
         buffers = _ensure_direct_shift_host_buffers!(
             data.shift_buf_host, plan.element_count, data.A)
         copyto!(buffers.send, 1, send, 1, plan.element_count)
-        MPI.Alltoallv!(
-            MPI.VBuffer(buffers.send, plan.send_counts, plan.send_displacements),
-            MPI.VBuffer(buffers.recv, plan.recv_counts, plan.recv_displacements),
-            data.cart,
+        _alltoallv!(
+            buffers.recv, buffers.send, plan.send_counts, plan.recv_counts,
+            plan.send_displacements, plan.recv_displacements, data.cart,
         )
         copyto!(receive, 1, buffers.recv, 1, plan.element_count)
     end
@@ -698,7 +696,7 @@ function _materialize_direct_shift(data::LatticeMatrix{D}, shift::NTuple{D,Int})
     receive_lease = nothing
     try
         result = _lattice_alias_with_array(data, result_array)
-        if MPI.Comm_size(data.cart) == 1
+        if _comm_size(data.cart) == 1
             _direct_shift_local!(result, data, shift)
         else
             receive_array, receive_index = get_block(data.temps)
@@ -727,7 +725,7 @@ function _materialize_direct_shift_reusing_source(
     result_lease = _new_shift_lease(data.temps, result_index)
     try
         result = _lattice_alias_with_array(data, result_array)
-        if MPI.Comm_size(data.cart) == 1
+        if _comm_size(data.cart) == 1
             _direct_shift_local!(result, data, shift)
         else
             plan = _direct_shift_plan(data, shift)
@@ -795,10 +793,10 @@ function _shift_one_dimension_host!(destination, source, data, d, direction)
         copyto!(receive_buffer, send_buffer)
     else
         tag = 1200 + 2d + ifelse(direction > 0, 0, 1)
-        requests = MPI.Request[]
-        push!(requests, MPI.Irecv!(receive_buffer, receive_rank, tag, data.cart))
-        push!(requests, MPI.Isend(send_buffer, send_rank, tag, data.cart))
-        MPI.Waitall!(requests)
+        requests = _request_vector(data.cart)
+        push!(requests, _irecv!(receive_buffer, receive_rank, tag, data.cart))
+        push!(requests, _isend(send_buffer, send_rank, tag, data.cart))
+        _waitall!(requests)
     end
 
     if crosses_global_boundary
@@ -837,7 +835,7 @@ function _materialize_periodic_shift(data::TL, shift::NTuple{D,Int}) where {
 }
     all(iszero, shift) && return data
 
-    if MPI.Comm_size(data.cart) > 1
+    if _comm_size(data.cart) > 1
         return _materialize_periodic_shift_mpi(data, shift)
     end
 
@@ -862,7 +860,7 @@ end
     D,T,AT,NC1,NC2,DI,
     TL<:LatticeMatrix{D,T,AT,NC1,NC2,0,DI}
 }
-    MPI.Comm_size(data.cart) == 1 || throw(ArgumentError(
+    _comm_size(data.cart) == 1 || throw(ArgumentError(
         "lazy nw=0 shifts are only available on a single MPI rank"))
     shift = _as_shift_tuple(shift_in, Val(D))
     return _LazyShifted_Lattice{typeof(data),D}(data, shift)
@@ -1021,7 +1019,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
         prod(C.PN), +, kernelfunction, C.A, variables..., Val(NC1), Val(NG), Val(nw), C.indexer
         ; init=zero(eltype(C.A))
     )
-    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+    s = _allreduce_sum(s, C.comm)
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}) where {D,T1,AT1,NC1,NG,nw,DI}
@@ -1035,7 +1033,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
         prod(C.PN), +, kernelfunction, C.A, Val(NC1), Val(NG), Val(nw), C.indexer
         ; init=zero(eltype(C.A))
     )
-    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+    s = _allreduce_sum(s, C.comm)
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, A::Lattice{D,T2,AT2,NC2,NG2,nw2}, variables...) where {D,T1,AT1,NC1,NG,nw,DI,
@@ -1054,7 +1052,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
         prod(C.PN), +, kernelfunction, C.A, a, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), C.indexer
         ; init=zero(eltype(C.A))
     )
-    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+    s = _allreduce_sum(s, C.comm)
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, A::Lattice{D,T2,AT2,NC2,NG2,nw2}) where {D,T1,AT1,NC1,NG,nw,DI,
@@ -1073,7 +1071,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
         prod(C.PN), kernelfunction, C.A, a, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), C.indexer
         ; init=zero(eltype(C.A)), op=+
     )
-    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+    s = _allreduce_sum(s, C.comm)
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, A::Lattice{D,T2,AT2,NC2,NG2,nw2},
@@ -1099,7 +1097,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
         prod(C.PN), kernelfunction, C.A, a, b, variables..., Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
         ; init=zero(eltype(C.A)), op=+
     )
-    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+    s = _allreduce_sum(s, C.comm)
 end
 
 function JACC.parallel_for(kernelfunction::Function, C::LatticeMatrix{D,T1,AT1,NC1,NG,nw,DI}, A::Lattice{D,T2,AT2,NC2,NG2,nw2},
@@ -1125,7 +1123,7 @@ function JACC.parallel_reduce(kernelfunction::Function, C::LatticeMatrix{D,T1,AT
         prod(C.PN), kernelfunction, C.A, a, b, Val(NC1), Val(NG), Val(nw), Val(NC2), Val(NG2), Val(nw2), Val(NC3), Val(NG3), Val(nw3), C.indexer
         ; init=zero(eltype(C.A)), op=+
     )
-    s = MPI.Allreduce(s, MPI.SUM, C.comm)
+    s = _allreduce_sum(s, C.comm)
 end
 
 

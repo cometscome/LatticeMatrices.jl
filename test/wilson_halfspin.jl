@@ -42,8 +42,8 @@ function _wilson_halfspin_reference(
 end
 
 function _wilson_halfspin_check_precision(::Type{T}) where T
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     lattice_size = (2 * nprocs, 2, 2, 2)
     process_grid = (nprocs, 1, 1, 1)
     phases = (1, 1, 1, -1)

@@ -4,7 +4,6 @@ import LatticeMatrices: add_matrix!, add_matrix_Adag!, add_matrix_shiftedA!, add
     mul_ABdag!, mul_A_shiftBdag!, mul_AshiftB!, mul_shiftAshiftB!, substitute!, AbstractLattice, expt_TA!, clear_matrix!, set_halo!,
     fold_halo_dim_to_core_grad!, Staggered_Lattice, staggered_eta_halo
 using PreallocatedArrays
-using MPI
 
 const ER = Enzyme.EnzymeRules
 
@@ -3341,7 +3340,7 @@ function ER.reverse(cfg::ER.RevConfig,
             C.val.indexer, Val(C.val.NC1), Val(C.val.nw);
             init=init, op=+
         )
-        dt = MPI.Allreduce(dt_local, MPI.SUM, C.val.comm)
+        dt = _allreduce_sum(dt_local, C.val.comm)
     end
 
     if C.val.NC1 == 2 && C.val.NC2 == 2
@@ -3429,7 +3428,7 @@ function ER.reverse(cfg::ER.RevConfig,
             C.val.indexer, Val(C.val.NC1), Val(C.val.nw);
             init=init, op=+
         )
-        dt = MPI.Allreduce(dt_local, MPI.SUM, C.val.comm)
+        dt = _allreduce_sum(dt_local, C.val.comm)
     end
 
     if C.val.NC1 == 2 && C.val.NC2 == 2

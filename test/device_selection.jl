@@ -21,7 +21,7 @@ function device_selection_tests()
             @test selection.device_ordinal === nothing
         end
 
-        nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+        nprocs = test_comm_size()
         lattice = LatticeMatrix(
             1, 1, 1, (2 * nprocs,), (nprocs,);
             device_mapping=:current,

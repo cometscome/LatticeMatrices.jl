@@ -147,8 +147,8 @@ function _staggered_test_fingerprint(field)
 end
 
 function staggered_dirac_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
+    rank = test_comm_rank()
     process_grid = (nprocs, 1, 1, 1)
     # With an even number of ranks the local x extent is deliberately odd.
     # Single-rank and odd-rank runs keep the global lattice bipartite so that

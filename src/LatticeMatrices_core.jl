@@ -11,7 +11,7 @@
 #  Back-end: CPU threads / CUDA / ROCm via JACC.
 ##############################################################################
 
-using MPI, StaticArrays, JACC
+using StaticArrays, JACC
 using PreallocatedArrays
 
 abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} end
@@ -37,6 +37,7 @@ DirectShiftHostBuffers(::Type{T}) where {T} =
 @inline _prepare_mpi_host_buffer(::Any, buffer::Array) = buffer
 
 @enum _MPITransportRoute::UInt8 begin
+    _LOCAL
     _MPI_HOST_DIRECT
     _MPI_HOST_STAGED
     _MPI_DEVICE_DIRECT
@@ -54,13 +55,15 @@ end
 @inline _mpi_device_kind(::Any) = Symbol(JACC.backend)
 
 @inline function _mpi_transport_symbol(route::_MPITransportRoute)
+    route === _LOCAL && return :local
     route === _MPI_HOST_DIRECT && return :host_direct
     route === _MPI_HOST_STAGED && return :host_staged
     return :device_direct
 end
 
 @inline _uses_direct_mpi(config::MPITransportConfig) =
-    config.resolved !== _MPI_HOST_STAGED
+    config.resolved === _MPI_HOST_DIRECT ||
+    config.resolved === _MPI_DEVICE_DIRECT
 
 function _validate_mpi_transport(mpi_transport)
     mpi_transport isa Symbol || throw(ArgumentError(
@@ -78,22 +81,30 @@ end
     return Int32(3)
 end
 
-function _resolve_mpi_transport(mpi_transport, array, comm::MPI.Comm)
+function _resolve_mpi_transport(mpi_transport, array, comm)
     requested = _validate_mpi_transport(mpi_transport)
+    backend = Symbol(JACC.backend)
+
+    if !_is_mpi_communicator(comm)
+        requested === :device_direct && throw(ArgumentError(
+            "mpi_transport=:device_direct requires an MPI communicator; " *
+            "the serial communicator performs no inter-process transport"))
+        return MPITransportConfig(
+            requested, _LOCAL, backend, :serial_communicator)
+    end
 
     # Construction is already collective because it creates a Cartesian
     # communicator. Detect a mismatched command-line/configuration choice here
     # instead of letting ranks enter different communication paths later.
     code = _mpi_transport_code(requested)
-    minimum_code = MPI.Allreduce(code, MPI.MIN, comm)
-    maximum_code = MPI.Allreduce(code, MPI.MAX, comm)
+    minimum_code = _allreduce_min(code, comm)
+    maximum_code = _allreduce_max(code, comm)
     minimum_code == maximum_code || throw(ArgumentError(
         "all MPI ranks must use the same mpi_transport setting"))
 
-    backend = Symbol(JACC.backend)
     local_host = array isa Array
-    all_host = MPI.Allreduce(local_host ? Int32(1) : Int32(0), MPI.MIN, comm) == 1
-    any_host = MPI.Allreduce(local_host ? Int32(1) : Int32(0), MPI.MAX, comm) == 1
+    all_host = _allreduce_min(local_host ? Int32(1) : Int32(0), comm) == 1
+    any_host = _allreduce_max(local_host ? Int32(1) : Int32(0), comm) == 1
     if all_host
         requested === :device_direct && throw(ArgumentError(
             "mpi_transport=:device_direct requires accelerator arrays; " *
@@ -111,10 +122,10 @@ function _resolve_mpi_transport(mpi_transport, array, comm::MPI.Comm)
     local_buffer_supported = _mpi_device_buffer_supported(array)
     local_runtime_available = local_buffer_supported &&
         _mpi_device_aware_available(array)
-    all_buffer_supported = MPI.Allreduce(
-        local_buffer_supported ? Int32(1) : Int32(0), MPI.MIN, comm) == 1
-    all_runtime_available = MPI.Allreduce(
-        local_runtime_available ? Int32(1) : Int32(0), MPI.MIN, comm) == 1
+    all_buffer_supported = _allreduce_min(
+        local_buffer_supported ? Int32(1) : Int32(0), comm) == 1
+    all_runtime_available = _allreduce_min(
+        local_runtime_available ? Int32(1) : Int32(0), comm) == 1
 
     if requested === :device_direct
         all_buffer_supported || throw(ArgumentError(
@@ -122,7 +133,7 @@ function _resolve_mpi_transport(mpi_transport, array, comm::MPI.Comm)
             "array type; use mpi_transport=:host_staged"))
         all_runtime_available || throw(ArgumentError(
             "mpi_transport=:device_direct was requested for " *
-            "$(_mpi_device_kind(array)), but $(MPI.MPI_LIBRARY) did not report " *
+            "$(_mpi_device_kind(array)), but $(_mpi_library_info(comm).library) did not report " *
             "device-aware support; configure a matching GPU-aware system MPI " *
             "or use mpi_transport=:host_staged"))
         return MPITransportConfig(
@@ -156,14 +167,14 @@ function _ensure_direct_shift_host_buffers!(
 end
 
 #struct LatticeMatrix{D,T,AT,NC1,NC2,nw} <: Lattice{D,T,AT}
-struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
+struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI,C} <: LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} #Lattice{D,T,AT,NC1,NC2,nw}
     nw::Int                          # ghost width
     phases::SVector{D,T}                 # phases
     NC1::Int
     NC2::Int                        # internal DoF
     gsize::NTuple{D,Int}                # global size
 
-    cart::MPI.Comm
+    cart::C
     coords::NTuple{D,Int}
     dims::NTuple{D,Int}
     nbr::NTuple{D,NTuple{2,Int}}
@@ -176,7 +187,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI} <: LatticeMatrix{D,T,AT,NC1,
 
     myrank::Int
     PN::NTuple{D,Int}
-    comm::MPI.Comm
+    comm::C
     indexer::DI
     temps::PreallocatedArray{AT,Union{Nothing,String},false}
     halo_epoch::HaloEpoch
@@ -235,7 +246,7 @@ function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_stan
             _prepare_mpi_host_buffer(tA, host_buffer)
     end
 
-    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(ls.nw,
+    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI,typeof(ls.cart)}(ls.nw,
         ls.phases,
         ls.NC1,
         ls.NC2,
@@ -267,7 +278,7 @@ end
     shift_buf_host=ls.shift_buf_host,
 ) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
     phase_vector = phases isa typeof(ls.phases) ? phases : typeof(ls.phases)(phases)
-    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}(
+    return LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI,typeof(ls.cart)}(
         ls.nw,
         phase_vector,
         ls.NC1,
@@ -295,12 +306,12 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
-    comm0=MPI.COMM_WORLD, numtemps=1, device_mapping=:auto, mpi_transport=:auto)
+    comm0=nothing, numtemps=1, device_mapping=:auto, mpi_transport=:auto)
     return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs;
         nw, elementtype, phases, comm0, numtemps, device_mapping, mpi_transport)
 end
 
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=1,
     device_mapping=:auto, mpi_transport=:auto)
     return LatticeMatrix_standard(A, dim, PEs;
         nw, phases, comm0, numtemps, device_mapping, mpi_transport)
@@ -309,7 +320,7 @@ end
 # ---------------------------------------------------------------------------
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
-function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=MPI.COMM_WORLD,
+function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=nothing,
     numtemps=1, device_mapping=:auto, mpi_transport=:auto)
 
     nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
@@ -332,7 +343,10 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
         iszero(gsize[d] % dims[d]) || throw(ArgumentError(
             "global size $(gsize[d]) in dimension $d is not divisible by process-grid size $(dims[d])"))
     end
-    comm_size = MPI.Comm_size(comm0)
+    comm0 = _resolve_communicator(comm0)
+    _communicator_ready(comm0) || throw(ArgumentError(
+        "MPI must be initialized and not finalized before constructing an MPI lattice"))
+    comm_size = _comm_size(comm0)
     prod(dims) == comm_size || throw(ArgumentError(
         "process grid $dims contains $(prod(dims)) ranks, but communicator contains $comm_size"))
     PN = ntuple(i -> gsize[i] ÷ dims[i], dim)
@@ -350,12 +364,13 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     periodic = ntuple(_ -> true, D)
     #println(dims)
     #println(periodic)
-    cart = MPI.Cart_create(comm0, dims; periodic=periodic)
-    coords = MPI.Cart_coords(cart, MPI.Comm_rank(cart))
+    cart = _cart_create(comm0, dims; periodic=periodic)
+    coords = _cart_coords(cart, _comm_rank(cart), Val(D))
 
     #comm  = MPI.Cart_create(MPI.COMM_WORLD, dims; periods=ntuple(_->true,D))
     #coords= MPI.Cart_coords(cart, MPI.Comm_rank(cart))
-    nbr = ntuple(d -> ntuple(s -> MPI.Cart_shift(cart, d - 1, ifelse(s == 1, -1, 1))[2], 2), D)
+    nbr = ntuple(d -> ntuple(
+        s -> _cart_shift(cart, d - 1, ifelse(s == 1, -1, 1))[2], 2), D)
     # local array (NC first)
     #println(gsize)
     locS = ntuple(i -> gsize[i] ÷ dims[i] + 2nw, D)
@@ -365,10 +380,14 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #stride = ntuple(i -> (i == 1 ? 1 : prod(locS[1:i-1])), D)
 
     # contiguous buffers for each face
-    nbuf = iszero(nw) ? 0 : 4D
+    # A one-process lattice always updates halos by local periodic copies, so
+    # the packed MPI face buffers would never be used. Avoid allocating them,
+    # especially on accelerators where they otherwise consume device and host
+    # memory for every field.
+    nbuf = iszero(nw) || comm_size == 1 ? 0 : 4D
     buf = Vector{typeof(A)}(undef, nbuf)
     buf_host = Vector{Array{elementtype}}(undef, nbuf)
-    if !iszero(nw)
+    if !iszero(nbuf)
         for d in 1:D
             shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
             buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
@@ -395,14 +414,14 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
     #    cart, Tuple(coords), dims, nbr,
     #    A, buf, MPI.Comm_rank(cart), PN, comm0)
-    return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI}(nw, phases, NC1, NC2, gsize,
+    return LatticeMatrix_standard{D,T,typeof(A),NC1,NC2,nw,DI,typeof(cart)}(nw, phases, NC1, NC2, gsize,
         cart, Tuple(coords), dims, nbr,
         A, buf, buf_host, DirectShiftHostBuffers(T), mpi_transport_config,
-        MPI.Comm_rank(cart), PN, comm0,
+        _comm_rank(cart), PN, comm0,
         indexer, temps, HaloEpoch())
 end
 
-function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.COMM_WORLD, numtemps=1,
+function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=1,
     device_mapping=:auto, mpi_transport=:auto)
 
     NC1, NC2, NN... = size(A)
@@ -419,7 +438,7 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
 
     ls = LatticeMatrix(NC1, NC2, dim, gsize, PEs;
         elementtype, nw, phases, comm0, numtemps, device_mapping, mpi_transport)
-    MPI.Bcast!(A, ls.cart)
+    _broadcast!(A, 0, ls.cart)
     Acpu = Array(ls.A)
 
     idx = ntuple(i -> (i == 1 || i == 2) ? Colon() : (ls.nw+1):(size(ls.A, i)-ls.nw), dim .+ 2)
@@ -430,11 +449,11 @@ function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=MPI.C
 
     #println(idx)
     #=
-    for i = 1:MPI.Comm_size(ls.cart)
+    for i = 1:_comm_size(ls.cart)
         if ls.myrank == i
             println(get_globalrange(ls, 1))
         end
-        MPI.Barrier(ls.cart)
+        _barrier(ls.cart)
     end
     =#
 
@@ -470,18 +489,21 @@ end
     mpi_transport_info(lattice)
 
 Report the requested and resolved MPI communication transport for `lattice`.
-`resolved` is one of `:host_direct`, `:host_staged`, or `:device_direct`.
+`resolved` is one of `:local`, `:host_direct`, `:host_staged`, or
+`:device_direct`. `:local` means that the lattice uses `SerialCommunicator` and
+there is no inter-process transport.
 """
 function mpi_transport_info(ls::LatticeMatrix)
     config = ls.mpi_transport
+    library_info = _mpi_library_info(ls.comm)
     return (
         requested=config.requested,
         resolved=_mpi_transport_symbol(config.resolved),
         backend=config.backend,
         device_aware=config.resolved === _MPI_DEVICE_DIRECT,
         reason=config.reason,
-        mpi_library=MPI.MPI_LIBRARY,
-        mpi_library_version=MPI.MPI_LIBRARY_VERSION,
+        mpi_library=library_info.library,
+        mpi_library_version=library_info.version,
     )
 end
 
@@ -492,7 +514,7 @@ export mpi_transport_info
 function Base.display(ls::TL) where {T,AT,NC1,NC2,TL<:LatticeMatrix{4,T,AT,NC1,NC2}}
 
     NN = size(ls.A)
-    for rank = 0:MPI.Comm_size(ls.cart)-1
+    for rank = 0:_comm_size(ls.cart)-1
         if ls.myrank == rank
             println("LatticeMatrix (rank $rank):")
             indices = map(d -> get_globalrange(ls, d), 1:4)
@@ -511,7 +533,7 @@ function Base.display(ls::TL) where {T,AT,NC1,NC2,TL<:LatticeMatrix{4,T,AT,NC1,N
             end
             #display(ls.A[:, :, ls.nw+1:end-ls.nw, ls.nw+1:end-ls.nw, ls.nw+1:end-ls.nw, ls.nw+1:end-ls.nw])
         end
-        MPI.Barrier(ls.cart)
+        _barrier(ls.cart)
     end
 end
 
@@ -524,14 +546,14 @@ function allsum(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     local_sum = sum(ls.A[indices...])
     #local_sum = sum(ls.A[:, :, ls.nw+1:ls.nw+NN[1], ls.nw+1:ls.nw+NN[2], ls.nw+1:ls.nw+NN[3], ls.nw+1:ls.nw+NN[4]])
     # reduce to all processes
-    global_sum = MPI.Reduce(local_sum, MPI.SUM, 0, ls.cart)
+    global_sum = _reduce_sum(local_sum, 0, ls.cart)
     return global_sum
 end
 
 export allsum
 
-function get_globalrange(ls::TL, dim) where {TL<:LatticeMatrix}
-    coords_r = MPI.Cart_coords(ls.cart, ls.myrank)
+function get_globalrange(ls::TL, dim) where {D,TL<:LatticeMatrix{D}}
+    coords_r = _cart_coords(ls.cart, ls.myrank, Val(D))
     istart = get_globalindex(ls, 1, dim, coords_r[dim])
     #if dim == 1
     #    println(" $( ls.PN[dim])")
@@ -554,7 +576,7 @@ end
 
 Base.@noinline function set_halo!(ls::TL) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
     # Single-process lattices do not need MPI communication. Keep halo updates local.
-    if MPI.Comm_size(ls.cart) == 1
+    if _comm_size(ls.cart) == 1
         for id = 1:D
             exchange_dim_local!(ls, id)
         end
@@ -748,7 +770,7 @@ function _post_packed_halo_exchange!(
 )
     rankM, rankP = ls.nbr[d]
     me = ls.myrank
-    requests = MPI.Request[]
+    requests = _request_vector(ls.cart)
 
     # Packing kernels and phase multiplication may be asynchronous. MPI is not
     # assumed to understand JACC streams, so make the send buffers visible
@@ -756,26 +778,26 @@ function _post_packed_halo_exchange!(
     JACC.synchronize()
 
     if _uses_direct_mpi(ls.mpi_transport)
-        rankM != me && push!(requests, MPI.Irecv!(
+        rankM != me && push!(requests, _irecv!(
             device_buffers.recv_minus, rankM, tags.recv_minus, ls.cart))
-        rankP != me && push!(requests, MPI.Irecv!(
+        rankP != me && push!(requests, _irecv!(
             device_buffers.recv_plus, rankP, tags.recv_plus, ls.cart))
-        rankM != me && push!(requests, MPI.Isend(
+        rankM != me && push!(requests, _isend(
             device_buffers.send_minus, rankM, tags.send_minus, ls.cart))
-        rankP != me && push!(requests, MPI.Isend(
+        rankP != me && push!(requests, _isend(
             device_buffers.send_plus, rankP, tags.send_plus, ls.cart))
     else
-        rankM != me && push!(requests, MPI.Irecv!(
+        rankM != me && push!(requests, _irecv!(
             host_buffers.recv_minus, rankM, tags.recv_minus, ls.cart))
-        rankP != me && push!(requests, MPI.Irecv!(
+        rankP != me && push!(requests, _irecv!(
             host_buffers.recv_plus, rankP, tags.recv_plus, ls.cart))
         rankM != me && _copy_active_mpi_buffer!(
             host_buffers.send_minus, device_buffers.send_minus)
         rankP != me && _copy_active_mpi_buffer!(
             host_buffers.send_plus, device_buffers.send_plus)
-        rankM != me && push!(requests, MPI.Isend(
+        rankM != me && push!(requests, _isend(
             host_buffers.send_minus, rankM, tags.send_minus, ls.cart))
-        rankP != me && push!(requests, MPI.Isend(
+        rankP != me && push!(requests, _isend(
             host_buffers.send_plus, rankP, tags.send_plus, ls.cart))
     end
     return requests
@@ -788,7 +810,7 @@ function _finish_packed_halo_exchange!(
     device_buffers,
     host_buffers,
 )
-    isempty(requests) || MPI.Waitall!(requests)
+    isempty(requests) || _waitall!(requests)
     _uses_direct_mpi(ls.mpi_transport) && return nothing
 
     rankM, rankP = ls.nbr[d]
@@ -831,6 +853,17 @@ function _exchange_packed_halo_buffers!(
 end
 
 function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
+    rankM, rankP = ls.nbr[d]                     # neighbour ranks
+    me = ls.myrank
+
+    # --- self-neighbor on BOTH sides (happens iff dims[d] == 1) -------------
+    # Check this before indexing communication buffers: one-process lattices
+    # deliberately do not allocate those unused buffers.
+    if rankM == me && rankP == me
+        exchange_dim_local!(ls, d)
+        return
+    end
+
     # buffer indices
     iSM, iRM = 4d - 3, 4d - 2
     iSP, iRP = 4d - 1, 4d
@@ -839,15 +872,6 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]      # plus  side: send / recv
     bufSM_host, bufRM_host = ls.buf_host[iSM], ls.buf_host[iRM]      # minus side: send / recv
     bufSP_host, bufRP_host = ls.buf_host[iSP], ls.buf_host[iRP]      # plus  side: send / recv
-
-    rankM, rankP = ls.nbr[d]                     # neighbour ranks
-    me = ls.myrank
-
-    # --- self-neighbor on BOTH sides (happens iff dims[d] == 1) -------------
-    if rankM == me && rankP == me
-        exchange_dim_local!(ls, d)
-        return
-    end
 
     gminus = _exchange_ghost_matrix(ls, d, :minus)
     gplus = _exchange_ghost_matrix(ls, d, :plus)
@@ -937,7 +961,7 @@ function gather_matrix(ls::TL;
     root::Int=0) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     comm = ls.cart
     me = ls.myrank
-    nprocs = MPI.Comm_size(comm)
+    nprocs = _comm_size(comm)
 
     # 1) Build view of the interior block (without halos)
     #    Spatial dims are shifted by +2 because array layout = (NC1, NC2, X, Y, Z, ...)
@@ -978,8 +1002,8 @@ function gather_matrix(ls::TL;
         recvbuf = similar(sendbuf)  # reuse buffer
         for r in 0:nprocs-1
             r == root && continue
-            MPI.Recv!(recvbuf, r, tag, comm)
-            coords_r = Tuple(MPI.Cart_coords(comm, r))  # 0-based coords
+            _recv!(recvbuf, r, tag, comm)
+            coords_r = _cart_coords(comm, r, Val(D))  # 0-based coords
             blk = reshape(recvbuf, size(local_block_cpu))
             _place_block!(G, blk, coords_r)
         end
@@ -987,7 +1011,7 @@ function gather_matrix(ls::TL;
     else
         # Non-root: send and return nothing
         tag = 900
-        MPI.Send(sendbuf, root, tag, comm)
+        _send(sendbuf, root, tag, comm)
         return nothing
     end
 end
@@ -1009,7 +1033,7 @@ function gather_and_bcast_matrix(ls::TL;
     root::Int=0) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     comm = ls.cart
     me = ls.myrank
-    nprocs = MPI.Comm_size(comm)
+    nprocs = _comm_size(comm)
 
     # --- 1) local interior (no halo) on HOST ---
     interior_idx = ntuple(i -> (i <= 2 ? Colon() : (ls.nw+1):(ls.nw+ls.PN[i-2])), D + 2)
@@ -1042,14 +1066,14 @@ function gather_and_bcast_matrix(ls::TL;
         recvbuf = similar(sendbuf)
         for r in 0:nprocs-1
             r == root && continue
-            MPI.Recv!(recvbuf, r, 900, comm)
-            coords_r = Tuple(MPI.Cart_coords(comm, r))
+            _recv!(recvbuf, r, 900, comm)
+            coords_r = _cart_coords(comm, r, Val(D))
             blk = reshape(recvbuf, size(local_block_cpu))
             _place_block!(G, blk, coords_r)
         end
     else
         # non-root: send local block
-        MPI.Send(sendbuf, root, 900, comm)
+        _send(sendbuf, root, 900, comm)
     end
 
     # --- 3) broadcast ONLY the data (shape is deterministic) ---
@@ -1057,7 +1081,7 @@ function gather_and_bcast_matrix(ls::TL;
     if me != root
         G = Array{T}(undef, gshape)          # allocate receive buffer
     end
-    MPI.Bcast!(G, root, comm)                # broadcast the global array
+    _broadcast!(G, root, comm)                # broadcast the global array
 
     return G
 end

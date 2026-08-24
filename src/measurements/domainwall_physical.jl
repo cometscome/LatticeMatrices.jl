@@ -289,7 +289,7 @@ function domainwall_projected_bilinear_slices(
         separation = mod(global_axis_position - origin_tuple[axis], physical_gsize[axis]) + 1
         local_result[separation] += value
     end
-    return MPI.Allreduce(local_result, MPI.SUM, reference.comm)
+    return _allreduce_sum(local_result, reference.comm)
 end
 
 export domainwall_import_physical_source!, domainwall_export_physical_solution!

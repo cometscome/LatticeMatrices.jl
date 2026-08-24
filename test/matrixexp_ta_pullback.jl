@@ -61,7 +61,7 @@ function _check_exp_ta_pullback_case(
 end
 
 function matrixexp_ta_pullback_tests()
-    nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+    nprocs = test_comm_size()
     global_size = (2 * nprocs, 2)
     process_grid = (nprocs, 1)
 

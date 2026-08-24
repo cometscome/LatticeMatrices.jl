@@ -12,7 +12,7 @@ function enzymetests()
         @test Base.get_extension(LatticeMatrices, :LatticeMatricesEnzymeExt) !== nothing
 
         @testset "rejects nw=0" begin
-            nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+            nprocs = test_comm_size()
             global_size = (4 * nprocs,)
             process_grid = (nprocs,)
             values = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)

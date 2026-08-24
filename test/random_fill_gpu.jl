@@ -7,6 +7,7 @@ using Test
 
 MPI.Initialized() || MPI.Init()
 
+include("communication_helpers.jl")
 include("random_fill.jl")
 
 @testset "global-site random fills on accelerator" begin

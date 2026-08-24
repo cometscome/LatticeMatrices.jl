@@ -10,6 +10,7 @@ initialized_here = !MPI.Initialized()
 initialized_here && MPI.Init()
 
 try
+    include("communication_helpers.jl")
     include("halo_epoch.jl")
     include("device_selection.jl")
     halo_epoch_tests()

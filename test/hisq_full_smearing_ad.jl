@@ -1,12 +1,14 @@
-function _hisq_projection_ad_values(global_size, offset; identity_shift=0.0)
-    count = 9 * prod(global_size)
-    values = reshape(Float64.(1:count), 3, 3, global_size...)
+function _hisq_projection_ad_values(
+    ::Val{NC}, global_size, offset; identity_shift=0.0,
+) where NC
+    count = NC * NC * prod(global_size)
+    values = reshape(Float64.(1:count), NC, NC, global_size...)
     output = complex.(
         sin.((values .+ offset) ./ 11) ./ 5,
         cos.((2values .+ offset) ./ 13) ./ 7,
     )
     if !iszero(identity_shift)
-        for site_index in CartesianIndices(global_size), color in 1:3
+        for site_index in CartesianIndices(global_size), color in 1:NC
             output[color, color, Tuple(site_index)...] += identity_shift
         end
     end
@@ -94,19 +96,19 @@ function hisq_full_smearing_ad_tests()
     input = [
         LatticeMatrix(
             _hisq_projection_ad_values(
-                global_size, 7mu; identity_shift=1.25),
+                Val(3), global_size, 7mu; identity_shift=1.25),
             4, process_grid; nw,
         ) for mu in 1:4
     ]
     direction = [
         LatticeMatrix(
-            _hisq_projection_ad_values(global_size, 37 + 5mu),
+            _hisq_projection_ad_values(Val(3), global_size, 37 + 5mu),
             4, process_grid; nw,
         ) for mu in 1:4
     ]
     left = [
         LatticeMatrix(
-            _hisq_projection_ad_values(global_size, 71 + 11mu),
+            _hisq_projection_ad_values(Val(3), global_size, 71 + 11mu),
             4, process_grid; nw,
         ) for mu in 1:4
     ]
@@ -149,6 +151,69 @@ function hisq_full_smearing_ad_tests()
             enzyme_directional, finite_difference;
             atol=5e-6, rtol=5e-7)
         @test all(link -> all(iszero, link.A), doutput)
+    end
+
+    @testset "HISQ generic U(N) projection Enzyme pullback" begin
+        for NC in (2, 4)
+            generic_input = [
+                LatticeMatrix(
+                    _hisq_projection_ad_values(
+                        Val(NC), global_size, 13mu; identity_shift=1.25),
+                    4, process_grid; nw,
+                ) for mu in 1:4
+            ]
+            generic_direction = [
+                LatticeMatrix(
+                    _hisq_projection_ad_values(
+                        Val(NC), global_size, 43 + 7mu),
+                    4, process_grid; nw,
+                ) for mu in 1:4
+            ]
+            generic_left = [
+                LatticeMatrix(
+                    _hisq_projection_ad_values(
+                        Val(NC), global_size, 83 + 11mu),
+                    4, process_grid; nw,
+                ) for mu in 1:4
+            ]
+            set_halo!.(generic_input)
+            set_halo!.(generic_direction)
+            set_halo!.(generic_left)
+            generic_dinput = [similar(link) for link in generic_input]
+            generic_output = [similar(link) for link in generic_input]
+            generic_doutput = [similar(link) for link in generic_input]
+            clear_matrix!.(generic_dinput)
+            clear_matrix!.(generic_output)
+            clear_matrix!.(generic_doutput)
+
+            Enzyme.autodiff(
+                Enzyme.Reverse,
+                Enzyme.Const(_hisq_projection_ad_loss_from_links),
+                Enzyme.Active,
+                enzyme_duplicated(generic_input, generic_dinput),
+                enzyme_duplicated(generic_output, generic_doutput),
+                Enzyme.Const(Tuple(generic_left)),
+            )
+
+            epsilon = 1e-6
+            input_plus = deepcopy(generic_input)
+            input_minus = deepcopy(generic_input)
+            for mu in 1:4
+                add_matrix!(input_plus[mu], generic_direction[mu], epsilon)
+                add_matrix!(input_minus[mu], generic_direction[mu], -epsilon)
+            end
+            finite_difference = (
+                _hisq_projection_ad_loss(input_plus, generic_left) -
+                _hisq_projection_ad_loss(input_minus, generic_left)
+            ) / (2epsilon)
+            enzyme_directional = real(sum(
+                dot(generic_dinput[mu], generic_direction[mu])
+                for mu in 1:4))
+            @test isapprox(
+                enzyme_directional, finite_difference;
+                atol=8e-6, rtol=8e-7)
+            @test all(link -> all(iszero, link.A), generic_doutput)
+        end
     end
 
 
@@ -247,6 +312,61 @@ function hisq_full_smearing_ad_tests()
         @test all(link -> all(iszero, link.A), dlevel2_output)
     end
 
+    @testset "factorized U(N) Fat7 pullback matches direct paths" begin
+        pullback_size = (3 * nprocs, 3, 3, 3)
+        coefficients = (1.0 - 0.071 / 8, 1 / 16, 1 / 64, 1 / 384, -1 / 8)
+        for NC in (2, 3, 4)
+            pullback_input = [
+                LatticeMatrix(
+                    _hisq_projection_ad_values(
+                        Val(NC), pullback_size, 17mu; identity_shift=0.75),
+                    4, process_grid; nw=3,
+                ) for mu in 1:4
+            ]
+            pullback_left = [
+                LatticeMatrix(
+                    _hisq_projection_ad_values(
+                        Val(NC), pullback_size, 71 + 11mu),
+                    4, process_grid; nw=3,
+                ) for mu in 1:4
+            ]
+            direct_output = [similar(link) for link in pullback_input]
+            factorized_output = [similar(link) for link in pullback_input]
+            forward_workspace = HISQFat7Workspace(pullback_input[1])
+            LatticeMatrices._hisq_fat7!(
+                direct_output, pullback_input, coefficients)
+            LatticeMatrices._hisq_fat7!(
+                factorized_output, pullback_input, coefficients,
+                forward_workspace)
+            direct_gradient = [similar(link) for link in pullback_input]
+            factorized_gradient = [similar(link) for link in pullback_input]
+            clear_matrix!.(direct_gradient)
+            clear_matrix!.(factorized_gradient)
+
+            LatticeMatrices._hisq_fat7_pullback_accumulate!(
+                direct_gradient, pullback_left, pullback_input, coefficients)
+            workspace = HISQFat7PullbackWorkspace(pullback_input[1])
+            LatticeMatrices._hisq_fat7_pullback_accumulate!(
+                factorized_gradient, pullback_left, pullback_input,
+                coefficients, workspace)
+
+            gathered_direct = gather_matrix.(direct_gradient)
+            gathered_factorized = gather_matrix.(factorized_gradient)
+            gathered_direct_output = gather_matrix.(direct_output)
+            gathered_factorized_output = gather_matrix.(factorized_output)
+            if test_comm_rank() == 0
+                for mu in 1:4
+                    @test isapprox(
+                        gathered_factorized_output[mu],
+                        gathered_direct_output[mu]; atol=2e-11, rtol=2e-11)
+                    @test isapprox(
+                        gathered_factorized[mu], gathered_direct[mu];
+                        atol=2e-11, rtol=2e-11)
+                end
+            end
+        end
+    end
+
     @testset "HISQ Naik-link Enzyme pullback" begin
         naik_size = (3 * nprocs, 2, 2, 2)
         NC = 2
@@ -315,25 +435,28 @@ function hisq_full_smearing_ad_tests()
         thin = [
             LatticeMatrix(
                 _hisq_projection_ad_values(
-                    chain_size, 19mu; identity_shift=1.2),
+                    Val(3), chain_size, 19mu; identity_shift=1.2),
                 4, process_grid; nw=3,
             ) for mu in 1:4
         ]
         thin_direction = [
             LatticeMatrix(
-                _hisq_projection_ad_values(chain_size, 61 + 7mu),
+                _hisq_projection_ad_values(
+                    Val(3), chain_size, 61 + 7mu),
                 4, process_grid; nw=3,
             ) for mu in 1:4
         ]
         left_fat = [
             LatticeMatrix(
-                _hisq_projection_ad_values(chain_size, 103 + 11mu),
+                _hisq_projection_ad_values(
+                    Val(3), chain_size, 103 + 11mu),
                 4, process_grid; nw=3,
             ) for mu in 1:4
         ]
         left_long = [
             LatticeMatrix(
-                _hisq_projection_ad_values(chain_size, 151 + 13mu),
+                _hisq_projection_ad_values(
+                    Val(3), chain_size, 151 + 13mu),
                 4, process_grid; nw=3,
             ) for mu in 1:4
         ]

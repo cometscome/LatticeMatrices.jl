@@ -1,31 +1,7 @@
 import LatticeMatrices: HISQDiracCache4D,
     hisq_project_u3!, hisq_naik_links!, mul_cached_hisq!,
     mark_halo_dirty!, HaloEpoch, _record_hisq_cache_state!,
-    _hisq_u3_project_matrix!, MMatrix, MVector, lu_factor!, gemm!
-
-@inline function _hisq_lu_solve_vector!(
-    LU::MMatrix{N,N,T}, piv::MVector{N,Int}, right_hand_side::MVector{N,T},
-) where {N,T}
-    @inbounds for k in 1:N
-        pivot = piv[k]
-        if pivot != k
-            right_hand_side[k], right_hand_side[pivot] =
-                right_hand_side[pivot], right_hand_side[k]
-        end
-        for row in (k + 1):N
-            right_hand_side[row] -= LU[row, k] * right_hand_side[k]
-        end
-    end
-    @inbounds for row in N:-1:1
-        value = right_hand_side[row]
-        for column in (row + 1):N
-            value -= LU[row, column] * right_hand_side[column]
-        end
-        right_hand_side[row] = value / LU[row, row]
-    end
-    return nothing
-end
-
+    _hisq_project_un_pullback_accumulate!
 
 @inline function _kernel_hisq_naik_pullback!(
     combined_index, dW1, dW2, dW3, dW4,
@@ -42,82 +18,6 @@ end
         axis, row, column, T, Val(NC))
     _hisq_add_pullback_element!(
         dW1, dW2, dW3, dW4, axis, row, column, target, gradient)
-    return nothing
-end
-
-@inline function _hisq_solve_sylvester_3x3!(solution, hermitian, rhs, system, vector, pivots)
-    element_type = eltype(solution)
-    @inbounds for column in 1:9, row in 1:9
-        system[row, column] = zero(element_type)
-    end
-    @inbounds for column in 1:3, row in 1:3
-        equation = row + 3 * (column - 1)
-        vector[equation] = rhs[row, column]
-        for contracted in 1:3
-            # (H*Z)[row,column]
-            unknown = contracted + 3 * (column - 1)
-            system[equation, unknown] += hermitian[row, contracted]
-            # (Z*H)[row,column]
-            unknown = row + 3 * (contracted - 1)
-            system[equation, unknown] += hermitian[contracted, column]
-        end
-    end
-    lu_factor!(system, pivots)
-    _hisq_lu_solve_vector!(system, pivots, vector)
-    @inbounds for column in 1:3, row in 1:3
-        solution[row, column] = vector[row + 3 * (column - 1)]
-    end
-    return nothing
-end
-
-@inline function _kernel_hisq_project_u3_pullback!(
-    site_index, dinput, doutput, input, ::Val{nw}, indexer,
-) where nw
-    site = delinearize(indexer, site_index, nw)
-    element_type = eltype(input)
-    V = MMatrix{3,3,element_type}(undef)
-    Q = MMatrix{3,3,element_type}(undef)
-    Q2 = MMatrix{3,3,element_type}(undef)
-    inverse_sqrt = MMatrix{3,3,element_type}(undef)
-    hermitian = MMatrix{3,3,element_type}(undef)
-    projected = MMatrix{3,3,element_type}(undef)
-    output_cotangent = MMatrix{3,3,element_type}(undef)
-    skew_rhs = MMatrix{3,3,element_type}(undef)
-    sylvester_solution = MMatrix{3,3,element_type}(undef)
-    gradient = MMatrix{3,3,element_type}(undef)
-    system = MMatrix{9,9,element_type}(undef)
-    vector = MVector{9,element_type}(undef)
-    pivots = MVector{9,Int}(undef)
-
-    @inbounds for column in 1:3, row in 1:3
-        V[row, column] = input[row, column, site...]
-        output_cotangent[row, column] =
-            doutput[row, column, site...]
-    end
-    _hisq_u3_project_matrix!(
-        projected, V, Q, Q2, inverse_sqrt, hermitian)
-
-    # For V = W*H, dW = W*Omega and
-    #     H*Omega + Omega*H = W'*dV - dV'*W.
-    # The self-adjoint Sylvester solve therefore gives the reverse map from
-    # an output cotangent G without differentiating the CH coefficients.
-    @inbounds for column in 1:3, row in 1:3
-        value = zero(element_type)
-        adjoint_value = zero(element_type)
-        for contracted in 1:3
-            value += conj(projected[contracted, row]) *
-                output_cotangent[contracted, column]
-            adjoint_value += conj(output_cotangent[contracted, row]) *
-                projected[contracted, column]
-        end
-        skew_rhs[row, column] = value - adjoint_value
-    end
-    _hisq_solve_sylvester_3x3!(
-        sylvester_solution, hermitian, skew_rhs, system, vector, pivots)
-    gemm!(gradient, projected, sylvester_solution)
-    @inbounds for column in 1:3, row in 1:3
-        dinput[row, column, site...] += gradient[row, column]
-    end
     return nothing
 end
 
@@ -147,27 +47,21 @@ function ER.reverse(
     dprojected = _hisq_smearing_vector_shadow(projected_links)
     dprojected isa Union{AbstractVector,Tuple} || return (nothing, nothing)
     dfat = _hisq_smearing_vector_shadow(fat_links)
-    _hisq_project_u3_pullback!(dfat, dprojected, fat_links.val)
+    _hisq_project_un_pullback!(dfat, dprojected, fat_links.val)
     return (nothing, nothing)
 end
 
-function _hisq_project_u3_pullback!(dfat, dprojected, fat_links)
+function _hisq_project_un_pullback!(dfat, dprojected, fat_links)
     length(dprojected) == 4 &&
         all(link -> link isa LatticeMatrix, dprojected) ||
         throw(ArgumentError(
-            "hisq_project_u3! output shadow must contain four lattice fields"))
+            "HISQ U(N) projection output shadow must contain four lattice fields"))
     if dfat isa Union{AbstractVector,Tuple}
         length(dfat) == 4 && all(link -> link isa LatticeMatrix, dfat) ||
             throw(ArgumentError(
-                "hisq_project_u3! input shadow must contain four lattice fields"))
-        for mu in 1:4
-            JACC.parallel_for(
-                prod(fat_links[mu].PN),
-                _kernel_hisq_project_u3_pullback!,
-                dfat[mu].A, dprojected[mu].A, fat_links[mu].A,
-                Val(fat_links[mu].nw), fat_links[mu].indexer)
-            mark_halo_dirty!(dfat[mu])
-        end
+                "HISQ U(N) projection input shadow must contain four lattice fields"))
+        _hisq_project_un_pullback_accumulate!(
+            dfat, dprojected, fat_links)
     end
     for link in dprojected
         _zero_shadow!(link)
@@ -407,7 +301,7 @@ function ER.reverse(
 
         # dFat has been consumed and cleared above, so reuse it for the
         # level-1-link cotangent produced by the projection pullback.
-        _hisq_project_u3_pullback!(
+        _hisq_project_un_pullback!(
             dFat, dReunit, primal.level1_links)
 
         level1_coefficients = (

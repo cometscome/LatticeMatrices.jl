@@ -216,30 +216,36 @@ function hisq_dirac_tests()
         end
     end
 
-    @testset "HISQ nw=0 and nw=3" begin
-        X0 = [LatticeMatrix(link, 4, process_grid; nw=0)
-              for link in fat_links]
-        L0 = [LatticeMatrix(link, 4, process_grid; nw=0)
-              for link in long_links]
-        psi0 = LatticeMatrix(psi_array, 4, process_grid; nw=0, phases)
-        result0 = similar(psi0)
-        operator0 = HISQDiracOperator4D(
-            X0, L0, mass; naik_epsilon)
-
-        mul!(result0, operator0, psi0)
+    @testset "HISQ nw=0,1,2 and nw=3" begin
         mul!(result3, operator3, psi3)
-        global0 = gather_matrix(result0)
         global3 = gather_matrix(result3)
-        if rank == 0
-            @test global0 ≈ global3 atol=9e-12 rtol=9e-12
-        end
-
-        mul!(result0, adjoint(operator0), psi0)
         mul!(result3, adjoint(operator3), psi3)
-        global0_dag = gather_matrix(result0)
         global3_dag = gather_matrix(result3)
-        if rank == 0
-            @test global0_dag ≈ global3_dag atol=9e-12 rtol=9e-12
+        for nw in (0, 1, 2)
+            X = [LatticeMatrix(link, 4, process_grid; nw)
+                 for link in fat_links]
+            L = [LatticeMatrix(link, 4, process_grid; nw)
+                 for link in long_links]
+            psi = LatticeMatrix(psi_array, 4, process_grid; nw, phases)
+            result = similar(psi)
+            operator = if nw == 0
+                @test_logs (:warn, r"slower shift-materializing fallback")
+                    HISQDiracOperator4D(X, L, mass; naik_epsilon)
+            else
+                HISQDiracOperator4D(X, L, mass; naik_epsilon)
+            end
+
+            mul!(result, operator, psi)
+            global_result = gather_matrix(result)
+            if rank == 0
+                @test global_result ≈ global3 atol=9e-12 rtol=9e-12
+            end
+
+            mul!(result, adjoint(operator), psi)
+            global_adjoint = gather_matrix(result)
+            if rank == 0
+                @test global_adjoint ≈ global3_dag atol=9e-12 rtol=9e-12
+            end
         end
     end
 
@@ -297,7 +303,7 @@ function hisq_dirac_tests()
               for link in fat_links]
         L1 = [LatticeMatrix(link, 4, process_grid; nw=1)
               for link in long_links]
-        @test_throws ArgumentError HISQLinks4D(X1, L1)
+        @test HISQLinks4D(X1, L1) isa HISQLinks4D
         @test_throws ArgumentError HISQLinks4D(X3[1:3], L3)
 
         bad_phase_psi = LatticeMatrix(

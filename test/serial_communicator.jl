@@ -1,3 +1,8 @@
+function _serial_mul_allocation_probe!(destination, left, right)
+    mul!(destination, left, right)
+    return @allocated mul!(destination, left, right)
+end
+
 @testset "serial communicator" begin
     comm = SerialCommunicator()
     global_size = (4, 3)
@@ -34,6 +39,16 @@
     @test copied.cart isa SerialCommunicator
     @test isempty(copied.buf)
     @test isempty(copied.buf_host)
+
+    if lattice.A isa Array
+        product = similar(lattice)
+        allocated = _serial_mul_allocation_probe!(product, lattice, lattice)
+        @test allocated <= 64
+        for x in axes(source, 3), y in axes(source, 4)
+            @test product.A[:, :, x + 1, y + 1] ≈
+                  source[:, :, x, y] * source[:, :, x, y]
+        end
+    end
 
     @test LatticeMatrices.exchange_dim!(copied, 1) === nothing
 

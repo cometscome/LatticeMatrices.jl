@@ -39,8 +39,9 @@ end
 function _hisq_full_test_naik_reference(reunitarized_links)
     lattice_size = size(reunitarized_links[1])[3:end]
     element_type = eltype(reunitarized_links[1])
+    NC = size(reunitarized_links[1], 1)
     long_links = [zeros(
-        element_type, 3, 3, lattice_size...) for _ in 1:4]
+        element_type, NC, NC, lattice_size...) for _ in 1:4]
     for mu in 1:4, site_index in CartesianIndices(lattice_size)
         site = Tuple(site_index)
         @views long_links[mu][:, :, site...] .=
@@ -97,6 +98,41 @@ function hisq_full_smearing_tests()
         if rank == 0
             for mu in 1:4
                 @test global_inplace[mu] ≈ global_projected[mu]
+            end
+        end
+    end
+
+    @testset "HISQ generic U(N) projection" begin
+        for generic_NC in (2, 4)
+            generic_arrays = _staggered_test_links(
+                lattice_size, generic_NC)
+            for link in generic_arrays,
+                site_index in CartesianIndices(lattice_size)
+                site = Tuple(site_index)
+                @views link[:, :, site...] .*= 0.04
+                for color in 1:generic_NC
+                    link[color, color, site...] += 1
+                end
+            end
+            generic_links = [
+                LatticeMatrix(link, 4, process_grid; nw=1)
+                for link in generic_arrays
+            ]
+            projected = hisq_project_un(generic_links)
+            gathered = _hisq_smearing_test_gather(projected)
+            if rank == 0
+                reference = _hisq_full_test_projection_reference(
+                    generic_arrays)
+                for mu in 1:4
+                    @test gathered[mu] ≈ reference[mu] atol=2e-11 rtol=2e-11
+                end
+            end
+            legacy = hisq_project_u3(generic_links)
+            gathered_legacy = _hisq_smearing_test_gather(legacy)
+            if rank == 0
+                for mu in 1:4
+                    @test gathered_legacy[mu] ≈ gathered[mu]
+                end
             end
         end
     end

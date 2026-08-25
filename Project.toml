@@ -1,9 +1,10 @@
 name = "LatticeMatrices"
 uuid = "dd6a91e4-736f-4540-ac85-13822ca7b545"
 authors = ["Yuki Nagai <cometscome@gmail.com>"]
-version = "1.2.0"
+version = "1.2.1"
 
 [deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 JACC = "0979c8fe-16a4-4796-9b82-89a9f10403ea"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -29,6 +30,7 @@ LatticeMatricesoneAPIExt = "oneAPI"
 
 [compat]
 AMDGPU = "2"
+Adapt = "4"
 CUDA = "5,6"
 Enzyme = "0.13"
 InteractiveUtils = "1.11"

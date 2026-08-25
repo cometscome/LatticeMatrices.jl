@@ -33,8 +33,6 @@ function _validate_hisq_link_geometry(fat_links, long_links)
     end
 
     nw = reference.nw
-    iszero(nw) || nw >= 3 || throw(ArgumentError(
-        "HISQ links require nw=0 or nw>=3 for the three-hop Naik term"))
     if !iszero(nw) && any(local_extent -> local_extent < nw, reference.PN)
         throw(ArgumentError(
             "each local lattice extent must be at least the halo width nw=$nw"))
@@ -68,12 +66,20 @@ Four-dimensional HISQ Dirac stencil acting on an `NC x 1` staggered field,
 `X` is the corrected fat link and `L` is the forward-anchored three-link
 transporter. The links must not contain staggered or boundary phases. Fermion
 boundary phases are read from `psi.phases`. The fast fused path requires
-`nw >= 3`; a halo-free `nw=0` fallback is also provided.
+`nw >= 3`. For `nw=1` or `nw=2`, long neighbors are materialized through the
+direct-shift path; a halo-free `nw=0` fallback is also provided.
 """
 struct HISQDiracOperator4D{LT,M<:Real,E<:Real} <: OperatorOnKernel
     links::LT
     mass::M
     naik_epsilon::E
+end
+
+Base.@noinline function _warn_hisq_low_halo(nw)
+    @warn "HISQDiracOperator4D with nw=$nw uses a slower " *
+          "shift-materializing fallback; use nw>=3 to select the fast " *
+          "fused stencil when performance is important" maxlog=1
+    return nothing
 end
 
 function HISQDiracOperator4D(
@@ -85,6 +91,8 @@ function HISQDiracOperator4D(
     isfinite(typed_mass) || throw(ArgumentError("mass must be finite"))
     isfinite(typed_epsilon) ||
         throw(ArgumentError("naik_epsilon must be finite"))
+    links.fat_links[1].nw < 3 &&
+        _warn_hisq_low_halo(links.fat_links[1].nw)
     return HISQDiracOperator4D{
         typeof(links),typeof(typed_mass),typeof(typed_epsilon)
     }(links, typed_mass, typed_epsilon)
@@ -410,6 +418,124 @@ function _apply_hisq_nowing!(result, operator, psi, adjoint_operator::Bool)
     return result
 end
 
+@inline function kernel_HISQDiracOperator4D_direction_materialized!(
+    site, result, U, shifted_psi, coefficient,
+    ::Val{backward}, ::Val{NC}, ::Val{nw}, indexer, ::Val{mu},
+    mpi_coordinates, local_size,
+) where {backward,NC,nw,mu}
+    x = delinearize(indexer, site, nw)
+    eta = staggered_eta_global_halo(
+        x, mu, nw, mpi_coordinates, local_size)
+    @inbounds for output_color in 1:NC
+        hopping = zero(eltype(shifted_psi))
+        for input_color in 1:NC
+            link_element = if backward
+                conj(U[input_color, output_color, x...])
+            else
+                U[output_color, input_color, x...]
+            end
+            hopping = muladd(
+                link_element, shifted_psi[input_color, 1, x...], hopping)
+        end
+        result[output_color, 1, x...] +=
+            ifelse(backward, -coefficient, coefficient) * eta * hopping
+    end
+    return nothing
+end
+
+@inline function kernel_HISQDiracOperator4D_fat_halo!(
+    site, result, X1, X2, X3, X4,
+    psi, mass, fat_coefficient,
+    ::Val{NC}, ::Val{nw}, indexer, mpi_coordinates, local_size,
+) where {NC,nw}
+    x = delinearize(indexer, site, nw)
+    eta2 = staggered_eta_global_halo(
+        x, 2, nw, mpi_coordinates, local_size)
+    eta3 = staggered_eta_global_halo(
+        x, 3, nw, mpi_coordinates, local_size)
+    eta4 = staggered_eta_global_halo(
+        x, 4, nw, mpi_coordinates, local_size)
+    @inbounds for output_color in 1:NC
+        fat_hopping = _staggered_direction_matvec(
+            X1, psi, x,
+            shiftindices(x, shift_1p), shiftindices(x, shift_1m),
+            output_color, Val(NC))
+        fat_hopping += eta2 * _staggered_direction_matvec(
+            X2, psi, x,
+            shiftindices(x, shift_2p), shiftindices(x, shift_2m),
+            output_color, Val(NC))
+        fat_hopping += eta3 * _staggered_direction_matvec(
+            X3, psi, x,
+            shiftindices(x, shift_3p), shiftindices(x, shift_3m),
+            output_color, Val(NC))
+        fat_hopping += eta4 * _staggered_direction_matvec(
+            X4, psi, x,
+            shiftindices(x, shift_4p), shiftindices(x, shift_4m),
+            output_color, Val(NC))
+        result[output_color, 1, x...] =
+            mass * psi[output_color, 1, x...] +
+            fat_coefficient * fat_hopping
+    end
+    return nothing
+end
+
+function _apply_hisq_materialized!(
+    result, operator, psi, adjoint_operator::Bool,
+)
+    _validate_hisq_application(result, operator, psi)
+    fat_links = operator.links.fat_links
+    ensure_halo!.(fat_links)
+    ensure_halo!(psi)
+    fat_coefficient, long_coefficient =
+        _hisq_hopping_coefficients(operator, adjoint_operator)
+    _parallel_for_mutating!(result,
+        prod(result.PN),
+        kernel_HISQDiracOperator4D_fat_halo!,
+        result.A, fat_links[1].A, fat_links[2].A,
+        fat_links[3].A, fat_links[4].A,
+        psi.A, operator.mass, fat_coefficient,
+        Val(result.NC1), Val(result.nw), result.indexer,
+        result.coords, result.PN)
+
+    for mu in 1:4
+        links = operator.links.long_links
+        plus_shift = hisq_long_shifts_p[mu]
+        minus_shift = hisq_long_shifts_m[mu]
+        coefficient = long_coefficient
+        psi_plus = nothing
+        try
+            psi_plus = _materialize_direct_shift(psi, plus_shift)
+            _parallel_for_mutating!(result,
+                prod(result.PN),
+                kernel_HISQDiracOperator4D_direction_materialized!,
+                result.A, links[mu].A, getfield(psi_plus, :data).A,
+                coefficient, Val(false), Val(result.NC1), Val(result.nw),
+                result.indexer, Val(mu), result.coords, result.PN)
+        finally
+            psi_plus === nothing || release!(psi_plus)
+        end
+
+        psi_minus = nothing
+        link_minus = nothing
+        try
+            psi_minus = _materialize_direct_shift(psi, minus_shift)
+            link_minus = _materialize_direct_shift(
+                links[mu], minus_shift)
+            _parallel_for_mutating!(result,
+                prod(result.PN),
+                kernel_HISQDiracOperator4D_direction_materialized!,
+                result.A, getfield(link_minus, :data).A,
+                getfield(psi_minus, :data).A,
+                coefficient, Val(true), Val(result.NC1), Val(result.nw),
+                result.indexer, Val(mu), result.coords, result.PN)
+        finally
+            psi_minus === nothing || release!(psi_minus)
+            link_minus === nothing || release!(link_minus)
+        end
+    end
+    return result
+end
+
 function _apply_hisq!(result, operator, psi, adjoint_operator::Bool)
     if iszero(result.nw)
         return _apply_hisq_nowing!(
@@ -418,8 +544,8 @@ function _apply_hisq!(result, operator, psi, adjoint_operator::Bool)
         return _apply_hisq_halo!(
             result, operator, psi, adjoint_operator)
     end
-    throw(ArgumentError(
-        "HISQ applications require nw=0 or nw>=3, got nw=$(result.nw)"))
+    return _apply_hisq_materialized!(
+        result, operator, psi, adjoint_operator)
 end
 
 function LinearAlgebra.mul!(

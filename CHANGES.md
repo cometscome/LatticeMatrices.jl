@@ -4,6 +4,42 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.1
+
+### HISQ extensions
+
+- HISQ reunitarization and its analytic pullback now support the generic U(N)
+  path used by `NC=2` and `NC=4`, while retaining the specialized physical
+  `NC=3` kernels. `hisq_project_un` and `hisq_project_un!` are the generic
+  names; the existing `hisq_project_u3` APIs remain backward-compatible
+  aliases.
+- Precomputed HISQ links with halo widths one or two use a correct
+  shift-materializing Dirac fallback. The fused resident-halo stencil remains
+  the performance path for `nw>=3`. Complete thin-link smearing supports
+  `nw=0` or `nw>=2`.
+- The core analytic U(N) projection pullback is shared with the Enzyme reverse
+  rule, and the GPU smoke coverage now includes smearing, the Dirac stencil,
+  link pullback, generic color counts, and low-halo execution.
+- Nonzero-halo Fat7 construction now uses the same three-stage factorization
+  for `NC=2`, `NC=3`, and `NC=4`, while retaining the unrolled `NC=3`
+  specialization. Its analytic pullback reverses those stages and reuses
+  cached intermediates instead of re-enumerating every path for every matrix
+  element.
+
+### Portable kernel-launch specialization
+
+- Mutating lattice kernels bind their function and heterogeneous arguments in
+  a concrete, Adapt-compatible callable before entering `JACC.parallel_for`.
+  The public `parallel_for_mutating!` launcher provides the same specialization
+  to Gaugefields and other lattice consumers while preserving one backend-
+  independent path whose fields are adapted to each accelerator's device
+  types.
+- On the one-thread Threads backend, an `8^4` SU(3) lattice `mul!` now performs
+  zero heap allocation after warm-up, down from 254,544 bytes per call. The
+  numerical result is unchanged. Multi-threaded execution, Gaugefields
+  heatbath comparisons with its legacy backend, and CUDA execution on an
+  NVIDIA H100 are covered by regression tests.
+
 ## v1.2.0
 
 ### Optional MPI backend

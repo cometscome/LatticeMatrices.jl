@@ -6,12 +6,12 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.0 is the current backward-compatible release in the stable v1 line.
+Version 1.2.1 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 
-Version 1.2.0 makes MPI.jl optional while preserving the existing MPI execution
-paths and performance; see [CHANGES.md](CHANGES.md) for details.
+Version 1.2.1 extends HISQ support and removes per-site CPU heap allocation from
+mutating JACC kernel launches; see [CHANGES.md](CHANGES.md) for details.
 
 Version 1.1.6 added generic SU(N) normalization for NC > 3.
 
@@ -455,7 +455,7 @@ fermions have per-site shape `NC×4`; staggered fermions have shape `NC×1`.
 | `WilsonDiracOperator4D_Donly(U)` | Nearest-neighbor Wilson hopping part only, with coefficient `1/2` and no on-site identity term | `nw=0` or `nw>=1` |
 | `WilsonDiracCloverOperator4D(U, kappa, cSW)` | Wilson operator plus the cached four-leaf clover term | `nw=0` or `nw>=1` |
 | `StaggeredDiracOperator4D(U, mass)` | Four-dimensional one-link staggered operator in the Bridge++ mass normalization | `nw=0` or `nw>=1` |
-| `HISQDiracOperator4D(X, L, mass; naik_epsilon)` or `HISQDiracOperator4D(U, mass; naik_epsilon)` | HISQ stencil for precomputed links, or complete construction from thin links `U` | `nw=0` or `nw>=3` |
+| `HISQDiracOperator4D(X, L, mass; naik_epsilon)` or `HISQDiracOperator4D(U, mass; naik_epsilon)` | HISQ stencil for precomputed links, or complete construction from thin links `U` | precomputed: any `nw`; thin-link builder: `nw=0` or `nw>=2` |
 | `D5DW_MobiusDomainwallOperator5D(U, L5, mass, M, b, c)` | Five-dimensional Möbius/domain-wall operator with a four-dimensional gauge field | `nw>=1` only |
 | `D5DW_GeneralizedDomainwallOperator5D(U, L5, mass, M, a, b, c)` | Generalized domain-wall operator with independent slice coefficients `a_s`, `b_s`, and `c_s` | `nw>=1` only |
 
@@ -666,7 +666,7 @@ hisq_fat7_level1!(V_preallocated, U_hisq)
 `nw=0` compatibility path is also provided. Input and output gauge links are
 periodic and do not contain staggered or fermion boundary phases.
 
-The complete thin-link builder applies level-1 Fat7, U(3) polar
+The complete thin-link builder applies level-1 Fat7, U(N) polar
 reunitarization, level-2 Fat7 with the Lepage correction, and the Naik
 three-link product:
 
@@ -714,16 +714,32 @@ hisq_link_pullback!(
 The first call after a thin link changes rebuilds level-1, reunitarized, fat,
 and Naik links; later calls reuse them. Public lattice mutations advance the
 epoch used by this check. After writing through `link.A` directly, call
-`mark_halo_dirty!(link)`. The factorized Fat7 workspace is not global: six
-same-layout matrix fields are owned by this `cache` object and reused on every
-refresh. Thus ordinary cached CG/HMC code needs no workspace argument or
-`runtime_activity=true` setting.
+`mark_halo_dirty!(link)`. For every nonzero-halo color count, the factorized
+Fat7 workspace is not global: six same-layout matrix fields are owned by this
+`cache` object and reused on every refresh. The cache also owns the primal and
+cotangent work fields needed to reverse the factorized stages. Thus ordinary
+cached CG/HMC code needs no workspace argument or `runtime_activity=true`
+setting.
 
 `hisq_link_pullback!` propagates a Dirac-output cotangent through the Naik
-term, both Fat7 levels, and the U(3) projection without Enzyme. It accumulates
+term, both Fat7 levels, and the U(N) projection without Enzyme. It accumulates
 into its four destination fields, so clear them before the first contribution
 and leave them intact when summing rational or flavor terms. Force evaluation
-requires `NC=3` and `nw>=3`.
+requires `nw>=3`; `NC=2`, `NC=3`, and `NC=4` use the same public API.
+The generic polar pullback solves an `NC^2 × NC^2` static Sylvester system,
+so it is intended for the small compile-time color counts used by this
+package; the performance-critical `NC=3` projection keeps its specialized
+kernel. Fat7 forward and reverse propagation are factorized for all nonzero-
+halo color counts, with an additional fully unrolled forward specialization
+for `NC=3`.
+
+The optimized fused Dirac stencil still reads the resident halo directly when
+`nw>=3`. With precomputed `X` and `L`, `nw=1` and `nw=2` are also correct: the
+operator materializes one- and three-hop neighbors through the arbitrary-shift
+communication path. This fallback trades additional communication and kernel
+launches for a smaller halo. Constructing an operator with `nw<3` emits a
+once-per-process performance warning. Complete smearing needs `nw=0` or
+`nw>=2`, because level-2 Fat7 and Naik-link construction reach two sites away.
 
 The complete unphased `X` and forward-anchored `L` results, including their
 layout-sensitive numerical fingerprints, have been cross-checked against
@@ -765,19 +781,19 @@ ensembles, source statistics, and taste normalization.
 
 ##### GPU smearing implementation
 
-The halo-based Fat7 and Naik builders use fixed-size row kernels and split the
-5- and 7-link sign combinations into statically specialized launches.  For the
-physical `NC=3` case, the allocating complete builder and `HISQDiracCache4D`
-additionally factor repeated Fat7 staples into three stages using six
+The halo-based Fat7 and Naik builders use fixed-size row kernels. For every
+nonzero-halo color count, the allocating complete builder and
+`HISQDiracCache4D` factor repeated Fat7 staples into three stages using six
 same-layout matrix fields. Caller-owned repeated construction can select the
-same path by passing `HISQFat7Workspace` to `hisq_links_from_thin!`. This
-changes neither `LatticeMatrix` storage nor the Dirac operator's memory layout.
-Other color counts and `nw=0` retain the direct implementation.
+same path by passing `HISQFat7Workspace` to `hisq_links_from_thin!`. The
+physical `NC=3` forward path remains fully unrolled; `NC=2`, `NC=4`, and other
+small compile-time color counts use the same factorization with generic static
+matrices. This changes neither `LatticeMatrix` storage nor the Dirac
+operator's memory layout. `nw=0` retains the direct implementation.
 Forward kernels enumerate a matrix row before the lattice site, matching
-the first (contiguous) `LatticeMatrix` array dimension. The much heavier
-`NC=3` Fat7 row-owner pullback deliberately retains site-first enumeration:
-adjacent threads then traverse the same path geometry at adjacent sites. Thus the
-two directions are tuned independently without changing the public layout.
+the first (contiguous) `LatticeMatrix` array dimension. Fat7 pullback reverses
+the same three factorized staple stages, accumulating complete static matrices
+per site and reusing primal/cotangent intermediates owned by the cache.
 The index arithmetic and factorized stages use JACC launch abstractions and
 contain no backend-specific thread launch.
 The same source path was checked with the JACC Threads backend using four Julia
@@ -790,14 +806,10 @@ and also crashes plain `Threads.@threads`. For that MPI installation the
 threaded command must exclude `SEGV`, for example
 `UCX_ERROR_SIGNALS=ILL,BUS,FPE JULIA_NUM_THREADS=4 julia ...`. MPICH_jll passed
 the same stress test without this UCX setting.
-The backend-neutral JACC `NC=3` path uses flattened arrays and fully unrolled
-three-color path products.
-The generic reverse rules gather every contribution for one thin-link matrix
-element in a single owner work item.  The `NC=3` JACC reverse path instead owns
-a complete matrix row, shares path geometry and one partial product across its
-three columns, and uses the same flat three-color access pattern as the forward
-kernels.  Both paths avoid device-side matrix allocation and
-complex-valued atomics.  No global cache, `CUDA.limit!`, or Enzyme
+The backend-neutral JACC `NC=3` forward path uses flattened arrays and fully
+unrolled three-color products. The color-generic factorized forward and reverse
+paths use compile-time-sized static matrices. They avoid device-side matrix
+allocation and complex-valued atomics. No global cache, `CUDA.limit!`, or Enzyme
 `runtime_activity=true` setting is used.  `HISQDiracCache4D` is an ordinary
 caller-owned object; its epoch check transparently refreshes the derived links
 on the first multiply after `U` changes and reuses them in subsequent CG
@@ -1170,7 +1182,7 @@ Note: the AD result here follows Enzyme's complex differentiation convention. Fo
 Halo-free (`nw=0`) lattices can be used for ordinary calculations, but are rejected before AD starts.
 
 Custom reverse rules are provided for the staggered and HISQ Dirac stencils
-and for every complete HISQ smearing stage: level-1 Fat7, U(3) projection,
+and for every complete HISQ smearing stage: level-1 Fat7, U(N) projection,
 level-2 Fat7/Lepage, and Naik links. Consequently a real action can be
 differentiated from `HISQDiracOperator4D` all the way back to the thin links.
 The complete HISQ AD path requires `nw >= 3`; pass the caller-owned `V`, `W`,
@@ -1182,7 +1194,7 @@ For HMC code that only needs the cached HISQ thin-link force, prefer the core
 gradient convention and is available when Enzyme is not installed or loaded.
 
 `mul_cached_hisq!` has a dedicated static Enzyme reverse rule for the complete
-Dirac → Naik/level-2 → U(3) → level-1 → thin-link force chain. The cache is
+Dirac → Naik/level-2 → U(N) → level-1 → thin-link force chain. The cache is
 treated as derived storage, so `runtime_activity=true` is not required and
 smearing is not rebuilt on each CG iteration.
 
@@ -1277,6 +1289,9 @@ StaggeredDiracOperator4D(U, mass)
 hisq_fat7_level1(U)
 hisq_fat7_level1!(V, U)
 HISQFat7Workspace(U[1])
+hisq_project_un(V)
+hisq_project_un!(W, V)
+# Backward-compatible aliases:
 hisq_project_u3(V)
 hisq_project_u3!(W, V)
 hisq_fat7_level2(W; naik_epsilon=0)

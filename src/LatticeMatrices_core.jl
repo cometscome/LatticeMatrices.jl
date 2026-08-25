@@ -224,12 +224,45 @@ end
 """Return the current `(core, halo)` epochs as a named tuple."""
 @inline halo_epochs(ls::LatticeMatrix) = (core=ls.halo_epoch.core, halo=ls.halo_epoch.halo)
 
-function _parallel_for_mutating!(destination::LatticeMatrix, args...; kwargs...)
+struct _BoundMutatingKernel{F,A<:Tuple}
+    kernel::F
+    arguments::A
+end
+
+Adapt.@adapt_structure _BoundMutatingKernel
+
+@inline function (bound::_BoundMutatingKernel)(i)
+    bound.kernel(i, bound.arguments...)
+    return nothing
+end
+
+@inline function _parallel_for_mutating!(
+        destination::LatticeMatrix, count::Integer, kernel::F, arguments...; kwargs...,
+    ) where {F}
+    mark_halo_dirty!(destination)
+    bound = _BoundMutatingKernel(kernel, arguments)
+    return JACC.parallel_for(count, bound; kwargs...)
+end
+
+@inline function _parallel_for_mutating!(destination::LatticeMatrix, args...; kwargs...)
     mark_halo_dirty!(destination)
     return JACC.parallel_for(args...; kwargs...)
 end
 
-export mark_halo_dirty!, halo_is_dirty, halo_epochs
+"""
+    parallel_for_mutating!(destination, count, kernel, arguments...; kwargs...)
+
+Launch a portable JACC kernel that mutates `destination`. The kernel and its
+arguments are bound into one concrete, recursively adaptable functor before
+launch, so the same call is specialized on CPU and converted by CUDA, AMDGPU,
+and oneAPI device adaptors. The destination halo is marked dirty before the
+kernel runs.
+"""
+@inline parallel_for_mutating!(
+    destination::LatticeMatrix, args...; kwargs...,
+) = _parallel_for_mutating!(destination, args...; kwargs...)
+
+export mark_halo_dirty!, halo_is_dirty, halo_epochs, parallel_for_mutating!
 
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}

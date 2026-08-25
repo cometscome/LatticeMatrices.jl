@@ -94,5 +94,82 @@ function ci_hisq_smoke_tests()
             atol=2e-5, rtol=2e-6)
     end
 
+    @testset "generic-color U(N) and low-halo HISQ smoke" begin
+        for generic_NC in (2, 4)
+            generic_nw = generic_NC == 2 ? 3 : 2
+            count = generic_NC * generic_NC * prod(lattice_size)
+            base = reshape(Float64.(1:count),
+                generic_NC, generic_NC, lattice_size...)
+            thin_arrays = [complex.(
+                sin.((base .+ 7mu) ./ 17) ./ 50,
+                cos.((base .+ 11mu) ./ 19) ./ 50,
+            ) for mu in 1:4]
+            for thin in thin_arrays
+                for site in CartesianIndices(lattice_size),
+                    color in 1:generic_NC
+                    thin[color, color, Tuple(site)...] += 1
+                end
+            end
+            generic_thin = [
+                LatticeMatrix(thin, 4, process_grid; nw=generic_nw)
+                for thin in thin_arrays
+            ]
+
+            cache = HISQDiracCache4D(
+                generic_thin, 0.13; naik_epsilon)
+            @test cache.fat7_workspace isa HISQFat7Workspace
+            @test cache.fat7_pullback_workspace isa
+                HISQFat7PullbackWorkspace
+            gathered_reunitarized = gather_matrix(
+                cache.reunitarized_links[1])
+            if test_comm_rank() == 0
+                for site in CartesianIndices(lattice_size)
+                    x = Tuple(site)
+                    @views W = gathered_reunitarized[:, :, x...]
+                    @test W' * W ≈ Matrix{ComplexF64}(
+                        I, generic_NC, generic_NC) atol=2e-11 rtol=2e-11
+                end
+            end
+
+            psi_values = reshape(
+                ComplexF64.(1:(generic_NC * prod(lattice_size))),
+                generic_NC, 1, lattice_size...)
+            generic_psi = LatticeMatrix(
+                psi_values, 4, process_grid;
+                nw=generic_nw, phases=(1, 1, 1, -1))
+            generic_result = similar(generic_psi)
+            mul_cached_hisq!(
+                generic_result, cache,
+                generic_thin[1], generic_thin[2],
+                generic_thin[3], generic_thin[4], generic_psi)
+            gathered_result = gather_matrix(generic_result)
+            if test_comm_rank() == 0
+                @test all(isfinite, gathered_result)
+                @test !iszero(norm(gathered_result))
+            end
+
+            if generic_NC == 2
+                generic_left_values = complex.(
+                    sin.(real.(psi_values) ./ 13),
+                    cos.(real.(psi_values) ./ 17))
+                generic_left = LatticeMatrix(
+                    generic_left_values, 4, process_grid;
+                    nw=generic_nw, phases=(1, 1, 1, -1))
+                generic_gradient = [similar(link) for link in generic_thin]
+                clear_matrix!.(generic_gradient)
+                @test hisq_link_pullback!(
+                    generic_gradient, cache, generic_thin,
+                    generic_left, generic_psi) === generic_gradient
+                for gradient_link in generic_gradient
+                    gathered_gradient = gather_matrix(gradient_link)
+                    if test_comm_rank() == 0
+                        @test all(isfinite, gathered_gradient)
+                        @test !iszero(norm(gathered_gradient))
+                    end
+                end
+            end
+        end
+    end
+
     return nothing
 end

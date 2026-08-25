@@ -1,4 +1,5 @@
 module LatticeMatrices
+using Adapt
 using LinearAlgebra
 using JACC
 #using Enzyme

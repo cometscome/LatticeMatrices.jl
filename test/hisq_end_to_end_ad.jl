@@ -54,13 +54,13 @@ function hisq_end_to_end_ad_tests()
     thin = [
         LatticeMatrix(
             _hisq_projection_ad_values(
-                global_size, 23mu; identity_shift=1.15),
+                Val(3), global_size, 23mu; identity_shift=1.15),
             4, process_grid; nw,
         ) for mu in 1:4
     ]
     thin_direction = [
         LatticeMatrix(
-            _hisq_projection_ad_values(global_size, 73 + 7mu),
+            _hisq_projection_ad_values(Val(3), global_size, 73 + 7mu),
             4, process_grid; nw,
         ) for mu in 1:4
     ]

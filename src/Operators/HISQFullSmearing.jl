@@ -98,40 +98,175 @@ end
     return nothing
 end
 
+# Scaled Newton polar iteration for the generic U(N) projection.  The
+# three-color Cayley--Hamilton implementation above remains the production
+# path for NC=3; this fallback deliberately uses only the small static-matrix
+# primitives that are also available in accelerator kernels.
+@inline function _hisq_un_project_matrix!(
+    projected, hermitian, V, work, inverse, next, ::Val{NC},
+) where NC
+    element_type = eltype(V)
+    real_type = typeof(real(zero(element_type)))
+    @inbounds for column in 1:NC, row in 1:NC
+        projected[row, column] = V[row, column]
+    end
+
+    tolerance = convert(real_type, 8NC) * sqrt(eps(real_type))
+    @inbounds for _ in 1:16
+        norm_squared = zero(real_type)
+        for column in 1:NC, row in 1:NC
+            value = projected[row, column]
+            work[row, column] = value
+            inverse[row, column] = ifelse(
+                row == column, one(element_type), zero(element_type))
+            norm_squared += abs2(value)
+        end
+        # Gauss--Jordan with partial pivoting. Keeping the row operations on
+        # the identity beside the matrix avoids backend-dependent LAPACK and
+        # produces the inverse directly in the second work matrix.
+        for pivot_column in 1:NC
+            pivot_row = pivot_column
+            pivot_magnitude = abs(work[pivot_column, pivot_column])
+            for row in (pivot_column + 1):NC
+                candidate = abs(work[row, pivot_column])
+                if candidate > pivot_magnitude
+                    pivot_row = row
+                    pivot_magnitude = candidate
+                end
+            end
+            if pivot_row != pivot_column
+                for column in 1:NC
+                    work[pivot_column, column], work[pivot_row, column] =
+                        work[pivot_row, column], work[pivot_column, column]
+                    inverse[pivot_column, column], inverse[pivot_row, column] =
+                        inverse[pivot_row, column], inverse[pivot_column, column]
+                end
+            end
+            pivot = work[pivot_column, pivot_column]
+            for column in 1:NC
+                work[pivot_column, column] /= pivot
+                inverse[pivot_column, column] /= pivot
+            end
+            for row in 1:NC
+                row == pivot_column && continue
+                multiplier = work[row, pivot_column]
+                for column in 1:NC
+                    work[row, column] -=
+                        multiplier * work[pivot_column, column]
+                    inverse[row, column] -=
+                        multiplier * inverse[pivot_column, column]
+                end
+            end
+        end
+
+        inverse_norm_squared = zero(real_type)
+        for column in 1:NC, row in 1:NC
+            inverse_norm_squared += abs2(inverse[row, column])
+        end
+        scale = sqrt(sqrt(inverse_norm_squared / norm_squared))
+        inverse_scale = inv(scale)
+        difference_squared = zero(real_type)
+        next_norm_squared = zero(real_type)
+        for column in 1:NC, row in 1:NC
+            value = (scale * projected[row, column] +
+                     inverse_scale * conj(inverse[column, row])) / 2
+            next[row, column] = value
+            difference_squared += abs2(value - projected[row, column])
+            next_norm_squared += abs2(value)
+        end
+        for column in 1:NC, row in 1:NC
+            projected[row, column] = next[row, column]
+        end
+        difference_squared <= tolerance * tolerance * next_norm_squared &&
+            break
+    end
+
+    # H = W'V is the positive Hermitian polar factor.  Symmetrizing removes
+    # the last iteration's roundoff and gives the pullback a Hermitian input.
+    @inbounds for column in 1:NC, row in 1:NC
+        value = zero(element_type)
+        adjoint_value = zero(element_type)
+        for contracted in 1:NC
+            value += conj(projected[contracted, row]) *
+                V[contracted, column]
+            adjoint_value += conj(V[contracted, row]) *
+                projected[contracted, column]
+        end
+        hermitian[row, column] = (value + adjoint_value) / 2
+    end
+    return nothing
+end
+
+@inline function kernel_hisq_project_un!(
+    site_index, output, input, ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    site = delinearize(indexer, site_index, nw)
+    element_type = eltype(output)
+    V = MMatrix{NC,NC,element_type}(undef)
+    projected = MMatrix{NC,NC,element_type}(undef)
+    hermitian = MMatrix{NC,NC,element_type}(undef)
+    work = MMatrix{NC,NC,element_type}(undef)
+    inverse = MMatrix{NC,NC,element_type}(undef)
+    next = MMatrix{NC,NC,element_type}(undef)
+    @inbounds for column in 1:NC, row in 1:NC
+        V[row, column] = input[row, column, site...]
+    end
+    _hisq_un_project_matrix!(
+        projected, hermitian, V, work, inverse, next, Val(NC))
+    @inbounds for column in 1:NC, row in 1:NC
+        output[row, column, site...] = projected[row, column]
+    end
+    return nothing
+end
+
 function _validate_hisq_projection_output(projected_links, fat_links)
     _validate_hisq_smearing_output(projected_links, fat_links)
-    fat_links[1].NC1 == 3 || throw(ArgumentError(
-        "HISQ U(3) projection requires three-color links"))
     return nothing
 end
 
 """
-    hisq_project_u3!(projected_links, fat_links)
-    hisq_project_u3(fat_links)
+    hisq_project_un!(projected_links, fat_links)
+    hisq_project_un(fat_links)
 
-Project each unprojected Fat7 link to U(3) using
-`V * (V' * V)^(-1/2)`, following SIMULATeQCD's HISQ convention.
+Project each unprojected Fat7 link to U(N) using
+`V * (V' * V)^(-1/2)`.  The `N=3` path uses the SIMULATeQCD-compatible
+Cayley--Hamilton implementation; other color counts use a scaled Newton
+polar iteration.
 """
-function hisq_project_u3!(
+function hisq_project_un!(
     projected_links::Union{Vector{TO},NTuple{4,TO}},
     fat_links::Union{Vector{TI},NTuple{4,TI}},
 ) where {TO<:LatticeMatrix{4},TI<:LatticeMatrix{4}}
     _validate_hisq_projection_output(projected_links, fat_links)
+    NC = fat_links[1].NC1
     for mu in 1:4
-        _parallel_for_mutating!(
-            projected_links[mu], prod(projected_links[mu].PN),
-            kernel_hisq_project_u3!, projected_links[mu].A,
-            fat_links[mu].A, Val(fat_links[mu].nw), fat_links[mu].indexer)
+        if NC == 3
+            _parallel_for_mutating!(
+                projected_links[mu], prod(projected_links[mu].PN),
+                kernel_hisq_project_u3!, projected_links[mu].A,
+                fat_links[mu].A, Val(fat_links[mu].nw), fat_links[mu].indexer)
+        else
+            _parallel_for_mutating!(
+                projected_links[mu], prod(projected_links[mu].PN),
+                kernel_hisq_project_un!, projected_links[mu].A,
+                fat_links[mu].A, Val(NC), Val(fat_links[mu].nw),
+                fat_links[mu].indexer)
+        end
     end
     return projected_links
 end
 
-function hisq_project_u3(fat_links::Vector{T}) where {T<:LatticeMatrix{4}}
+function hisq_project_un(fat_links::Vector{T}) where {T<:LatticeMatrix{4}}
     projected_links = [similar(link) for link in fat_links]
-    return hisq_project_u3!(projected_links, fat_links)
+    return hisq_project_un!(projected_links, fat_links)
 end
 
-export hisq_project_u3!, hisq_project_u3
+# Backwards-compatible names.  Aliasing the function object also lets the
+# existing Enzyme rule cover both spellings.
+const hisq_project_u3! = hisq_project_un!
+const hisq_project_u3 = hisq_project_un
+
+export hisq_project_un!, hisq_project_un, hisq_project_u3!, hisq_project_u3
 
 @inline function kernel_hisq_naik_links!(
     combined_index, L1, L2, L3, L4, W1, W2, W3, W4,
@@ -207,11 +342,9 @@ function _validate_hisq_full_workspace(
     fat_links, long_links, level1_links, reunitarized_links, thin_links,
 )
     _validate_staggered_gauge_links(thin_links)
-    thin_links[1].NC1 == 3 || throw(ArgumentError(
-        "full HISQ smearing requires three-color thin links"))
     nw = thin_links[1].nw
-    iszero(nw) || nw >= 3 || throw(ArgumentError(
-        "full HISQ smearing requires nw=0 or nw>=3"))
+    iszero(nw) || nw >= 2 || throw(ArgumentError(
+        "full HISQ smearing requires nw=0 or nw>=2"))
 
     collections = (
         fat_links, long_links, level1_links, reunitarized_links, thin_links)
@@ -254,8 +387,9 @@ Build all links used by [`HISQDiracOperator4D`](@ref) from thin gauge links.
 The caller owns the two work vectors `level1_links` and
 `reunitarized_links`, making repeated construction allocation-free after
 setup.  Passing a reusable [`HISQFat7Workspace`](@ref) selects the factorized
-three-color Fat7 path; [`HISQDiracCache4D`](@ref) supplies one automatically.
-The stages are level-1 Fat7, U(3) reunitarization, level-2 Fat7/Lepage, and
+U(N) Fat7 path; [`HISQDiracCache4D`](@ref) supplies one automatically for
+every nonzero-halo color count.
+The stages are level-1 Fat7, U(N) reunitarization, level-2 Fat7/Lepage, and
 forward-anchored Naik construction.
 """
 function hisq_links_from_thin!(
@@ -268,7 +402,7 @@ function hisq_links_from_thin!(
     _validate_hisq_full_workspace(
         fat_links, long_links, level1_links, reunitarized_links, thin_links)
     hisq_fat7_level1!(level1_links, thin_links)
-    hisq_project_u3!(reunitarized_links, level1_links)
+    hisq_project_un!(reunitarized_links, level1_links)
     hisq_fat7_level2!(fat_links, reunitarized_links, naik_epsilon)
     hisq_naik_links!(long_links, reunitarized_links)
     return HISQLinks4D(fat_links, long_links)
@@ -285,7 +419,7 @@ function hisq_links_from_thin!(
     _validate_hisq_full_workspace(
         fat_links, long_links, level1_links, reunitarized_links, thin_links)
     hisq_fat7_level1!(level1_links, thin_links, fat7_workspace)
-    hisq_project_u3!(reunitarized_links, level1_links)
+    hisq_project_un!(reunitarized_links, level1_links)
     hisq_fat7_level2!(
         fat_links, reunitarized_links, naik_epsilon, fat7_workspace)
     hisq_naik_links!(long_links, reunitarized_links)
@@ -319,10 +453,11 @@ function hisq_links_from_thin(
     reunitarized_links = [similar(link) for link in thin_links]
     fat_links = [similar(link) for link in thin_links]
     long_links = [similar(link) for link in thin_links]
-    fat7_workspace = HISQFat7Workspace(thin_links[1])
+    fat7_workspace = iszero(thin_links[1].nw) ? nothing :
+        HISQFat7Workspace(thin_links[1])
     return hisq_links_from_thin!(
         fat_links, long_links, level1_links, reunitarized_links,
-        thin_links, naik_epsilon, fat7_workspace)
+        thin_links; naik_epsilon, fat7_workspace)
 end
 
 hisq_links_from_thin(thin_links; naik_epsilon=0) =
@@ -356,16 +491,17 @@ end
 """
     HISQDiracCache4D(thin_links, mass; naik_epsilon=0)
 
-Reusable storage for a HISQ operator built from thin links.  The level-1,
-reunitarized, corrected-fat, and Naik links, together with the factorized
-Fat7 workspace, are retained so that repeated Dirac applications do not
-repeat allocations or the smearing construction.
+Reusable storage for a HISQ operator built from thin links. The level-1,
+reunitarized, corrected-fat, and Naik links are retained so that repeated
+Dirac applications do not repeat allocations or the smearing construction.
+For every nonzero-halo color count, the cache also owns the reusable
+factorized Fat7 workspace. The periodic `nw=0` fallback stores `nothing`.
 
 Use [`mul_cached_hisq!`](@ref) and [`mul_cached_hisq_adjoint!`](@ref) to apply
 the operator.  Those entry points transparently rebuild the derived links on
 the first call after a thin link is replaced or its core-data epoch changes.
 """
-struct HISQDiracCache4D{T,L,O,S,W}
+struct HISQDiracCache4D{T,L,O,S,W,P}
     level1_links::Vector{T}
     reunitarized_links::Vector{T}
     fat_links::Vector{T}
@@ -374,6 +510,7 @@ struct HISQDiracCache4D{T,L,O,S,W}
     operator::O
     cache_state::S
     fat7_workspace::W
+    fat7_pullback_workspace::P
 end
 
 function HISQDiracCache4D(
@@ -383,19 +520,23 @@ function HISQDiracCache4D(
     reunitarized_links = [similar(link) for link in thin_links]
     fat_links = [similar(link) for link in thin_links]
     long_links = [similar(link) for link in thin_links]
-    fat7_workspace = HISQFat7Workspace(thin_links[1])
+    fat7_workspace = iszero(thin_links[1].nw) ? nothing :
+        HISQFat7Workspace(thin_links[1])
+    fat7_pullback_workspace = iszero(thin_links[1].nw) ? nothing :
+        HISQFat7PullbackWorkspace(thin_links[1])
     links = hisq_links_from_thin!(
         fat_links, long_links, level1_links, reunitarized_links,
-        thin_links, naik_epsilon, fat7_workspace)
+        thin_links; naik_epsilon, fat7_workspace)
     operator = HISQDiracOperator4D(links, mass; naik_epsilon)
     cache_state = HISQCacheState(
         _hisq_source_links(thin_links), _hisq_core_epochs(thin_links))
     return HISQDiracCache4D{
         T,typeof(links),typeof(operator),typeof(cache_state),
-        typeof(fat7_workspace)
+        typeof(fat7_workspace),typeof(fat7_pullback_workspace)
     }(
         level1_links, reunitarized_links, fat_links, long_links,
-        links, operator, cache_state, fat7_workspace)
+        links, operator, cache_state, fat7_workspace,
+        fat7_pullback_workspace)
 end
 
 export HISQDiracCache4D
@@ -413,7 +554,8 @@ function update_hisq_cache!(
     hisq_links_from_thin!(
         cache.fat_links, cache.long_links,
         cache.level1_links, cache.reunitarized_links,
-        thin_links, cache.operator.naik_epsilon, cache.fat7_workspace)
+        thin_links; naik_epsilon=cache.operator.naik_epsilon,
+        fat7_workspace=cache.fat7_workspace)
     return _record_hisq_cache_state!(cache, thin_links)
 end
 

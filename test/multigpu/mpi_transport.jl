@@ -57,6 +57,11 @@ end
     shift = (2, -1, 0, 0)
     staged_shift = materialized_shift(staged, shift)
     direct_shift = materialized_shift(direct, shift)
+    expected_host_buffer_length = prod(size(input)) ÷ TRANSPORT_NRANKS
+    @test length(staged.shift_buf_host.send) == expected_host_buffer_length
+    @test length(staged.shift_buf_host.recv) == expected_host_buffer_length
+    @test isempty(direct.shift_buf_host.send)
+    @test isempty(direct.shift_buf_host.recv)
     if TRANSPORT_RANK == 0
         @test staged_shift == direct_shift
         staged_info = mpi_transport_info(staged)

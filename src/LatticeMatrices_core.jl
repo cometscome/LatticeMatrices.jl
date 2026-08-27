@@ -54,6 +54,11 @@ end
 @inline _mpi_device_aware_available(::Any) = false
 @inline _mpi_device_kind(::Any) = Symbol(JACC.backend)
 
+# Most accelerator arrays support the compact prefix views used by the
+# optimized halo exchange. Backends that do not can opt into the legacy full
+# face buffers from their package extension without changing CUDA/ROCm paths.
+@inline _uses_full_halo_buffers(::Any) = false
+
 @inline function _mpi_transport_symbol(route::_MPITransportRoute)
     route === _LOCAL && return :local
     route === _MPI_HOST_DIRECT && return :host_direct
@@ -855,6 +860,66 @@ function _finish_packed_halo_exchange!(
     return nothing
 end
 
+# Full-buffer staging deliberately uses the ordinary two-argument `copyto!`.
+# That is the portable device/host transfer API used by the pre-1.1 halo path;
+# the five-argument prefix copy above is needed only for compact views.
+function _post_full_halo_exchange!(
+    ls::LatticeMatrix,
+    d::Int,
+    device_buffers,
+    host_buffers,
+    tags,
+)
+    rankM, rankP = ls.nbr[d]
+    me = ls.myrank
+    requests = _request_vector(ls.cart)
+
+    JACC.synchronize()
+    if _uses_direct_mpi(ls.mpi_transport)
+        rankM != me && push!(requests, _irecv!(
+            device_buffers.recv_minus, rankM, tags.recv_minus, ls.cart))
+        rankP != me && push!(requests, _irecv!(
+            device_buffers.recv_plus, rankP, tags.recv_plus, ls.cart))
+        rankM != me && push!(requests, _isend(
+            device_buffers.send_minus, rankM, tags.send_minus, ls.cart))
+        rankP != me && push!(requests, _isend(
+            device_buffers.send_plus, rankP, tags.send_plus, ls.cart))
+    else
+        rankM != me && push!(requests, _irecv!(
+            host_buffers.recv_minus, rankM, tags.recv_minus, ls.cart))
+        rankP != me && push!(requests, _irecv!(
+            host_buffers.recv_plus, rankP, tags.recv_plus, ls.cart))
+        rankM != me && copyto!(
+            host_buffers.send_minus, device_buffers.send_minus)
+        rankP != me && copyto!(
+            host_buffers.send_plus, device_buffers.send_plus)
+        rankM != me && push!(requests, _isend(
+            host_buffers.send_minus, rankM, tags.send_minus, ls.cart))
+        rankP != me && push!(requests, _isend(
+            host_buffers.send_plus, rankP, tags.send_plus, ls.cart))
+    end
+    return requests
+end
+
+function _finish_full_halo_exchange!(
+    ls::LatticeMatrix,
+    d::Int,
+    requests,
+    device_buffers,
+    host_buffers,
+)
+    isempty(requests) || _waitall!(requests)
+    _uses_direct_mpi(ls.mpi_transport) && return nothing
+
+    rankM, rankP = ls.nbr[d]
+    me = ls.myrank
+    rankM != me && copyto!(
+        device_buffers.recv_minus, host_buffers.recv_minus)
+    rankP != me && copyto!(
+        device_buffers.recv_plus, host_buffers.recv_plus)
+    return nothing
+end
+
 function _exchange_packed_halo_buffers!(
     ls::LatticeMatrix,
     d::Int,
@@ -870,6 +935,23 @@ function _exchange_packed_halo_buffers!(
     iSM, iRM = 4d - 3, 4d - 2
     iSP, iRP = 4d - 1, 4d
     device_buffers = (; send_minus, recv_minus, send_plus, recv_plus)
+
+    if _uses_full_halo_buffers(ls.A)
+        host_buffers = (
+            send_minus=ls.buf_host[iSM],
+            recv_minus=ls.buf_host[iRM],
+            send_plus=ls.buf_host[iSP],
+            recv_plus=ls.buf_host[iRP],
+        )
+        tags = (; send_minus=send_minus_tag, recv_minus=recv_minus_tag,
+            send_plus=send_plus_tag, recv_plus=recv_plus_tag)
+        requests = _post_full_halo_exchange!(
+            ls, d, device_buffers, host_buffers, tags)
+        _finish_full_halo_exchange!(
+            ls, d, requests, device_buffers, host_buffers)
+        return nothing
+    end
+
     host_buffers = (
         send_minus=_active_face_buffer(ls.buf_host[iSM], send_minus),
         recv_minus=_active_face_buffer(ls.buf_host[iRM], recv_minus),
@@ -885,6 +967,69 @@ function _exchange_packed_halo_buffers!(
     return nothing
 end
 
+# Portable fallback for accelerator arrays that cannot reliably construct the
+# compact `vec(buffer)[1:count]` views used by the optimized exchange. The
+# preallocated buffers already have the full padded face shape, so this path
+# can pack, stage, and unpack them without deriving another device array.
+function _exchange_dim_full_buffers!(
+    ls::LatticeMatrix{D}, d::Int, rankM, rankP, me,
+) where {D}
+    iSM, iRM = 4d - 3, 4d - 2
+    iSP, iRP = 4d - 1, 4d
+
+    bufSM, bufRM = ls.buf[iSM], ls.buf[iRM]
+    bufSP, bufRP = ls.buf[iSP], ls.buf[iRP]
+    bufSM_host, bufRM_host = ls.buf_host[iSM], ls.buf_host[iRM]
+    bufSP_host, bufRP_host = ls.buf_host[iSP], ls.buf_host[iRP]
+
+    gminus = _ghostMatrix(ls.A, ls.nw, d, :minus)
+    gplus = _ghostMatrix(ls.A, ls.nw, d, :plus)
+    fminus = _faceMatrix(ls.A, ls.nw, d, :minus)
+    fplus = _faceMatrix(ls.A, ls.nw, d, :plus)
+
+    if rankM == me
+        copy!(gminus, fminus)
+        ls.coords[d] == 0 && _mul_phase!(gminus, ls.phases[d])
+    else
+        copy!(bufSM, fminus)
+        ls.coords[d] == 0 && _mul_phase!(bufSM, ls.phases[d])
+    end
+
+    if rankP == me
+        copy!(gplus, fplus)
+        ls.coords[d] == ls.dims[d] - 1 &&
+            _mul_phase!(gplus, inv(ls.phases[d]))
+    else
+        copy!(bufSP, fplus)
+        ls.coords[d] == ls.dims[d] - 1 &&
+            _mul_phase!(bufSP, inv(ls.phases[d]))
+    end
+
+    device_buffers = (
+        send_minus=bufSM,
+        recv_minus=bufRM,
+        send_plus=bufSP,
+        recv_plus=bufRP,
+    )
+    host_buffers = (
+        send_minus=bufSM_host,
+        recv_minus=bufRM_host,
+        send_plus=bufSP_host,
+        recv_plus=bufRP_host,
+    )
+    tags = (send_minus=d, recv_minus=d + D, send_plus=d + D, recv_plus=d)
+    requests = _post_full_halo_exchange!(
+        ls, d, device_buffers, host_buffers, tags)
+
+    compute_interior!(ls)
+    _finish_full_halo_exchange!(
+        ls, d, requests, device_buffers, host_buffers)
+
+    rankM != me && copy!(gminus, bufRM)
+    rankP != me && copy!(gplus, bufRP)
+    return nothing
+end
+
 function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     rankM, rankP = ls.nbr[d]                     # neighbour ranks
     me = ls.myrank
@@ -896,6 +1041,9 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
         exchange_dim_local!(ls, d)
         return
     end
+
+    _uses_full_halo_buffers(ls.A) &&
+        return _exchange_dim_full_buffers!(ls, d, rankM, rankP, me)
 
     # buffer indices
     iSM, iRM = 4d - 3, 4d - 2

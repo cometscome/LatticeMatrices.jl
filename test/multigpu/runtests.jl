@@ -8,6 +8,7 @@ using LatticeMatrices
 using LinearAlgebra
 using Test
 
+include("../communication_helpers.jl")
 include("../staggered_dirac.jl")
 include("../domainwall.jl")
 include("../cg.jl")
@@ -187,12 +188,9 @@ function run_tests()
             end
         end
 
-        @test direct_lattice.shift_buf_host.send !==
-              direct_lattice.shift_buf_host.recv
-        @test length(direct_lattice.shift_buf_host.send) ==
-              NC * NC * prod(direct_lattice.PN)
-        @test length(direct_lattice.shift_buf_host.recv) ==
-              NC * NC * prod(direct_lattice.PN)
+        @test mpi_transport_info(direct_lattice).resolved === :device_direct
+        @test isempty(direct_lattice.shift_buf_host.send)
+        @test isempty(direct_lattice.shift_buf_host.recv)
     end
 
     @testset "two-GPU staggered Dirac operator" begin

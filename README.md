@@ -6,12 +6,13 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.1 is the current backward-compatible release in the stable v1 line.
+Version 1.2.2 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 
-Version 1.2.1 extends HISQ support and removes per-site CPU heap allocation from
-mutating JACC kernel launches; see [CHANGES.md](CHANGES.md) for details.
+Version 1.2.2 adds a portable full-buffer halo fallback for oneAPI while
+preserving the optimized CUDA and ROCm communication paths; see
+[CHANGES.md](CHANGES.md) for details.
 
 Version 1.1.6 added generic SU(N) normalization for NC > 3.
 

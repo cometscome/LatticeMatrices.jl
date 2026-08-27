@@ -4,6 +4,19 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.2
+
+### Portable oneAPI halo exchange
+
+- oneAPI arrays use full preallocated face buffers for MPI halo exchange,
+  avoiding compact derived device views that are not reliable on Intel GPUs.
+- The oneAPI fallback retains host-staged MPI and the current boundary-phase
+  convention. CUDA and ROCm keep the existing compact-buffer and
+  device-direct transport paths unchanged.
+- CPU MPI regression coverage compares the full-buffer fallback with the
+  optimized exchange for halo width two, multidimensional corners, and
+  complex boundary phases.
+
 ## v1.2.1
 
 ### HISQ extensions

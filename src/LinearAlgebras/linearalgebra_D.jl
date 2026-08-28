@@ -3339,3 +3339,212 @@ end
     end
     return s
 end
+
+
+@inline function calc_coefficients_Q(Q)
+    @assert size(Q) == (3, 3)
+    c0 =
+        Q[1, 1] * Q[2, 2] * Q[3, 3] +
+        Q[1, 2] * Q[2, 3] * Q[3, 1] +
+        Q[1, 3] * Q[2, 1] * Q[3, 2] - Q[1, 3] * Q[2, 2] * Q[3, 1] -
+        Q[1, 2] * Q[2, 1] * Q[3, 3] - Q[1, 1] * Q[2, 3] * Q[3, 2]
+
+    c1 = 0.0
+    for i = 1:3
+        for j = 1:3
+            c1 += Q[i, j] * Q[j, i]
+        end
+    end
+    c1 /= 2
+    c0max = 2 * (c1 / 3)^(3 / 2)
+    θ = acos(c0 / c0max)
+    u = sqrt(c1 / 3) * cos(θ / 3)
+    w = sqrt(c1) * sin(θ / 3)
+    ξ0 = sin(w) / w
+    ξ1 = cos(w) / w^2 - sin(w) / w^3
+
+    emiu = exp(-im * u)
+    e2iu = exp(2 * im * u)
+
+    h0 = (u^2 - w^2) * e2iu + emiu * (8u^2 * cos(w) + 2 * im * u * (3u^2 + w^2) * ξ0)
+    h1 = 2u * e2iu - emiu * (2u * cos(w) - im * (3u^2 - w^2) * ξ0)
+    h2 = e2iu - emiu * (cos(w) + 3 * im * u * ξ0)
+
+    denom = 9u^2 - w^2
+
+    f0 = h0 / denom
+    f1 = h1 / denom
+    f2 = h2 / denom
+
+    r10 =
+        2 * (u + im * (u^2 - w^2)) * e2iu +
+        2 *
+        emiu *
+        (4u * (2 - im * u) * cos(w) + im * (9u^2 + w^2 - im * u * (3u^2 + w^2)) * ξ0)
+    r11 =
+        2 * (1 + 2 * im * u) * e2iu +
+        emiu * (-2 * (1 - im * u) * cos(w) + im * (6u + im * (w^2 - 3u^2)) * ξ0)
+    r12 = 2 * im * e2iu + im * emiu * (cos(w) - 3 * (1 - im * u) * ξ0)
+    r20 = -2 * e2iu + 2 * im * u * emiu * (cos(w) + (1 + 4 * im * u) * ξ0 + 3u^2 * ξ1)
+    r21 = -im * emiu * (cos(w) + (1 + 2 * im * u) * ξ0 - 3 * u^2 * ξ1)
+    r22 = emiu * (ξ0 - 3 * im * u * ξ1)
+    b10 = (2 * u * r10 + (3u^2 - w^2) * r20 - 2 * (15u^2 + w^2) * f0) / (2 * denom^2)
+
+    b11 = (2 * u * r11 + (3u^2 - w^2) * r21 - 2 * (15u^2 + w^2) * f1) / (2 * denom^2)
+    b12 = (2 * u * r12 + (3u^2 - w^2) * r22 - 2 * (15u^2 + w^2) * f2) / (2 * denom^2)
+    b20 = (r10 - 3 * u * r20 - 24 * u * f0) / (2 * denom^2)
+    b21 = (r11 - 3 * u * r21 - 24 * u * f1) / (2 * denom^2)
+    b22 = (r12 - 3 * u * r22 - 24 * u * f2) / (2 * denom^2)
+
+    return f0, f1, f2, b10, b11, b12, b20, b21, b22
+end
+
+
+function kernel_construct_Λmatrix_forSTOUT!(i, Λ, δ, Q, U, NC, dindexer, nw, global_buffer)
+
+    indices = delinearize(dindexer, i, nw)
+    
+    
+    @inbounds begin
+      
+        temp1 = view(global_buffer, :, :, 1,i)
+        temp2 = view(global_buffer, :, :, 2,i)
+        temp3 = view(global_buffer, :, :, 3,i)
+        Qn = view(global_buffer, :, :, 4,i)
+        Mn = view(global_buffer, :, :, 5,i)
+        Unδn = view(global_buffer, :, :, 6,i)
+    
+        for ic in 1:3
+            for jc in 1:3
+                Qn[ic,jc] = Q[ic,jc,indices...]
+            end
+        end
+
+        #calc_Mmatrix! --> elementwise operation
+        trQ2 = 0.0
+        for i = 1:3
+            for j = 1:3
+                trQ2 += Qn[i, j] * Qn[j, i]
+            end
+        end
+    
+    
+        
+        if abs(trQ2) > 1e-18
+            Qn ./= im
+            #println("Qn b ",Qn)
+            f0, f1, f2, b10, b11, b12, b20, b21, b22 = calc_coefficients_Q(Qn)            
+            
+            for ic in 1:3
+                for jc in 1:3
+                    Unδn[ic,jc] = 0.0f0 + 0im
+                    for k = 1:3
+                        Unδn[ic,jc] += U[ic,k, indices...] * δ[k,jc, indices...]
+                    end
+                end
+            end
+            
+            B1 = temp1
+            B1 .= 0
+            B2 = temp3
+            B2 .= 0
+            for i = 1:3
+                B1[i, i] = b10
+                B2[i, i] = b20
+            end
+            for j = 1:3
+                for i = 1:3
+                    B1[i, j] += b11 * Qn[i, j]
+                    B2[i, j] += b21 * Qn[i, j]
+                    for k = 1:3
+                        B1[i, j] += b12 * Qn[i, k] * Qn[k, j]
+                        B2[i, j] += b22 * Qn[i, k] * Qn[k, j]
+                    end
+                end
+            end
+        
+
+            trB1 = 0.0
+            trB2 = 0.0
+            for i = 1:3
+                for j = 1:3
+                    trB1 += Unδn[i, j] * B1[j, i]
+                    trB2 += Unδn[i, j] * B2[j, i]
+                end
+            end
+
+            for j = 1:3
+                for i = 1:3
+                    Mn[i, j] = trB1 * Qn[i, j] + f1 * Unδn[i, j]
+                    for k = 1:3
+                        Mn[i, j] +=
+                            trB2 * Qn[i, k] * Qn[k, j] +
+                            f2 * (Qn[i, k] * Unδn[k, j] + Unδn[i, k] * Qn[k, j])
+                    end
+                end
+            end
+            
+            for i = 1:3
+                for j = 1:3
+                    Mn[i, j] /= im
+                end
+            end
+        else
+           
+            #Mn .= 0
+            #mul!(Mn, Un, δn) # --> f1 = 1, to have a well-defined point when Q == 0 for θ =0. 
+            for ic in 1:3
+                for jc in 1:3
+                    Mn[ic,jc] = 0.0f0 + 0im
+                    for k = 1:3
+                        Mn[ic,jc] += U[ic,k, indices...] * δ[k,jc, indices...]
+                    end
+                end
+            end
+            
+        end
+
+
+        #calc_Λmatrix!(Λn, Mn, NC) --> elementwise operation
+        temp2 .= 0
+        for i = 1:3
+            for j = 1:3
+                temp2[i, j] = (1 / 2) * (Mn[i,j] - conj(Mn[j,i]))
+            end
+        end
+            
+        #trMn = (1 / (6)) * tr(Mn - Mn')
+        trMn = 0.0
+        for i = 1:3
+            trMn += ( Mn[i, i] - conj(Mn[i, i]) ) / 6
+        end
+
+        for i = 1:3
+            temp2[i, i] += -trMn
+        end
+        
+        for jc = 1:NC
+            for ic = 1:NC
+                Λ[ic,jc,indices...] = temp2[ic, jc]
+            end
+        end
+    
+    end
+    
+    return
+    
+end
+
+function construct_Λmatrix_forSTOUT_matrix!(
+    Λ::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    δ_current::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    Q::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+    u::LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},
+) where {D,T,AT,NC1,NC2,nw,DI}
+
+    global_buffer = JACC.zeros(ComplexF64, 3, 3, 6, prod(Λ.PN))
+
+    JACC.parallel_for(prod(Λ.PN), kernel_construct_Λmatrix_forSTOUT!, Λ.A, δ_current.A, Q.A, u.A, NC1, Λ.indexer, nw, global_buffer)
+    set_halo!(Λ)
+end
+export construct_Λmatrix_forSTOUT_matrix!

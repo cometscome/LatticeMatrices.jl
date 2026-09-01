@@ -4,6 +4,41 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.3
+
+### Lazy per-lattice scratch storage
+
+- `LatticeMatrix` scratch fields are now allocated on first use instead of at
+  construction time. The default `numtemps` is therefore zero; passing a
+  positive `numtemps` continues to request eager preallocation.
+- `similar(lattice)` creates an independent, initially empty scratch pool
+  instead of copying the source lattice's scratch high-water mark. Scratch
+  pools remain object-local so `get_block`/`unused!` lease accounting cannot
+  alias between otherwise independent lattice objects.
+- The new lazy pool preserves the unlabeled `PreallocatedArrays` operations
+  used by LatticeMatrices and downstream diagnostics, including `get_block`,
+  `unused!`, indexed access, `length`, and the existing `_data` and
+  `_flagusing` inspection fields. Normal on-demand growth no longer emits the
+  capacity warnings previously produced by `LatticeMatrix.temps`.
+- The concrete type of `LatticeMatrix.temps` is now `LatticeScratchPool`.
+  Downstream code should use the pool operations above rather than requiring a
+  concrete `PreallocatedArray` type annotation.
+
+### Memory diagnostics
+
+- The exported `lattice_memory_report(lattice)` reports core data, halo
+  padding, scratch capacity and in-use count, backend halo buffers, host
+  staging buffers, and tracked totals in bytes.
+- Reported byte counts cover array payloads. Julia object headers and backend
+  allocator overhead are intentionally excluded.
+
+### Validation
+
+- Lazy allocation, explicit eager reservation, scratch release, and
+  high-water-mark reset through `similar` are covered by serial and MPI
+  long-shift regressions. Domain-wall adjoint tests also verify that borrowed
+  scratch storage is returned after use.
+
 ## v1.2.2
 
 ### Portable oneAPI halo exchange

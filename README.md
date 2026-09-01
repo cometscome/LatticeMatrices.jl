@@ -6,9 +6,11 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.2 is the current backward-compatible release in the stable v1 line.
+Version 1.2.3 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
+
+Version 1.2.3 lazily allocates per-lattice scratch storage, resets scratch capacity in `similar`, and adds `lattice_memory_report`; see [CHANGES.md](CHANGES.md) for details.
 
 Version 1.2.2 adds a portable full-buffer halo fallback for oneAPI while
 preserving the optimized CUDA and ROCm communication paths; see
@@ -183,7 +185,7 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI,C} <:
     PN::NTuple{D,Int}             # local interior size per dimension
     comm::C                       # original communicator
     indexer::DI                   # DIndexer for global sizes
-    temps::PreallocatedArray{AT,Union{Nothing,String},false}
+    temps::LatticeScratchPool{AT}
     halo_epoch::HaloEpoch
 end
 ```
@@ -196,11 +198,11 @@ and halo epochs so shifted reads can synchronize stale halo data automatically.
 ```julia
 LatticeMatrix(NC1, NC2, dim, gsize, PEs;
               nw=1, elementtype=ComplexF64, phases=ones(dim),
-              comm0=nothing, numtemps=1, device_mapping=:auto,
+              comm0=nothing, numtemps=0, device_mapping=:auto,
               mpi_transport=:auto)
 
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
-              comm0=nothing, numtemps=1, device_mapping=:auto,
+              comm0=nothing, numtemps=0, device_mapping=:auto,
               mpi_transport=:auto)
 ```
 
@@ -352,7 +354,7 @@ public operation safe even though a halo-free lattice has no boundary storage.
 
 If any component of a shift is larger than `nw`, the shift is materialized in
 one direct MPI redistribution instead of extending the halo one cell at a time.
-The result borrows storage from the source lattice's `PreallocatedArray` pool.
+The result borrows storage from the source lattice's lazy scratch pool.
 Return that slot deterministically after use:
 
 ```julia
@@ -1251,12 +1253,13 @@ shiftindices(indices, shift)
 
 # Lattice
 LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64,
-              phases=ones(dim), comm0=nothing, numtemps=1,
+              phases=ones(dim), comm0=nothing, numtemps=0,
               device_mapping=:auto, mpi_transport=:auto)
 LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
-              comm0=nothing, numtemps=1, device_mapping=:auto,
+              comm0=nothing, numtemps=0, device_mapping=:auto,
               mpi_transport=:auto)
 mpi_transport_info(ls)
+lattice_memory_report(ls)
 
 set_halo!(ls)
 ensure_halo!(ls)

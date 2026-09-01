@@ -14,6 +14,8 @@
 using StaticArrays, JACC
 using PreallocatedArrays
 
+include("LatticeScratchPool.jl")
+
 abstract type LatticeMatrix{D,T,AT,NC1,NC2,nw,DI} <: Lattice{D,T,AT,NC1,NC2,nw} end
 
 # ---------------------------------------------------------------------------
@@ -194,10 +196,64 @@ struct LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI,C} <: LatticeMatrix{D,T,AT,NC
     PN::NTuple{D,Int}
     comm::C
     indexer::DI
-    temps::PreallocatedArray{AT,Union{Nothing,String},false}
+    temps::LatticeScratchPool{AT}
     halo_epoch::HaloEpoch
     #stride::NTuple{D,Int}
 end
+
+@inline _array_payload_bytes(array) = length(array) * sizeof(eltype(array))
+
+@inline function _arrays_payload_bytes(arrays)
+    bytes = 0
+    for array in arrays
+        bytes += _array_payload_bytes(array)
+    end
+    return bytes
+end
+
+"""
+    lattice_memory_report(lattice)
+
+Return a named tuple describing the array payload memory owned by `lattice`.
+The report separates the main lattice (including halo padding), lazily allocated
+scratch fields, backend halo buffers, and host staging buffers. Julia object
+headers and backend allocator overhead are intentionally not included.
+"""
+function lattice_memory_report(ls::LatticeMatrix)
+    data_bytes = _array_payload_bytes(ls.A)
+    core_data_bytes = ls.NC1 * ls.NC2 * prod(ls.PN) * sizeof(eltype(ls.A))
+
+    scratch_pool = _scratch_inner(ls.temps)
+    scratch_bytes = scratch_pool === nothing ? 0 :
+        _arrays_payload_bytes(scratch_pool._data)
+    halo_backend_buffer_bytes = _arrays_payload_bytes(ls.buf)
+    halo_host_buffer_bytes = _arrays_payload_bytes(ls.buf_host)
+    direct_shift_host_buffer_bytes =
+        _array_payload_bytes(ls.shift_buf_host.send) +
+        _array_payload_bytes(ls.shift_buf_host.recv)
+
+    backend_array_bytes =
+        data_bytes + scratch_bytes + halo_backend_buffer_bytes
+    host_auxiliary_bytes =
+        halo_host_buffer_bytes + direct_shift_host_buffer_bytes
+
+    return (
+        core_data_bytes,
+        data_bytes,
+        halo_padding_bytes=data_bytes - core_data_bytes,
+        scratch_bytes,
+        scratch_capacity=scratch_capacity(ls.temps),
+        scratch_inuse=scratch_inuse(ls.temps),
+        halo_backend_buffer_bytes,
+        halo_host_buffer_bytes,
+        direct_shift_host_buffer_bytes,
+        backend_array_bytes,
+        host_auxiliary_bytes,
+        total_tracked_bytes=backend_array_bytes + host_auxiliary_bytes,
+    )
+end
+
+export lattice_memory_report
 
 """
     mark_halo_dirty!(lattice)
@@ -271,9 +327,11 @@ export mark_halo_dirty!, halo_is_dirty, halo_epochs, parallel_for_mutating!
 
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,DI,nw,TL<:LatticeMatrix_standard{D,T,AT,NC1,NC2,nw,DI}}
-    numtemps = length(ls.temps._data)
     tA = zero(ls.A)
-    temps = PreallocatedArray(tA; num=numtemps, haslabel=false)
+    # Scratch capacity is a workload high-water mark, not structural lattice
+    # metadata. A similar lattice therefore starts with no scratch allocation
+    # and grows lazily if a materialized long shift actually needs storage.
+    temps = LatticeScratchPool(tA)
     buf = similar(ls.buf)
     buf_host = similar(ls.buf_host)
     for i in eachindex(ls.buf)
@@ -344,12 +402,12 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
-    comm0=nothing, numtemps=1, device_mapping=:auto, mpi_transport=:auto)
+    comm0=nothing, numtemps=0, device_mapping=:auto, mpi_transport=:auto)
     return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs;
         nw, elementtype, phases, comm0, numtemps, device_mapping, mpi_transport)
 end
 
-function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=1,
+function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=0,
     device_mapping=:auto, mpi_transport=:auto)
     return LatticeMatrix_standard(A, dim, PEs;
         nw, phases, comm0, numtemps, device_mapping, mpi_transport)
@@ -359,7 +417,7 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=nothing,
-    numtemps=1, device_mapping=:auto, mpi_transport=:auto)
+    numtemps=0, device_mapping=:auto, mpi_transport=:auto)
 
     nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
     dim > 0 || throw(ArgumentError("dim must be positive, got $dim"))
@@ -447,7 +505,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     indexer = DIndexer(PN)
     DI = typeof(indexer)
 
-    temps = PreallocatedArray(A; num=numtemps, haslabel=false)
+    temps = LatticeScratchPool(A; num=numtemps)
 
     #return LatticeMatrix{D,T,typeof(A),NC1,NC2,nw}(nw, phases, NC1, NC2, gsize,
     #    cart, Tuple(coords), dims, nbr,
@@ -459,7 +517,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
         indexer, temps, HaloEpoch())
 end
 
-function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=1,
+function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=0,
     device_mapping=:auto, mpi_transport=:auto)
 
     NC1, NC2, NN... = size(A)
@@ -519,7 +577,7 @@ end
 
 function Base.similar(ls::TL) where {D,T,AT,NC1,NC2,TL<:LatticeMatrix{D,T,AT,NC1,NC2}}
     return LatticeMatrix(NC1, NC2, D, ls.gsize, ls.dims;
-        nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=1,
+        nw=ls.nw, elementtype=T, phases=ls.phases, comm0=ls.comm, numtemps=0,
         device_mapping=:current, mpi_transport=ls.mpi_transport.requested)
 end
 

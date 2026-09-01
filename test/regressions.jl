@@ -39,6 +39,45 @@ end
 function regressiontests()
     nprocs = test_comm_size()
 
+    @testset "lazy scratch allocation and memory report" begin
+        global_size = (4 * nprocs,)
+        process_grid = (nprocs,)
+        values = reshape(ComplexF64.(1:prod(global_size)), 1, 1, global_size...)
+        lattice = LatticeMatrix(values, 1, process_grid; nw=1)
+
+        initial = lattice_memory_report(lattice)
+        @test initial.core_data_bytes == prod(lattice.PN) * sizeof(ComplexF64)
+        @test initial.data_bytes == length(lattice.A) * sizeof(ComplexF64)
+        @test initial.halo_padding_bytes ==
+            initial.data_bytes - initial.core_data_bytes
+        @test initial.scratch_capacity == 0
+        @test initial.scratch_inuse == 0
+        @test initial.scratch_bytes == 0
+        @test hasproperty(lattice.temps, :_data)
+        @test isempty(lattice.temps._data)
+
+        with_shifted_lattice(lattice, (2,)) do shifted
+            @test isopen(shifted)
+            during_shift = lattice_memory_report(lattice)
+            @test during_shift.scratch_capacity >= 1
+            @test during_shift.scratch_inuse == 1
+        end
+
+        grown = lattice_memory_report(lattice)
+        @test grown.scratch_inuse == 0
+        @test grown.scratch_bytes == grown.scratch_capacity * grown.data_bytes
+
+        fresh = similar(lattice)
+        fresh_report = lattice_memory_report(fresh)
+        @test fresh_report.scratch_capacity == 0
+        @test fresh_report.scratch_bytes == 0
+
+        reserved = LatticeMatrix(values, 1, process_grid; nw=1, numtemps=2)
+        reserved_report = lattice_memory_report(reserved)
+        @test reserved_report.scratch_capacity == 2
+        @test reserved_report.scratch_bytes == 2 * reserved_report.data_bytes
+    end
+
     @testset "NC3 normalization in Float32 and Float64" begin
         lattice_size = (2, 2, 2, 2)
         indexer = DIndexer(lattice_size)

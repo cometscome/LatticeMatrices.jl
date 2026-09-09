@@ -4,6 +4,54 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.4
+
+### Normalized HYP smearing and HMC pullback
+
+- The new `NHYPParameters`, `NHYPSmearingCache4D`, `nhyp_smear`,
+  `nhyp_smear!`, and `nhyp_pullback!` APIs implement four-dimensional
+  normalized HYP smearing with a U(N) polar projection at each of its three
+  nested levels. The default outer, middle, and inner coefficients are 0.5,
+  0.5, and 0.4.
+- Coefficients are named by geometric nesting level to avoid ambiguity.
+  QEX's `(alpha1, alpha2, alpha3)` convention maps to
+  `(alpha_inner, alpha_middle, alpha_outer)` in LatticeMatrices.
+- `nhyp_smear(U, parameters)` is the allocating interface and returns
+  `(smeared, cache)`. For repeated HMC trajectories, callers can allocate
+  `NHYPSmearingCache4D(U, parameters)` and the output links once and use
+  `nhyp_smear!(smeared, U, cache)` on subsequent forward passes.
+- The reusable cache retains the unprojected and projected inner and middle
+  links, the unprojected outer links, and reverse-pass scratch fields. Its
+  coefficients are converted to the real element type of the links. A cache
+  records its source objects and their core epochs and rejects a pullback
+  after the thin links have changed. One cache must not be used concurrently
+  by multiple tasks.
+- `nhyp_pullback!(dU, left, U, cache)` analytically differentiates all staple
+  products and U(N) projections, overwriting `dU` with the thin-link
+  cotangent. Its convention is
+  `real(sum(dot(dU[mu], deltaU[mu]) for mu in 1:4))`, so it can be used in
+  HMC force construction without finite differencing.
+- Inputs and outputs may be vectors or four-tuples of compatible
+  `LatticeMatrix{4}` links. The implementation requires periodic square
+  floating-point matrix links with halo width `nw >= 1`, checks layout and
+  aliasing constraints, and uses target-centric reverse kernels so MPI halo
+  contributions are accumulated on the correct owning rank.
+
+### Validation
+
+- Forward links were compared site by site with QEX `hypsmear` at commit
+  `f93ce40d9d88acf6c8dea1477e85e07bd50ecc01` on a fixed-seed hot SU(3) field
+  on a 4^4 lattice. With QEX coefficients `(0.4, 0.5, 0.5)`, the maximum
+  absolute difference was `6.62e-15` on threaded CPU.
+- The analytic pullback was compared with QEX's `smearGetForce` on the same
+  hot field and a nonzero random cotangent; its maximum absolute difference
+  was `1.41e-14`. Independent finite-difference directional derivatives are
+  also covered by the regression tests.
+- Targeted nHYP tests pass with one and four CPU threads and with two MPI
+  ranks. On an NVIDIA H100 NVL (compute capability 9.0), both the forward and
+  pullback execute on `CuArray{ComplexF64}` through JACC's CUDA backend; the
+  maximum QEX differences were `5.35e-15` and `1.98e-14`, respectively.
+
 ## v1.2.3
 
 ### Lazy per-lattice scratch storage

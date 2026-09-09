@@ -6,9 +6,11 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.3 is the current backward-compatible release in the stable v1 line.
+Version 1.2.4 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
+
+Version 1.2.4 adds QEX-compatible normalized HYP smearing and an analytic HMC pullback; see [CHANGES.md](CHANGES.md) for details.
 
 Version 1.2.3 lazily allocates per-lattice scratch storage, resets scratch capacity in `similar`, and adds `lattice_memory_report`; see [CHANGES.md](CHANGES.md) for details.
 

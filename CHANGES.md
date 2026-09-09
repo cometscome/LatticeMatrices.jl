@@ -31,6 +31,12 @@ preserve the public v1 API.
   cotangent. Its convention is
   `real(sum(dot(dU[mu], deltaU[mu]) for mu in 1:4))`, so it can be used in
   HMC force construction without finite differencing.
+- The NC=3 polar-projection pullback uses the QEX Cayley--Hamilton closed-form
+  Sylvester solver instead of forming and LU-factorizing a 9-by-9 complex
+  system at every site. This optimization is shared by nHYP and HISQ.
+- Add public `staggered_link_pullback!` for the one-link staggered operator.
+  It is a direct JACC analytic kernel used by LDO's dedicated staggered
+  action; the Enzyme rule now shares the same implementation.
 - Inputs and outputs may be vectors or four-tuples of compatible
   `LatticeMatrix{4}` links. The implementation requires periodic square
   floating-point matrix links with halo width `nw >= 1`, checks layout and
@@ -51,6 +57,11 @@ preserve the public v1 API.
   ranks. On an NVIDIA H100 NVL (compute capability 9.0), both the forward and
   pullback execute on `CuArray{ComplexF64}` through JACC's CUDA backend; the
   maximum QEX differences were `5.35e-15` and `1.98e-14`, respectively.
+- The complete one-rank CPU regression suite passes 28,876/28,876 tests with
+  the closed-form projection and public staggered pullback enabled.
+- On a fixed-seed hot SU(3) `16^4` field on the H100, optimized median times
+  over 20 synchronized runs are 9.825 ms for the forward pass, 36.125 ms for
+  the pullback, and 50.721 ms for the combined chain.
 
 ## v1.2.3
 

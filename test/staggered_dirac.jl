@@ -312,6 +312,40 @@ function staggered_dirac_tests()
         end
     end
 
+    @testset "staggered analytic link pullback" begin
+        dlinks = [similar(link) for link in U1]
+        clear_matrix!.(dlinks)
+        @test staggered_link_pullback!(dlinks, U1, chi1, psi1) === dlinks
+
+        direction_arrays = _staggered_test_links(lattice_size, NC)
+        direction_links = [
+            LatticeMatrix(direction, 4, process_grid; nw=1)
+            for direction in direction_arrays
+        ]
+        analytic = real(sum(
+            dot(dlinks[mu], direction_links[mu]) for mu in 1:4))
+        epsilon = 2e-6
+        plus_links = [
+            LatticeMatrix(
+                links[mu] .+ epsilon .* direction_arrays[mu],
+                4, process_grid; nw=1,
+            ) for mu in 1:4
+        ]
+        minus_links = [
+            LatticeMatrix(
+                links[mu] .- epsilon .* direction_arrays[mu],
+                4, process_grid; nw=1,
+            ) for mu in 1:4
+        ]
+        plus_result = similar(psi1)
+        minus_result = similar(psi1)
+        mul!(plus_result, StaggeredDiracOperator4D(plus_links, mass), psi1)
+        mul!(minus_result, StaggeredDiracOperator4D(minus_links, mass), psi1)
+        finite_difference = real(
+            dot(chi1, plus_result) - dot(chi1, minus_result)) / (2epsilon)
+        @test isapprox(analytic, finite_difference; atol=2e-7, rtol=2e-8)
+    end
+
     @testset "staggered nw=0 and nw=1" begin
         U0 = [LatticeMatrix(link, 4, process_grid; nw=0) for link in links]
         psi0 = LatticeMatrix(psi_array, 4, process_grid;
@@ -333,6 +367,8 @@ function staggered_dirac_tests()
         if rank == 0
             @test global0_dag ≈ global1_dag atol=4e-12 rtol=4e-12
         end
+        @test_throws ArgumentError staggered_link_pullback!(
+            [similar(link) for link in U0], U0, result0, psi0)
     end
 
     @testset "global staggered eta on odd local extents" begin

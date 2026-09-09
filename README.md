@@ -6,9 +6,11 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.3 is the current backward-compatible release in the stable v1 line.
+Version 1.2.4 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
+
+Version 1.2.4 adds QEX-compatible normalized HYP smearing and an analytic HMC pullback; see [CHANGES.md](CHANGES.md) for details.
 
 Version 1.2.3 lazily allocates per-lattice scratch storage, resets scratch capacity in `similar`, and adds `lattice_memory_report`; see [CHANGES.md](CHANGES.md) for details.
 
@@ -61,7 +63,7 @@ LatticeMatrices does not call `MPI.Init()` or `MPI.Finalize()` automatically.
   anti-Hermitian projections, even/odd updates, and iterative solvers.
 - Build Wilson, Wilson--clover, staggered, HISQ, Möbius domain-wall, and
   generalized domain-wall operators, together with their adjoints and cached
-  execution paths, and construct nHYP links with an analytic HMC pullback.
+  execution paths.
 - Use LatticeMatrices directly for structured-lattice models or as the
   MPI/JACC backend for
   [Gaugefields.jl](https://github.com/akio-tomiya/Gaugefields.jl) and
@@ -643,32 +645,6 @@ field spectrum, gauge covariance, odd-local-extent MPI decomposition, and
 fixed numerical fingerprints generated directly by Bridge++ 2.1.3.  The
 Bridge++ oracle source is
 [`test/reference/bridgepp_staggered_reference.cpp`](test/reference/bridgepp_staggered_reference.cpp).
-
-#### Normalized HYP smearing and force
-
-QEX-style normalized HYP smearing is exposed as a three-level U(N)-projected
-link construction. Coefficients are named by nesting level because QEX's
-`alpha1`, `alpha2`, and `alpha3` mean inner, middle, and outer, respectively:
-
-```julia
-parameters = NHYPParameters(
-    alpha_outer=0.5,
-    alpha_middle=0.5,
-    alpha_inner=0.4,
-)
-
-smeared, cache = nhyp_smear(U, parameters)
-
-# If `left` is the cotangent of `smeared`, overwrite `dU` with the
-# corresponding thin-link cotangent for an HMC force.
-nhyp_pullback!(dU, left, U, cache)
-```
-
-For repeated trajectories, allocate `NHYPSmearingCache4D(U, parameters)` and
-the four output links once, then call `nhyp_smear!(smeared, U, cache)`. The
-cache records the thin-link core epochs and rejects a pullback if the links
-have changed since the forward pass. nHYP requires periodic four-dimensional
-square links with `nw >= 1`.
 
 #### Complete HISQ smearing and stencil (SIMULATeQCD convention)
 
@@ -1316,11 +1292,6 @@ WilsonDiracOperator4D(U, kappa)
 WilsonDiracOperator4D_Donly(U)
 WilsonDiracCloverOperator4D(U, kappa, cSW)
 StaggeredDiracOperator4D(U, mass)
-NHYPParameters(; alpha_outer=0.5, alpha_middle=0.5, alpha_inner=0.4)
-NHYPSmearingCache4D(U, parameters)
-nhyp_smear(U, parameters)
-nhyp_smear!(smeared, U, cache)
-nhyp_pullback!(dU, left, U, cache)
 hisq_fat7_level1(U)
 hisq_fat7_level1!(V, U)
 HISQFat7Workspace(U[1])

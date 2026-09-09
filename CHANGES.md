@@ -4,7 +4,7 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
-## v1.2.3
+## v1.2.4
 
 ### Normalized HYP smearing
 
@@ -16,6 +16,8 @@ preserve the public v1 API.
   links needed by the analytic `nhyp_pullback!` reverse pass. The pullback is
   suitable for HMC link-force construction and supports MPI-decomposed halo
   boundaries with `nw >= 1`.
+
+## v1.2.3
 
 ### Lazy per-lattice scratch storage
 

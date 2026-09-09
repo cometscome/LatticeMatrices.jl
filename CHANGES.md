@@ -6,6 +6,17 @@ preserve the public v1 API.
 
 ## v1.2.3
 
+### Normalized HYP smearing
+
+- Four-dimensional nHYP smearing is available through `nhyp_smear!` and
+  `nhyp_smear`. `NHYPParameters` names the outer, middle, and inner
+  coefficients explicitly; QEX's `(alpha1, alpha2, alpha3)` order maps to
+  `(alpha_inner, alpha_middle, alpha_outer)`.
+- `NHYPSmearingCache4D` retains all U(N) projection inputs and intermediate
+  links needed by the analytic `nhyp_pullback!` reverse pass. The pullback is
+  suitable for HMC link-force construction and supports MPI-decomposed halo
+  boundaries with `nw >= 1`.
+
 ### Lazy per-lattice scratch storage
 
 - `LatticeMatrix` scratch fields are now allocated on first use instead of at

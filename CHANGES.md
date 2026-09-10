@@ -4,6 +4,50 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.5
+
+### APE, stout/EXP, HYP, and HEX smearing
+
+- Add `APEParameters`, `StoutParameters`, `HYPParameters`, and
+  `HEXParameters` together with allocating and preallocated four-dimensional
+  link-smearing interfaces. Their defaults follow the standard matched
+  choices: `alpha=0.6` for APE, `rho=0.1` for stout/EXP,
+  `(alpha_outer, alpha_middle, alpha_inner)=(0.75, 0.6, 0.3)` for HYP, and
+  `(0.125, 0.15, 0.15)` for HEX.
+- Implement stout/EXP and all three restricted geometric levels of HEX with
+  matrix-exponential SU(N) retractions. Both transformations have analytic
+  reverse passes, exposed through `stout_pullback!` and `hex_pullback!`, for
+  SU(2) and SU(3) links.
+- Implement APE and all three restricted geometric levels of HYP with an
+  explicit principal-branch SU(N) polar projection. These two interfaces are
+  intentionally forward-only: requesting their pullback throws an
+  `ArgumentError` instead of silently substituting a different projection or
+  derivative.
+- Add the common `smearing_cache`, `smear_links`, `smear_links!`, and
+  `smear_links_pullback!` protocol for nHYP and all four new schemes.
+  `IteratedSmearing(parameters, iterations)` repeats a complete smearing
+  transformation and reverses analytic schemes through every cached stage.
+  This iteration count is distinct from the three nested levels of nHYP,
+  HYP, and HEX.
+- Reuse the existing target-centric staple reverse kernels and JACC
+  matrix-exponential pullback. Reusable caches retain the required forward
+  state, convert coefficients to the link precision, reject aliased storage,
+  and detect thin links modified between a forward pass and its pullback.
+- Require four-dimensional square floating-point link matrices and halo width
+  `nw >= 1`. The native stout/EXP, HEX, APE, and HYP paths currently support
+  SU(2) and SU(3); nHYP retains its existing generic U(N) projection path.
+
+### Validation
+
+- Add 680 focused CPU regression checks covering parameter validation,
+  Float32 cache specialization, special-unitary output, zero-coefficient
+  identity transformations, stale-cache rejection, forward-only errors, and
+  two-stage iteration.
+- Compare the analytic stout/EXP and HEX pullbacks with central finite-
+  difference directional derivatives on fixed-seed hot SU(3) fields. Both
+  pullbacks agree within the test tolerances, including a two-iteration stout
+  chain.
+
 ## v1.2.4
 
 ### Normalized HYP smearing and HMC pullback

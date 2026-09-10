@@ -46,6 +46,7 @@ include("hisq_dirac.jl")
 include("domainwall.jl")
 include("ci_hisq_smoke.jl")
 include("nhyp_smearing.jl")
+include("uv_smearing.jl")
 
 if LATTICEMATRICES_EXTENDED_TESTS
     include("hisq_smearing.jl")
@@ -1012,6 +1013,7 @@ function main()
     domainwall_tests()
     ci_hisq_smoke_tests()
     nhyp_smearing_tests()
+    uv_smearing_tests()
     #=
     for dim = 1:5
         indextest(dim)

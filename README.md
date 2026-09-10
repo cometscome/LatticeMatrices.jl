@@ -1213,6 +1213,72 @@ between those stages.
 
 ---
 
+## APE, stout/EXP, HYP, HEX, and nHYP smearing
+
+The common interface accepts a vector of four compatible
+`LatticeMatrix{4}` links. The links must have `nw >= 1`; outputs and inputs
+must use separate storage.
+
+```julia
+using LatticeMatrices
+
+# U is a four-element vector containing the thin links U[1], ..., U[4].
+# The allocating interface returns both the smeared links and the cache that
+# belongs to this forward pass.
+stout = StoutParameters(rho=0.1)
+V, cache = smear_links(U, stout)
+
+# Reuse storage across measurements or molecular-dynamics steps.
+V = similar.(U)
+cache = smearing_cache(U, stout)
+smear_links!(V, U, cache)
+```
+
+Select the other transformations by changing the parameter object:
+
+```julia
+ape  = APEParameters(alpha=0.6)
+hyp  = HYPParameters(alpha_outer=0.75, alpha_middle=0.6, alpha_inner=0.3)
+hex  = HEXParameters(alpha_outer=0.125, alpha_middle=0.15, alpha_inner=0.15)
+nhyp = NHYPParameters(alpha_outer=0.5, alpha_middle=0.5, alpha_inner=0.4)
+
+Vape,  _ = smear_links(U, ape)
+Vhyp,  _ = smear_links(U, hyp)
+Vhex,  _ = smear_links(U, hex)
+Vnhyp, _ = smear_links(U, nhyp)
+```
+
+Stout/EXP, HEX, and nHYP provide analytic pullbacks. The cotangent cache must
+come from the most recent forward pass, and `U` must not be modified between
+the forward and reverse calls.
+
+```julia
+V, cache = smear_links(U, HEXParameters())
+
+# Fill dV with the cotangent of the objective with respect to V.
+dV = similar.(V)
+dU = similar.(U)
+smear_links_pullback!(dU, dV, U, cache)
+```
+
+APE and principal-polar HYP are forward-only; their pullback deliberately
+throws an `ArgumentError`. Repeat a complete transformation with
+`IteratedSmearing` (this count is separate from the three geometric levels
+inside HYP, HEX, and nHYP):
+
+```julia
+three_stout_steps = IteratedSmearing(StoutParameters(rho=0.1), 3)
+V, cache = smear_links(U, three_stout_steps)
+smear_links_pullback!(dU, dV, U, cache)
+```
+
+The scheme-specific `ape_smear`, `stout_smear`, `hyp_smear`, `hex_smear`, and
+`nhyp_smear` functions expose the same single-step implementations directly.
+The native APE, stout/EXP, HYP, and HEX paths currently support SU(2) and
+SU(3); nHYP retains its generic U(N) projection path.
+
+---
+
 ## Running the test example
 
 Exactly what `test/runtests.jl` does:

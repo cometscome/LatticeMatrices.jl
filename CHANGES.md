@@ -17,12 +17,21 @@ preserve the public v1 API.
 - Implement stout/EXP and all three restricted geometric levels of HEX with
   matrix-exponential SU(N) retractions. Both transformations have analytic
   reverse passes, exposed through `stout_pullback!` and `hex_pullback!`, for
-  SU(2) and SU(3) links.
-- Implement APE and all three restricted geometric levels of HYP with an
-  explicit principal-branch SU(N) polar projection. These two interfaces are
-  intentionally forward-only: requesting their pullback throws an
-  `ArgumentError` instead of silently substituting a different projection or
-  derivative.
+  SU(2) and SU(3) links. HEX applies the standard `1/6`, `1/4`, and `1/2`
+  geometric normalization to its outer, middle, and inner exponent
+  coefficients.
+- Give APE and all three restricted geometric levels of HYP two explicit SU(N)
+  projection choices. `projection=:max_retr` is the default and follows the
+  Bridge++ Cabibbo--Marinari SU(2)-subgroup iteration and global convergence
+  criterion; `max_retr_iterations` and `max_retr_tolerance` control it.
+  `projection=:polar` selects a principal-branch polar projection with an
+  analytic reverse pass through both the U(N) polar factor and determinant
+  phase. The derivative is defined away from the negative-real determinant
+  branch cut.
+- Keep iterative MaxReTr APE/HYP forward-only. Requesting its pullback throws
+  an `ArgumentError` directing differentiable callers to `projection=:polar`,
+  so interoperability and molecular-dynamics definitions are never silently
+  mixed.
 - Add the common `smearing_cache`, `smear_links`, `smear_links!`, and
   `smear_links_pullback!` protocol for nHYP and all four new schemes.
   `IteratedSmearing(parameters, iterations)` repeats a complete smearing
@@ -39,14 +48,22 @@ preserve the public v1 API.
 
 ### Validation
 
-- Add 680 focused CPU regression checks covering parameter validation,
-  Float32 cache specialization, special-unitary output, zero-coefficient
-  identity transformations, stale-cache rejection, forward-only errors, and
-  two-stage iteration.
-- Compare the analytic stout/EXP and HEX pullbacks with central finite-
-  difference directional derivatives on fixed-seed hot SU(3) fields. Both
-  pullbacks agree within the test tolerances, including a two-iteration stout
-  chain.
+- Add more than 900 focused CPU regression checks covering parameter validation,
+  Float32 cache specialization, special-unitary output, both APE/HYP
+  projections, zero-coefficient identity transformations, stale-cache
+  rejection, MaxReTr pullback errors, and two-stage iteration.
+- Compare the analytic stout/EXP, HEX, and polar APE/HYP pullbacks with central
+  finite-difference directional derivatives on fixed-seed hot SU(3) fields.
+  All pullbacks agree within the test tolerances, including a two-iteration
+  stout chain.
+- Compare MaxReTr APE/HYP and analytic HEX links site by site with Bridge++
+  2.1.3 on a deterministic `4^4` SU(3) field. Maximum absolute differences
+  are `1.78e-15`, `1.78e-15`, and `4.85e-12`, respectively.
+- Compare stout at `rho=0.1` with QEX commit
+  `f93ce40d9d88acf6c8dea1477e85e07bd50ecc01`; the forward and analytic
+  pullback maximum absolute differences are `5.90e-16` and `1.89e-15`.
+  Reproducible Bridge++ and QEX comparison drivers are included under
+  `test/reference`.
 
 ## v1.2.4
 

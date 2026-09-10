@@ -36,11 +36,9 @@ smear_links_pullback!(dinput, doutput, input, cache::StoutSmearingCache4D) =
 smear_links_pullback!(dinput, doutput, input, cache::HEXSmearingCache4D) =
     hex_pullback!(dinput, doutput, input, cache)
 smear_links_pullback!(dinput, doutput, input, cache::APESmearingCache4D) =
-    throw(ArgumentError(
-        "principal-polar APE is forward-only; use stout for an analytic pullback"))
+    ape_pullback!(dinput, doutput, input, cache)
 smear_links_pullback!(dinput, doutput, input, cache::HYPSmearingCache4D) =
-    throw(ArgumentError(
-        "principal-polar HYP is forward-only; use nHYP or HEX for an analytic pullback"))
+    hyp_pullback!(dinput, doutput, input, cache)
 
 function smear_links(input, parameters)
     output = [similar(link) for link in input]

@@ -2,9 +2,9 @@
     HEXParameters(; alpha_outer=0.125, alpha_middle=0.15, alpha_inner=0.15)
 
 Coefficients for one four-dimensional hypercubically nested EXP (HEX)
-smearing step.  The names describe the geometric nesting levels.  With these
-defaults, the linearized kernels agree with HYP coefficients
-`(0.75, 0.6, 0.3)` at outer, middle, and inner level respectively.
+smearing step. The names describe the geometric nesting levels. The forward
+map applies the standard `1/6`, `1/4`, and `1/2` geometric normalization at
+the outer, middle, and inner levels, respectively.
 """
 struct HEXParameters{T<:AbstractFloat}
     alpha_outer::T
@@ -207,7 +207,7 @@ function hex_smear!(
         _hex_build_inner_staple!(staples, thin_links, mu, nu)
         _stout_retraction_forward!(
             output, thin_links[mu], staples,
-            parameters.alpha_inner, omega, exponential)
+            parameters.alpha_inner / 2, omega, exponential)
     end
     JACC.synchronize()
     ensure_halo!.(cache.inner_links)
@@ -219,7 +219,7 @@ function hex_smear!(
             staples, thin_links, cache.inner_links, mu, nu)
         _stout_retraction_forward!(
             output, thin_links[mu], staples,
-            parameters.alpha_middle, omega, exponential)
+            parameters.alpha_middle / 4, omega, exponential)
     end
     JACC.synchronize()
     ensure_halo!.(cache.middle_links)
@@ -230,7 +230,7 @@ function hex_smear!(
             staples, thin_links, cache.middle_links, mu)
         _stout_retraction_forward!(
             smeared_links[mu], thin_links[mu], staples,
-            parameters.alpha_outer, omega, exponential)
+            parameters.alpha_outer / 6, omega, exponential)
     end
     JACC.synchronize()
     _record_hex_cache_state!(cache, thin_links)
@@ -299,7 +299,8 @@ function hex_pullback!(
     for mu in 1:4
         dstaples = _stout_retraction_pullback_add!(
             dthin_links[mu], dsmeared_links[mu], thin_links[mu],
-            cache.outer_staples[mu], parameters.alpha_outer, cache.scratch)
+            cache.outer_staples[mu], parameters.alpha_outer / 6,
+            cache.scratch)
         for nu in 1:4
             nu == mu && continue
             _nhyp_staple_pullback!(
@@ -318,7 +319,7 @@ function hex_pullback!(
             _nhyp_pair_field(cache.middle_cotangent, mu, nu),
             thin_links[mu],
             _nhyp_pair_field(cache.middle_staples, mu, nu),
-            parameters.alpha_middle, cache.scratch)
+            parameters.alpha_middle / 4, cache.scratch)
         for side_axis in 1:4
             (side_axis == mu || side_axis == nu) && continue
             excluded_axis = 10 - mu - nu - side_axis
@@ -339,7 +340,7 @@ function hex_pullback!(
             _nhyp_pair_field(cache.inner_cotangent, mu, nu),
             thin_links[mu],
             _nhyp_pair_field(cache.inner_staples, mu, nu),
-            parameters.alpha_inner, cache.scratch)
+            parameters.alpha_inner / 2, cache.scratch)
         _nhyp_staple_pullback!(
             dthin_links[nu], dthin_links[mu], dstaples,
             thin_links[nu], thin_links[mu], nu, mu,

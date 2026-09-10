@@ -72,12 +72,16 @@ function uv_smearing_tests()
 
     @testset "UV-smearing parameters and common protocol" begin
         @test APEParameters().alpha == 0.6
+        @test APEParameters().projection == :max_retr
         @test StoutParameters().rho == 0.1
         @test HYPParameters() == HYPParameters(0.75, 0.6, 0.3)
+        @test HYPParameters().projection == :max_retr
         @test HEXParameters() == HEXParameters(0.125, 0.15, 0.15)
         @test_throws ArgumentError APEParameters(Inf)
         @test_throws ArgumentError StoutParameters(NaN)
         @test_throws ArgumentError HYPParameters(alpha_inner=Inf)
+        @test_throws ArgumentError APEParameters(projection=:unknown)
+        @test_throws ArgumentError HYPParameters(max_retr_iterations=0)
         @test_throws ArgumentError HEXParameters(alpha_outer=NaN)
         @test_throws ArgumentError IteratedSmearing(StoutParameters(), 0)
 
@@ -92,6 +96,12 @@ function uv_smearing_tests()
             StoutParameters{Float32}
         @test smearing_cache(float32_links, HEXParameters()).parameters isa
             HEXParameters{Float32}
+        for parameters in (APEParameters(), HYPParameters())
+            output, cache = smear_links(float32_links, parameters)
+            @test cache.parameters isa Union{
+                APEParameters{Float32},HYPParameters{Float32}}
+            @test all(link -> all(isfinite, link.A), output)
+        end
     end
 
     @testset "stout and HEX forward and pullback" begin
@@ -113,24 +123,73 @@ function uv_smearing_tests()
         add_matrix!(thin[1], direction[1], -1e-8)
     end
 
-    @testset "APE and HYP principal-polar forward" begin
-        ape_output, ape_cache = smear_links(thin, APEParameters())
-        hyp_output, hyp_cache = smear_links(thin, HYPParameters())
+    @testset "APE and HYP principal-polar forward and pullback" begin
+        ape_output, ape_cache = _uv_check_pullback(
+            APEParameters(projection=:polar), thin, direction, left;
+            tolerance=8e-6)
+        hyp_output, hyp_cache = _uv_check_pullback(
+            HYPParameters(projection=:polar), thin, direction, left;
+            tolerance=1e-5)
         @test ape_cache isa APESmearingCache4D
         @test hyp_cache isa HYPSmearingCache4D
         _uv_check_special_unitary(ape_output; tolerance=2e-10)
         _uv_check_special_unitary(hyp_output; tolerance=2e-10)
-        @test_throws ArgumentError smear_links_pullback!(
+        add_matrix!(thin[1], direction[1], 1e-8)
+        @test_throws ArgumentError ape_pullback!(
             [similar(link) for link in thin], left, thin, ape_cache)
-        @test_throws ArgumentError smear_links_pullback!(
+        @test_throws ArgumentError hyp_pullback!(
             [similar(link) for link in thin], left, thin, hyp_cache)
+        add_matrix!(thin[1], direction[1], -1e-8)
+    end
+
+    @testset "APE and HYP MaxReTr forward" begin
+        for parameters in (APEParameters(), HYPParameters())
+            output, cache = smear_links(thin, parameters)
+            _uv_check_special_unitary(output; tolerance=3e-10)
+            exception = try
+                smear_links_pullback!(
+                    [similar(link) for link in thin], left, thin, cache)
+                nothing
+            catch caught
+                caught
+            end
+            @test exception isa ArgumentError
+            @test occursin(
+                "projection=:polar", sprint(showerror, exception))
+        end
+
+        su2_thin = [
+            LatticeMatrix(
+                _nhyp_test_values(
+                    Val(2), global_size, 211 + mu; diagonal=1.1),
+                4, process_grid; nw=1)
+            for mu in 1:4
+        ]
+        normalize_matrix!.(su2_thin)
+        for parameters in (APEParameters(), HYPParameters())
+            output, _ = smear_links(su2_thin, parameters)
+            unitarity_error = 0.0
+            determinant_error = 0.0
+            for link in output
+                gathered = gather_and_bcast_matrix(link)
+                for site in CartesianIndices(size(gathered)[3:6])
+                    matrix = Matrix(@view gathered[:, :, Tuple(site)...])
+                    unitarity_error = max(
+                        unitarity_error, maximum(abs, matrix' * matrix - I))
+                    determinant_error = max(
+                        determinant_error, abs(det(matrix) - 1))
+                end
+            end
+            @test unitarity_error < 3e-10
+            @test determinant_error < 3e-10
+        end
     end
 
     @testset "zero coefficients and iteration" begin
         zero_specs = (
-            APEParameters(0),
+            APEParameters(0; projection=:polar),
             StoutParameters(0),
-            HYPParameters(0, 0, 0),
+            HYPParameters(0, 0, 0; projection=:polar),
             HEXParameters(0, 0, 0),
         )
         for specification in zero_specs

@@ -20,6 +20,10 @@ preserve the public v1 API.
   `(smeared, cache)`. For repeated HMC trajectories, callers can allocate
   `NHYPSmearingCache4D(U, parameters)` and the output links once and use
   `nhyp_smear!(smeared, U, cache)` on subsequent forward passes.
+- The forward pass fuses the central link and all symmetric staples for each
+  direction into one site kernel, reducing its kernel launches from 104 to
+  56. Accelerator launches are queued across each nesting level and
+  synchronized only at the three inner, middle, and outer stage boundaries.
 - The reusable cache retains the unprojected and projected inner and middle
   links, the unprojected outer links, and reverse-pass scratch fields. Its
   coefficients are converted to the real element type of the links. A cache

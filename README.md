@@ -6,9 +6,11 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.4 is the current backward-compatible release in the stable v1 line.
+Version 1.2.5 is the current backward-compatible release in the stable v1 line.
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
+
+Version 1.2.5 adds native APE, stout/EXP, HYP, and HEX link smearing, Bridge++-compatible MaxReTr and differentiable polar projection choices for APE/HYP, analytic pullbacks, and a common iterated-smearing API; see [CHANGES.md](CHANGES.md) for details.
 
 Version 1.2.4 adds QEX-compatible normalized HYP smearing and an analytic HMC pullback; see [CHANGES.md](CHANGES.md) for details.
 
@@ -1208,6 +1210,86 @@ must be differentiated in one call. The individual smearing-stage and Dirac
 rules also work separately, but Enzyme cannot currently type-analyze a generic
 differentiated function that constructs the immutable `HISQDiracOperator4D`
 between those stages.
+
+---
+
+## APE, stout/EXP, HYP, HEX, and nHYP smearing
+
+The common interface accepts a vector of four compatible
+`LatticeMatrix{4}` links. The links must have `nw >= 1`; outputs and inputs
+must use separate storage.
+
+```julia
+using LatticeMatrices
+
+# U is a four-element vector containing the thin links U[1], ..., U[4].
+# The allocating interface returns both the smeared links and the cache that
+# belongs to this forward pass.
+stout = StoutParameters(rho=0.1)
+V, cache = smear_links(U, stout)
+
+# Reuse storage across measurements or molecular-dynamics steps.
+V = similar.(U)
+cache = smearing_cache(U, stout)
+smear_links!(V, U, cache)
+```
+
+Select the other transformations by changing the parameter object:
+
+```julia
+ape  = APEParameters(alpha=0.6) # Bridge++-compatible MaxReTr projection
+hyp  = HYPParameters(           # Bridge++-compatible MaxReTr projection
+    alpha_outer=0.75, alpha_middle=0.6, alpha_inner=0.3)
+hex  = HEXParameters(alpha_outer=0.125, alpha_middle=0.15, alpha_inner=0.15)
+nhyp = NHYPParameters(alpha_outer=0.5, alpha_middle=0.5, alpha_inner=0.4)
+
+Vape,  _ = smear_links(U, ape)
+Vhyp,  _ = smear_links(U, hyp)
+Vhex,  _ = smear_links(U, hex)
+Vnhyp, _ = smear_links(U, nhyp)
+```
+
+APE and HYP use iterative MaxReTr SU(N) projection by default. This is the
+usual interoperability choice and agrees site by site with Bridge++ 2.1.3.
+Its stopping controls can be set with `max_retr_iterations` and
+`max_retr_tolerance`.
+
+For molecular dynamics or another differentiable calculation, select the
+principal-polar projection explicitly. Polar APE/HYP, stout/EXP, HEX, and
+nHYP provide analytic pullbacks. The cotangent cache must come from the most
+recent forward pass, and `U` must not be modified between the forward and
+reverse calls.
+
+```julia
+polar_hyp = HYPParameters(
+    alpha_outer=0.75, alpha_middle=0.6, alpha_inner=0.3,
+    projection=:polar)
+V, cache = smear_links(U, polar_hyp)
+
+# Fill dV with the cotangent of the objective with respect to V.
+dV = similar.(V)
+dU = similar.(U)
+smear_links_pullback!(dU, dV, U, cache)
+```
+
+The MaxReTr projection is iterative and has no analytic pullback here;
+requesting one throws an `ArgumentError` that directs the caller to
+`projection=:polar`. The principal-polar derivative is defined away from its
+negative-real determinant branch cut.
+
+Repeat a complete transformation with `IteratedSmearing` (this count is
+separate from the three geometric levels inside HYP, HEX, and nHYP):
+
+```julia
+three_stout_steps = IteratedSmearing(StoutParameters(rho=0.1), 3)
+V, cache = smear_links(U, three_stout_steps)
+smear_links_pullback!(dU, dV, U, cache)
+```
+
+The scheme-specific `ape_smear`, `stout_smear`, `hyp_smear`, `hex_smear`, and
+`nhyp_smear` functions expose the same single-step implementations directly.
+The native APE, stout/EXP, HYP, and HEX paths currently support SU(2) and
+SU(3); nHYP retains its generic U(N) projection path.
 
 ---
 

@@ -92,6 +92,38 @@ function _nhyp_test_loss(thin_links, left, parameters)
 end
 
 function nhyp_smearing_tests()
+    @testset "NC=3 closed-form Sylvester solver" begin
+        for element_type in (ComplexF32, ComplexF64)
+            factor = element_type[
+                1.2 + 0.1im  0.2 - 0.3im  -0.1 + 0.4im
+                0.3 + 0.2im  1.4 - 0.1im   0.2 + 0.1im
+               -0.2 + 0.1im  0.1 + 0.2im   1.1 - 0.2im
+            ]
+            dense_matrix = factor' * factor + I
+            dense_rhs = element_type[
+                 0.2 + 0.3im  -0.1 + 0.4im   0.5 - 0.2im
+                 0.7 - 0.1im   0.3 + 0.2im  -0.4 + 0.6im
+                -0.2 + 0.5im   0.8 - 0.3im   0.1 + 0.7im
+            ]
+            matrix = MMatrix{3,3,element_type}(dense_matrix)
+            rhs = MMatrix{3,3,element_type}(dense_rhs)
+            solution = similar(matrix)
+            adjugate = similar(matrix)
+            product = similar(matrix)
+            secondary = similar(matrix)
+            LatticeMatrices._hisq_pullback_solve_sylvester_3x3!(
+                solution, matrix, rhs, adjugate, product, secondary)
+
+            tolerance = element_type === ComplexF32 ? 3e-5 : 3e-13
+            @test isapprox(
+                dense_matrix * solution + solution * dense_matrix,
+                dense_rhs;
+                atol=tolerance,
+                rtol=tolerance,
+            )
+        end
+    end
+
     nprocs = test_comm_size()
     process_grid = (nprocs, 1, 1, 1)
     lattice_size = (2nprocs, 2, 2, 2)

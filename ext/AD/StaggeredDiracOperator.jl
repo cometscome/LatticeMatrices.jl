@@ -1,6 +1,6 @@
-import LatticeMatrices: StaggeredDiracOperator4D, mark_halo_dirty!,
+import LatticeMatrices: StaggeredDiracOperator4D,
     kernel_StaggeredDiracOperator4D!, kernel_add_4D!,
-    staggered_eta_global_halo
+    staggered_link_pullback!, _kernel_staggered_link_pullback_direction!
 
 @inline function _staggered_operator_shadow(operator)
     hasproperty(operator, :dval) || return nothing
@@ -22,51 +22,6 @@ end
         primal.myrank, primal.PN, primal.comm, primal.indexer,
         shadow.temps, shadow.halo_epoch,
     )
-end
-
-@inline function _kernel_staggered_link_pullback_direction!(
-    dU, dresult, psi, x, xplus, coefficient, eta, ::Val{NC},
-) where NC
-    @inbounds for row in 1:NC
-        for col in 1:NC
-            # U[row,col](x) occurs in the forward hop at x and, conjugated,
-            # in the backward hop at x+mu. The staggered phase is unchanged
-            # by a displacement in its own direction.
-            value =
-                dresult[row, 1, x...] * conj(psi[col, 1, xplus...]) -
-                psi[row, 1, x...] * conj(dresult[col, 1, xplus...])
-            dU[row, col, x...] += coefficient * eta * value
-        end
-    end
-    return nothing
-end
-
-@inline function _kernel_staggered_link_pullback!(
-    site, dU1, dU2, dU3, dU4, dresult, psi, coefficient,
-    ::Val{NC}, ::Val{nw}, indexer, mpi_coordinates, local_size,
-) where {NC,nw}
-    x = delinearize(indexer, site, nw)
-    x1p = shiftindices(x, LatticeMatrices.shift_1p)
-    x2p = shiftindices(x, LatticeMatrices.shift_2p)
-    x3p = shiftindices(x, LatticeMatrices.shift_3p)
-    x4p = shiftindices(x, LatticeMatrices.shift_4p)
-
-    eta2 = staggered_eta_global_halo(
-        x, 2, nw, mpi_coordinates, local_size)
-    eta3 = staggered_eta_global_halo(
-        x, 3, nw, mpi_coordinates, local_size)
-    eta4 = staggered_eta_global_halo(
-        x, 4, nw, mpi_coordinates, local_size)
-
-    _kernel_staggered_link_pullback_direction!(
-        dU1, dresult, psi, x, x1p, coefficient, 1, Val(NC))
-    _kernel_staggered_link_pullback_direction!(
-        dU2, dresult, psi, x, x2p, coefficient, eta2, Val(NC))
-    _kernel_staggered_link_pullback_direction!(
-        dU3, dresult, psi, x, x3p, coefficient, eta3, Val(NC))
-    _kernel_staggered_link_pullback_direction!(
-        dU4, dresult, psi, x, x4p, coefficient, eta4, Val(NC))
-    return nothing
 end
 
 function ER.augmented_primal(
@@ -111,15 +66,9 @@ function ER.reverse(
         all(link -> link isa LatticeMatrix, dU) || throw(ArgumentError(
             "StaggeredDiracOperator4D link shadows must be LatticeMatrix objects"))
 
-        JACC.parallel_for(
-            prod(result.val.PN),
-            _kernel_staggered_link_pullback!,
-            dU[1].A, dU[2].A, dU[3].A, dU[4].A,
-            dresult.A, psi.val.A, one(operator.val.mass) / 2,
-            Val(result.val.NC1), Val(result.val.nw), result.val.indexer,
-            result.val.coords, result.val.PN,
+        staggered_link_pullback!(
+            dU, operator.val.U, dresult, psi.val,
         )
-        mark_halo_dirty!.(dU)
     end
 
     dpsi = hasproperty(psi, :dval) ? _getshadow(psi.dval) : nothing

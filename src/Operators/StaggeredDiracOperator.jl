@@ -197,6 +197,105 @@ function LinearAlgebra.mul!(
     return _apply_staggered_halo!(result, operator.parent, psi, true)
 end
 
+@inline function _kernel_staggered_link_pullback_direction!(
+    dU, result_cotangent, psi, x, xplus, coefficient, eta, ::Val{NC},
+) where NC
+    @inbounds for row in 1:NC, column in 1:NC
+        value =
+            result_cotangent[row, 1, x...] * conj(psi[column, 1, xplus...]) -
+            psi[row, 1, x...] * conj(result_cotangent[column, 1, xplus...])
+        dU[row, column, x...] += coefficient * eta * value
+    end
+    return nothing
+end
+
+@inline function _kernel_staggered_link_pullback!(
+    site, dU1, dU2, dU3, dU4, result_cotangent, psi, coefficient,
+    ::Val{NC}, ::Val{nw}, indexer, mpi_coordinates, local_size,
+) where {NC,nw}
+    x = delinearize(indexer, site, nw)
+    eta2 = staggered_eta_global_halo(
+        x, 2, nw, mpi_coordinates, local_size)
+    eta3 = staggered_eta_global_halo(
+        x, 3, nw, mpi_coordinates, local_size)
+    eta4 = staggered_eta_global_halo(
+        x, 4, nw, mpi_coordinates, local_size)
+
+    _kernel_staggered_link_pullback_direction!(
+        dU1, result_cotangent, psi, x, shiftindices(x, shift_1p),
+        coefficient, 1, Val(NC))
+    _kernel_staggered_link_pullback_direction!(
+        dU2, result_cotangent, psi, x, shiftindices(x, shift_2p),
+        coefficient, eta2, Val(NC))
+    _kernel_staggered_link_pullback_direction!(
+        dU3, result_cotangent, psi, x, shiftindices(x, shift_3p),
+        coefficient, eta3, Val(NC))
+    _kernel_staggered_link_pullback_direction!(
+        dU4, result_cotangent, psi, x, shiftindices(x, shift_4p),
+        coefficient, eta4, Val(NC))
+    return nothing
+end
+
+"""
+    staggered_link_pullback!(
+        dlinks, links, result_cotangent, psi; coefficient=1)
+
+Accumulate the link pullback of
+`coefficient * real(dot(result_cotangent, D(links) * psi))` into `dlinks`,
+where `D` is the one-link staggered operator. The mass term has no link
+derivative. This analytic path does not depend on Enzyme and requires a
+nonzero halo.
+"""
+function staggered_link_pullback!(
+    dlinks::Union{AbstractVector,Tuple},
+    links::Union{AbstractVector,Tuple},
+    result_cotangent::F,
+    psi::F;
+    coefficient::Real=1,
+) where {F<:LatticeMatrix{4}}
+    length(dlinks) == 4 || throw(ArgumentError(
+        "staggered link pullback requires four destination links"))
+    length(links) == 4 || throw(ArgumentError(
+        "staggered link pullback requires four gauge links"))
+    iszero(psi.nw) && throw(ArgumentError(
+        "staggered link pullback requires halo width nw >= 1"))
+    result_cotangent.NC2 == 1 && psi.NC2 == 1 || throw(ArgumentError(
+        "staggered link pullback requires one-column fermion fields"))
+    result_cotangent.NC1 == psi.NC1 || throw(ArgumentError(
+        "staggered link pullback fermion fields must have equal color size"))
+    result_cotangent.gsize == psi.gsize &&
+        result_cotangent.PN == psi.PN &&
+        result_cotangent.dims == psi.dims &&
+        result_cotangent.nw == psi.nw || throw(ArgumentError(
+            "staggered link pullback fermion fields must share a layout"))
+
+    for collection in (dlinks, links), link in collection
+        link isa LatticeMatrix{4} || throw(ArgumentError(
+            "staggered link pullback links must be four-dimensional lattices"))
+        link.NC1 == psi.NC1 && link.NC2 == psi.NC1 || throw(ArgumentError(
+            "staggered link pullback links must match the fermion color size"))
+        link.gsize == psi.gsize && link.PN == psi.PN &&
+            link.dims == psi.dims && link.nw == psi.nw || throw(ArgumentError(
+                "staggered link pullback links must share the fermion layout"))
+        eltype(link.A) == eltype(psi.A) || throw(ArgumentError(
+            "staggered link pullback fields must share an element type"))
+    end
+
+    ensure_halo!(result_cotangent)
+    ensure_halo!(psi)
+    typed_coefficient = convert(typeof(real(zero(eltype(psi.A)))), coefficient) / 2
+    JACC.parallel_for(
+        prod(psi.PN), _kernel_staggered_link_pullback!,
+        dlinks[1].A, dlinks[2].A, dlinks[3].A, dlinks[4].A,
+        result_cotangent.A, psi.A, typed_coefficient,
+        Val(psi.NC1), Val(psi.nw), psi.indexer, psi.coords, psi.PN,
+    )
+    mark_halo_dirty!.(dlinks)
+    return dlinks
+end
+
+export staggered_link_pullback!
+
 # Halo-free fallback.  Periodic/twisted neighbor fields are materialized using
 # the established nw=0 path, then accumulated one direction at a time.
 @inline function kernel_initialize_StaggeredDiracOperator4D_nowing!(

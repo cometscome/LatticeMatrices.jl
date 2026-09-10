@@ -21,6 +21,10 @@ include("HISQDiracOperator.jl")
 include("HISQFullSmearing.jl")
 include("HISQPullback.jl")
 include("NHYPSmearing.jl")
+include("StoutSmearing.jl")
+include("HEXSmearing.jl")
+include("ProjectedSmearing.jl")
+include("LinkSmearing.jl")
 
 
 struct DiracOp{T,TF,Dmul,Ddagmul,P}

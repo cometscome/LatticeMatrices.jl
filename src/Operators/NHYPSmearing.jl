@@ -12,6 +12,17 @@ end
 @inline _nhyp_pair_field(fields, mu, nu) =
     fields[_nhyp_pair_index(mu, nu)]
 
+@inline function _nhyp_other_two_axes(mu, nu)
+    first_axis = if mu != 1 && nu != 1
+        1
+    elseif mu != 2 && nu != 2
+        2
+    else
+        3
+    end
+    return first_axis, 10 - mu - nu - first_axis
+end
+
 """
     NHYPParameters(; alpha_outer=0.5, alpha_middle=0.5, alpha_inner=0.4)
 
@@ -166,16 +177,6 @@ function _validate_nhyp_forward(smeared_links, thin_links, cache)
     return nothing
 end
 
-@inline function _kernel_nhyp_scale_copy!(
-    site_index, output, input, coefficient, ::Val{NC}, ::Val{nw}, indexer,
-) where {NC,nw}
-    site = delinearize(indexer, site_index, nw)
-    @inbounds for column in 1:NC, row in 1:NC
-        output[row, column, site...] = coefficient * input[row, column, site...]
-    end
-    return nothing
-end
-
 @inline function _nhyp_load_matrix!(
     matrix, field, site, ::Val{NC}, ::Val{adjoint},
 ) where {NC,adjoint}
@@ -212,70 +213,204 @@ end
     return nothing
 end
 
-@inline function _kernel_nhyp_staple_add!(
-    site_index, output, side, middle, side_axis, middle_axis, coefficient,
-    ::Val{NC}, ::Val{nw}, indexer,
-) where {NC,nw}
-    origin = delinearize(indexer, site_index, nw)
+@inline function _nhyp_initialize_candidate!(
+    candidate, central, origin, coefficient, ::Val{NC},
+) where NC
+    @inbounds for column in 1:NC, row in 1:NC
+        candidate[row, column] =
+            coefficient * central[row, column, origin...]
+    end
+    return candidate
+end
+
+@inline function _nhyp_accumulate_staple_matrix!(
+    candidate, side, middle, origin, coefficient,
+    first, second, third, temporary, term,
+    ::Val{side_axis}, ::Val{middle_axis}, ::Val{NC},
+) where {side_axis,middle_axis,NC}
     origin_plus_side = _hisq_shift_site(origin, side_axis)
     origin_plus_middle = _hisq_shift_site(origin, middle_axis)
     origin_minus_side = _hisq_shift_site(origin, -side_axis)
     minus_side_plus_middle = _hisq_shift_site(
         origin_minus_side, middle_axis)
 
-    element_type = eltype(output)
-    first = MMatrix{NC,NC,element_type}(undef)
-    second = MMatrix{NC,NC,element_type}(undef)
-    third = MMatrix{NC,NC,element_type}(undef)
-    temporary = MMatrix{NC,NC,element_type}(undef)
-    staple = MMatrix{NC,NC,element_type}(undef)
-    term = MMatrix{NC,NC,element_type}(undef)
-
     _nhyp_load_matrix!(first, side, origin, Val(NC), Val(false))
     _nhyp_load_matrix!(second, middle, origin_plus_side, Val(NC), Val(false))
     _nhyp_load_matrix!(third, side, origin_plus_middle, Val(NC), Val(true))
     gemm!(temporary, first, second)
-    gemm!(staple, temporary, third)
+    gemm!(term, temporary, third)
+    @inbounds for column in 1:NC, row in 1:NC
+        candidate[row, column] += coefficient * term[row, column]
+    end
 
     _nhyp_load_matrix!(first, side, origin_minus_side, Val(NC), Val(true))
     _nhyp_load_matrix!(second, middle, origin_minus_side, Val(NC), Val(false))
     _nhyp_load_matrix!(third, side, minus_side_plus_middle, Val(NC), Val(false))
     gemm!(temporary, first, second)
     gemm!(term, temporary, third)
-    _nhyp_accumulate_matrix!(staple, term, Val(NC))
-    _nhyp_add_to_field!(output, staple, origin, coefficient, Val(NC))
+    @inbounds for column in 1:NC, row in 1:NC
+        candidate[row, column] += coefficient * term[row, column]
+    end
+    return candidate
+end
+
+@inline function _nhyp_store_candidate!(
+    output, candidate, origin, ::Val{NC},
+) where NC
+    @inbounds for column in 1:NC, row in 1:NC
+        output[row, column, origin...] = candidate[row, column]
+    end
     return nothing
 end
 
-function _nhyp_scale_copy!(output, input, coefficient)
-    _parallel_for_mutating!(
-        output, prod(output.PN), _kernel_nhyp_scale_copy!,
-        output.A, input.A, coefficient, Val(output.NC1), Val(output.nw),
-        output.indexer)
-    return output
+@inline function _kernel_nhyp_build_one_staple!(
+    site_index, output, central, side, middle,
+    central_coefficient, staple_coefficient,
+    ::Val{side_axis}, ::Val{middle_axis},
+    ::Val{NC}, ::Val{nw}, indexer,
+) where {side_axis,middle_axis,NC,nw}
+    origin = delinearize(indexer, site_index, nw)
+    element_type = eltype(output)
+    candidate = MMatrix{NC,NC,element_type}(undef)
+    first = MMatrix{NC,NC,element_type}(undef)
+    second = MMatrix{NC,NC,element_type}(undef)
+    third = MMatrix{NC,NC,element_type}(undef)
+    temporary = MMatrix{NC,NC,element_type}(undef)
+    term = MMatrix{NC,NC,element_type}(undef)
+    _nhyp_initialize_candidate!(
+        candidate, central, origin, central_coefficient, Val(NC))
+    _nhyp_accumulate_staple_matrix!(
+        candidate, side, middle, origin, staple_coefficient,
+        first, second, third, temporary, term,
+        Val(side_axis), Val(middle_axis), Val(NC))
+    _nhyp_store_candidate!(output, candidate, origin, Val(NC))
+    return nothing
 end
 
-function _nhyp_staple_add!(
-    output, side, middle, side_axis, middle_axis, coefficient,
+@inline function _kernel_nhyp_build_two_staples!(
+    site_index, output, central,
+    side1, middle1, side2, middle2,
+    central_coefficient, staple_coefficient,
+    ::Val{side_axis1}, ::Val{side_axis2}, ::Val{middle_axis},
+    ::Val{NC}, ::Val{nw}, indexer,
+) where {side_axis1,side_axis2,middle_axis,NC,nw}
+    origin = delinearize(indexer, site_index, nw)
+    element_type = eltype(output)
+    candidate = MMatrix{NC,NC,element_type}(undef)
+    first = MMatrix{NC,NC,element_type}(undef)
+    second = MMatrix{NC,NC,element_type}(undef)
+    third = MMatrix{NC,NC,element_type}(undef)
+    temporary = MMatrix{NC,NC,element_type}(undef)
+    term = MMatrix{NC,NC,element_type}(undef)
+    _nhyp_initialize_candidate!(
+        candidate, central, origin, central_coefficient, Val(NC))
+    _nhyp_accumulate_staple_matrix!(
+        candidate, side1, middle1, origin, staple_coefficient,
+        first, second, third, temporary, term,
+        Val(side_axis1), Val(middle_axis), Val(NC))
+    _nhyp_accumulate_staple_matrix!(
+        candidate, side2, middle2, origin, staple_coefficient,
+        first, second, third, temporary, term,
+        Val(side_axis2), Val(middle_axis), Val(NC))
+    _nhyp_store_candidate!(output, candidate, origin, Val(NC))
+    return nothing
+end
+
+@inline function _kernel_nhyp_build_three_staples!(
+    site_index, output, central,
+    side1, middle1, side2, middle2, side3, middle3,
+    central_coefficient, staple_coefficient,
+    ::Val{side_axis1}, ::Val{side_axis2}, ::Val{side_axis3},
+    ::Val{middle_axis}, ::Val{NC}, ::Val{nw}, indexer,
+) where {side_axis1,side_axis2,side_axis3,middle_axis,NC,nw}
+    origin = delinearize(indexer, site_index, nw)
+    element_type = eltype(output)
+    candidate = MMatrix{NC,NC,element_type}(undef)
+    first = MMatrix{NC,NC,element_type}(undef)
+    second = MMatrix{NC,NC,element_type}(undef)
+    third = MMatrix{NC,NC,element_type}(undef)
+    temporary = MMatrix{NC,NC,element_type}(undef)
+    term = MMatrix{NC,NC,element_type}(undef)
+    _nhyp_initialize_candidate!(
+        candidate, central, origin, central_coefficient, Val(NC))
+    _nhyp_accumulate_staple_matrix!(
+        candidate, side1, middle1, origin, staple_coefficient,
+        first, second, third, temporary, term,
+        Val(side_axis1), Val(middle_axis), Val(NC))
+    _nhyp_accumulate_staple_matrix!(
+        candidate, side2, middle2, origin, staple_coefficient,
+        first, second, third, temporary, term,
+        Val(side_axis2), Val(middle_axis), Val(NC))
+    _nhyp_accumulate_staple_matrix!(
+        candidate, side3, middle3, origin, staple_coefficient,
+        first, second, third, temporary, term,
+        Val(side_axis3), Val(middle_axis), Val(NC))
+    _nhyp_store_candidate!(output, candidate, origin, Val(NC))
+    return nothing
+end
+
+function _nhyp_build_one_staple!(
+    output, central, side, middle,
+    central_coefficient, staple_coefficient,
+    side_axis, middle_axis,
 )
-    ensure_halo!(side)
-    ensure_halo!(middle)
-    _parallel_for_mutating!(
-        output, prod(output.PN), _kernel_nhyp_staple_add!,
-        output.A, side.A, middle.A, side_axis, middle_axis, coefficient,
+    mark_halo_dirty!(output)
+    specification = JACC.launch_spec(shmem_size=0, sync=false)
+    JACC.parallel_for(
+        specification, prod(output.PN), _kernel_nhyp_build_one_staple!,
+        output.A, central.A, side.A, middle.A,
+        central_coefficient, staple_coefficient,
+        Val(side_axis), Val(middle_axis),
         Val(output.NC1), Val(output.nw), output.indexer)
     return output
 end
 
-function _nhyp_project_field!(output, input)
+function _nhyp_build_two_staples!(
+    output, central, side1, middle1, side2, middle2,
+    central_coefficient, staple_coefficient,
+    side_axis1, side_axis2, middle_axis,
+)
+    mark_halo_dirty!(output)
+    specification = JACC.launch_spec(shmem_size=0, sync=false)
+    JACC.parallel_for(
+        specification, prod(output.PN), _kernel_nhyp_build_two_staples!,
+        output.A, central.A,
+        side1.A, middle1.A, side2.A, middle2.A,
+        central_coefficient, staple_coefficient,
+        Val(side_axis1), Val(side_axis2), Val(middle_axis),
+        Val(output.NC1), Val(output.nw), output.indexer)
+    return output
+end
+
+function _nhyp_build_three_staples!(
+    output, central,
+    side1, middle1, side2, middle2, side3, middle3,
+    central_coefficient, staple_coefficient,
+    side_axis1, side_axis2, side_axis3, middle_axis,
+)
+    mark_halo_dirty!(output)
+    specification = JACC.launch_spec(shmem_size=0, sync=false)
+    JACC.parallel_for(
+        specification, prod(output.PN), _kernel_nhyp_build_three_staples!,
+        output.A, central.A,
+        side1.A, middle1.A, side2.A, middle2.A, side3.A, middle3.A,
+        central_coefficient, staple_coefficient,
+        Val(side_axis1), Val(side_axis2), Val(side_axis3), Val(middle_axis),
+        Val(output.NC1), Val(output.nw), output.indexer)
+    return output
+end
+
+function _nhyp_project_field!(output, input; sync=true)
     NC = input.NC1
+    specification = JACC.launch_spec(shmem_size=0, sync=sync)
+    mark_halo_dirty!(output)
     if NC == 3
-        _parallel_for_mutating!(
-            output, prod(output.PN), kernel_hisq_project_u3!,
+        JACC.parallel_for(
+            specification, prod(output.PN), kernel_hisq_project_u3!,
             output.A, input.A, Val(input.nw), input.indexer)
     else
-        _parallel_for_mutating!(
-            output, prod(output.PN), kernel_hisq_project_un!,
+        JACC.parallel_for(
+            specification, prod(output.PN), kernel_hisq_project_un!,
             output.A, input.A, Val(NC), Val(input.nw), input.indexer)
     end
     return output
@@ -313,46 +448,51 @@ function nhyp_smear!(
     for (mu, nu) in _nhyp_direction_pairs
         candidate = _nhyp_pair_field(cache.inner_unprojected, mu, nu)
         projected = _nhyp_pair_field(cache.inner_links, mu, nu)
-        _nhyp_scale_copy!(candidate, thin_links[mu], 1 - parameters.alpha_inner)
-        _nhyp_staple_add!(
-            candidate, thin_links[nu], thin_links[mu], nu, mu,
-            inner_staple_coefficient)
-        _nhyp_project_field!(projected, candidate)
+        _nhyp_build_one_staple!(
+            candidate, thin_links[mu], thin_links[nu], thin_links[mu],
+            1 - parameters.alpha_inner, inner_staple_coefficient,
+            nu, mu)
+        _nhyp_project_field!(projected, candidate; sync=false)
     end
+    JACC.synchronize()
     ensure_halo!.(cache.inner_links)
 
     for (mu, nu) in _nhyp_direction_pairs
         candidate = _nhyp_pair_field(cache.middle_unprojected, mu, nu)
         projected = _nhyp_pair_field(cache.middle_links, mu, nu)
-        _nhyp_scale_copy!(candidate, thin_links[mu], 1 - parameters.alpha_middle)
-        for side_axis in 1:4
-            (side_axis == mu || side_axis == nu) && continue
-            excluded_axis = 10 - mu - nu - side_axis
-            side = _nhyp_pair_field(
-                cache.inner_links, side_axis, excluded_axis)
-            middle = _nhyp_pair_field(
-                cache.inner_links, mu, excluded_axis)
-            _nhyp_staple_add!(
-                candidate, side, middle, side_axis, mu,
-                middle_staple_coefficient)
-        end
-        _nhyp_project_field!(projected, candidate)
+        side_axis1, side_axis2 = _nhyp_other_two_axes(mu, nu)
+        excluded_axis1 = 10 - mu - nu - side_axis1
+        excluded_axis2 = 10 - mu - nu - side_axis2
+        _nhyp_build_two_staples!(
+            candidate, thin_links[mu],
+            _nhyp_pair_field(cache.inner_links, side_axis1, excluded_axis1),
+            _nhyp_pair_field(cache.inner_links, mu, excluded_axis1),
+            _nhyp_pair_field(cache.inner_links, side_axis2, excluded_axis2),
+            _nhyp_pair_field(cache.inner_links, mu, excluded_axis2),
+            1 - parameters.alpha_middle, middle_staple_coefficient,
+            side_axis1, side_axis2, mu)
+        _nhyp_project_field!(projected, candidate; sync=false)
     end
+    JACC.synchronize()
     ensure_halo!.(cache.middle_links)
 
     for mu in 1:4
         candidate = cache.outer_unprojected[mu]
-        _nhyp_scale_copy!(candidate, thin_links[mu], 1 - parameters.alpha_outer)
-        for nu in 1:4
-            nu == mu && continue
-            side = _nhyp_pair_field(cache.middle_links, nu, mu)
-            middle = _nhyp_pair_field(cache.middle_links, mu, nu)
-            _nhyp_staple_add!(
-                candidate, side, middle, nu, mu,
-                outer_staple_coefficient)
-        end
-        _nhyp_project_field!(smeared_links[mu], candidate)
+        side_axes = ntuple(i -> i < mu ? i : i + 1, Val(3))
+        side_axis1, side_axis2, side_axis3 = side_axes
+        _nhyp_build_three_staples!(
+            candidate, thin_links[mu],
+            _nhyp_pair_field(cache.middle_links, side_axis1, mu),
+            _nhyp_pair_field(cache.middle_links, mu, side_axis1),
+            _nhyp_pair_field(cache.middle_links, side_axis2, mu),
+            _nhyp_pair_field(cache.middle_links, mu, side_axis2),
+            _nhyp_pair_field(cache.middle_links, side_axis3, mu),
+            _nhyp_pair_field(cache.middle_links, mu, side_axis3),
+            1 - parameters.alpha_outer, outer_staple_coefficient,
+            side_axis1, side_axis2, side_axis3, mu)
+        _nhyp_project_field!(smeared_links[mu], candidate; sync=false)
     end
+    JACC.synchronize()
     _record_nhyp_cache_state!(cache, thin_links)
     return smeared_links
 end

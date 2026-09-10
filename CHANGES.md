@@ -4,6 +4,67 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.5
+
+### APE, stout/EXP, HYP, and HEX smearing
+
+- Add `APEParameters`, `StoutParameters`, `HYPParameters`, and
+  `HEXParameters` together with allocating and preallocated four-dimensional
+  link-smearing interfaces. Their defaults follow the standard matched
+  choices: `alpha=0.6` for APE, `rho=0.1` for stout/EXP,
+  `(alpha_outer, alpha_middle, alpha_inner)=(0.75, 0.6, 0.3)` for HYP, and
+  `(0.125, 0.15, 0.15)` for HEX.
+- Implement stout/EXP and all three restricted geometric levels of HEX with
+  matrix-exponential SU(N) retractions. Both transformations have analytic
+  reverse passes, exposed through `stout_pullback!` and `hex_pullback!`, for
+  SU(2) and SU(3) links. HEX applies the standard `1/6`, `1/4`, and `1/2`
+  geometric normalization to its outer, middle, and inner exponent
+  coefficients.
+- Give APE and all three restricted geometric levels of HYP two explicit SU(N)
+  projection choices. `projection=:max_retr` is the default and follows the
+  Bridge++ Cabibbo--Marinari SU(2)-subgroup iteration and global convergence
+  criterion; `max_retr_iterations` and `max_retr_tolerance` control it.
+  `projection=:polar` selects a principal-branch polar projection with an
+  analytic reverse pass through both the U(N) polar factor and determinant
+  phase. The derivative is defined away from the negative-real determinant
+  branch cut.
+- Keep iterative MaxReTr APE/HYP forward-only. Requesting its pullback throws
+  an `ArgumentError` directing differentiable callers to `projection=:polar`,
+  so interoperability and molecular-dynamics definitions are never silently
+  mixed.
+- Add the common `smearing_cache`, `smear_links`, `smear_links!`, and
+  `smear_links_pullback!` protocol for nHYP and all four new schemes.
+  `IteratedSmearing(parameters, iterations)` repeats a complete smearing
+  transformation and reverses analytic schemes through every cached stage.
+  This iteration count is distinct from the three nested levels of nHYP,
+  HYP, and HEX.
+- Reuse the existing target-centric staple reverse kernels and JACC
+  matrix-exponential pullback. Reusable caches retain the required forward
+  state, convert coefficients to the link precision, reject aliased storage,
+  and detect thin links modified between a forward pass and its pullback.
+- Require four-dimensional square floating-point link matrices and halo width
+  `nw >= 1`. The native stout/EXP, HEX, APE, and HYP paths currently support
+  SU(2) and SU(3); nHYP retains its existing generic U(N) projection path.
+
+### Validation
+
+- Add more than 900 focused CPU regression checks covering parameter validation,
+  Float32 cache specialization, special-unitary output, both APE/HYP
+  projections, zero-coefficient identity transformations, stale-cache
+  rejection, MaxReTr pullback errors, and two-stage iteration.
+- Compare the analytic stout/EXP, HEX, and polar APE/HYP pullbacks with central
+  finite-difference directional derivatives on fixed-seed hot SU(3) fields.
+  All pullbacks agree within the test tolerances, including a two-iteration
+  stout chain.
+- Compare MaxReTr APE/HYP and analytic HEX links site by site with Bridge++
+  2.1.3 on a deterministic `4^4` SU(3) field. Maximum absolute differences
+  are `1.78e-15`, `1.78e-15`, and `4.85e-12`, respectively.
+- Compare stout at `rho=0.1` with QEX commit
+  `f93ce40d9d88acf6c8dea1477e85e07bd50ecc01`; the forward and analytic
+  pullback maximum absolute differences are `5.90e-16` and `1.89e-15`.
+  Reproducible Bridge++ and QEX comparison drivers are included under
+  `test/reference`.
+
 ## v1.2.4
 
 ### Normalized HYP smearing and HMC pullback
@@ -20,6 +81,10 @@ preserve the public v1 API.
   `(smeared, cache)`. For repeated HMC trajectories, callers can allocate
   `NHYPSmearingCache4D(U, parameters)` and the output links once and use
   `nhyp_smear!(smeared, U, cache)` on subsequent forward passes.
+- The forward pass fuses the central link and all symmetric staples for each
+  direction into one site kernel, reducing its kernel launches from 104 to
+  56. Accelerator launches are queued across each nesting level and
+  synchronized only at the three inner, middle, and outer stage boundaries.
 - The reusable cache retains the unprojected and projected inner and middle
   links, the unprojected outer links, and reverse-pass scratch fields. Its
   coefficients are converted to the real element type of the links. A cache
@@ -31,6 +96,12 @@ preserve the public v1 API.
   cotangent. Its convention is
   `real(sum(dot(dU[mu], deltaU[mu]) for mu in 1:4))`, so it can be used in
   HMC force construction without finite differencing.
+- The NC=3 polar-projection pullback uses the QEX Cayley--Hamilton closed-form
+  Sylvester solver instead of forming and LU-factorizing a 9-by-9 complex
+  system at every site. This optimization is shared by nHYP and HISQ.
+- Add public `staggered_link_pullback!` for the one-link staggered operator.
+  It is a direct JACC analytic kernel used by LDO's dedicated staggered
+  action; the Enzyme rule now shares the same implementation.
 - Inputs and outputs may be vectors or four-tuples of compatible
   `LatticeMatrix{4}` links. The implementation requires periodic square
   floating-point matrix links with halo width `nw >= 1`, checks layout and
@@ -51,6 +122,11 @@ preserve the public v1 API.
   ranks. On an NVIDIA H100 NVL (compute capability 9.0), both the forward and
   pullback execute on `CuArray{ComplexF64}` through JACC's CUDA backend; the
   maximum QEX differences were `5.35e-15` and `1.98e-14`, respectively.
+- The complete one-rank CPU regression suite passes 28,876/28,876 tests with
+  the closed-form projection and public staggered pullback enabled.
+- On a fixed-seed hot SU(3) `16^4` field on the H100, optimized median times
+  over 20 synchronized runs are 9.825 ms for the forward pass, 36.125 ms for
+  the pullback, and 50.721 ms for the combined chain.
 
 ## v1.2.3
 

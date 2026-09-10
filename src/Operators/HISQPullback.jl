@@ -755,28 +755,76 @@ _hisq_fat7_pullback_accumulate!(
     return nothing
 end
 
+@inline function _hisq_pullback_adjugate_3x3!(adjugate, matrix)
+    @inbounds begin
+        adjugate[1, 1] = matrix[2, 2] * matrix[3, 3] -
+            matrix[2, 3] * matrix[3, 2]
+        adjugate[1, 2] = matrix[1, 3] * matrix[3, 2] -
+            matrix[1, 2] * matrix[3, 3]
+        adjugate[1, 3] = matrix[1, 2] * matrix[2, 3] -
+            matrix[1, 3] * matrix[2, 2]
+        adjugate[2, 1] = matrix[2, 3] * matrix[3, 1] -
+            matrix[2, 1] * matrix[3, 3]
+        adjugate[2, 2] = matrix[1, 1] * matrix[3, 3] -
+            matrix[1, 3] * matrix[3, 1]
+        adjugate[2, 3] = matrix[1, 3] * matrix[2, 1] -
+            matrix[1, 1] * matrix[2, 3]
+        adjugate[3, 1] = matrix[2, 1] * matrix[3, 2] -
+            matrix[2, 2] * matrix[3, 1]
+        adjugate[3, 2] = matrix[1, 2] * matrix[3, 1] -
+            matrix[1, 1] * matrix[3, 2]
+        adjugate[3, 3] = matrix[1, 1] * matrix[2, 2] -
+            matrix[1, 2] * matrix[2, 1]
+    end
+    return adjugate
+end
+
+@inline function _hisq_pullback_add_scaled_3x3!(destination, source, coefficient)
+    @inbounds for column in 1:3, row in 1:3
+        destination[row, column] += coefficient * source[row, column]
+    end
+    return destination
+end
+
+# Closed-form NC=3 solution of A X + X A = C.  This is algebraically the
+# same Cayley--Hamilton expression used by QEX, and avoids constructing and
+# factorizing the equivalent 9x9 complex system at every lattice site.
 @inline function _hisq_pullback_solve_sylvester_3x3!(
-    solution, hermitian, rhs, system, vector, pivots,
+    solution, matrix, rhs, adjugate, product, secondary,
 )
-    element_type = eltype(solution)
-    @inbounds for column in 1:9, row in 1:9
-        system[row, column] = zero(element_type)
+    _hisq_pullback_adjugate_3x3!(adjugate, matrix)
+    @inbounds begin
+        trace_matrix = matrix[1, 1] + matrix[2, 2] + matrix[3, 3]
+        trace_adjugate = adjugate[1, 1] + adjugate[2, 2] + adjugate[3, 3]
+        determinant = matrix[1, 1] * adjugate[1, 1] +
+            matrix[1, 2] * adjugate[2, 1] +
+            matrix[1, 3] * adjugate[3, 1]
     end
+
+    coefficient_2 = inv(2 * (trace_adjugate * trace_matrix - determinant))
+    coefficient_0 = coefficient_2 *
+        (trace_adjugate + trace_matrix * trace_matrix)
+    coefficient_1 = coefficient_2 * trace_matrix / determinant
+    coefficient_4 = coefficient_2 * trace_matrix
     @inbounds for column in 1:3, row in 1:3
-        equation = row + 3 * (column - 1)
-        vector[equation] = rhs[row, column]
-        for contracted in 1:3
-            unknown = contracted + 3 * (column - 1)
-            system[equation, unknown] += hermitian[row, contracted]
-            unknown = row + 3 * (contracted - 1)
-            system[equation, unknown] += hermitian[contracted, column]
-        end
+        solution[row, column] = coefficient_0 * rhs[row, column]
     end
-    lu_factor!(system, pivots)
-    _hisq_pullback_lu_solve_vector!(system, pivots, vector)
-    @inbounds for column in 1:3, row in 1:3
-        solution[row, column] = vector[row + 3 * (column - 1)]
-    end
+
+    gemm!(product, matrix, rhs)
+    _hisq_pullback_add_scaled_3x3!(solution, product, -coefficient_4)
+    gemm!(secondary, product, matrix)
+    _hisq_pullback_add_scaled_3x3!(solution, secondary, coefficient_2)
+
+    gemm!(product, rhs, matrix)
+    _hisq_pullback_add_scaled_3x3!(solution, product, -coefficient_4)
+
+    gemm!(product, adjugate, rhs)
+    _hisq_pullback_add_scaled_3x3!(solution, product, -coefficient_2)
+    gemm!(secondary, product, adjugate)
+    _hisq_pullback_add_scaled_3x3!(solution, secondary, coefficient_1)
+
+    gemm!(product, rhs, adjugate)
+    _hisq_pullback_add_scaled_3x3!(solution, product, -coefficient_2)
     return nothing
 end
 
@@ -858,9 +906,6 @@ end
     skew_rhs = MMatrix{3,3,element_type}(undef)
     sylvester_solution = MMatrix{3,3,element_type}(undef)
     gradient = MMatrix{3,3,element_type}(undef)
-    system = MMatrix{9,9,element_type}(undef)
-    vector = MVector{9,element_type}(undef)
-    pivots = MVector{9,Int}(undef)
 
     @inbounds for column in 1:3, row in 1:3
         V[row, column] = input[row, column, site...]
@@ -881,7 +926,7 @@ end
         skew_rhs[row, column] = value - adjoint_value
     end
     _hisq_pullback_solve_sylvester_3x3!(
-        sylvester_solution, hermitian, skew_rhs, system, vector, pivots)
+        sylvester_solution, hermitian, skew_rhs, Q, Q2, inverse_sqrt)
     gemm!(gradient, projected, sylvester_solution)
     @inbounds for column in 1:3, row in 1:3
         dinput[row, column, site...] += gradient[row, column]

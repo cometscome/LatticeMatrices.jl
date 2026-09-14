@@ -59,6 +59,19 @@ end
     return nothing
 end
 
+@inline function _kernel_wilson_clover_link_pullback_pair_direction!(
+    dU, dresult1, psi1, dresult2, psi2, indices, indices_plus,
+    coefficient1, coefficient2, colors, op_plus, op_minus,
+)
+    _kernel_wilson_clover_link_pullback_direction!(
+        dU, dresult1, psi1, indices, indices_plus, coefficient1,
+        colors, op_plus, op_minus)
+    _kernel_wilson_clover_link_pullback_direction!(
+        dU, dresult2, psi2, indices, indices_plus, coefficient2,
+        colors, op_plus, op_minus)
+    return nothing
+end
+
 @inline function _kernel_wilson_clover_link_pullback_direction!(
     dU, dresult, psi, indices, indices_plus, coefficient,
     ::Val{3}, ::Oneγ{-1,MU}, ::Oneγ{1,MU},
@@ -93,6 +106,32 @@ end
         dU4, dresult, psi, indices, indices_4p, coefficient,
         Val(NC), oneminusγ4, oneplusγ4,
     )
+    return nothing
+end
+
+@inline function _kernel_wilson_clover_link_pullback_pair!(
+    site, dU1, dU2, dU3, dU4,
+    dresult1, psi1, dresult2, psi2, coefficient1, coefficient2,
+    ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    indices = delinearize(indexer, site, nw)
+    indices_1p = shiftindices(indices, shift_1p)
+    indices_2p = shiftindices(indices, shift_2p)
+    indices_3p = shiftindices(indices, shift_3p)
+    indices_4p = shiftindices(indices, shift_4p)
+
+    _kernel_wilson_clover_link_pullback_pair_direction!(
+        dU1, dresult1, psi1, dresult2, psi2, indices, indices_1p,
+        coefficient1, coefficient2, Val(NC), oneminusγ1, oneplusγ1)
+    _kernel_wilson_clover_link_pullback_pair_direction!(
+        dU2, dresult1, psi1, dresult2, psi2, indices, indices_2p,
+        coefficient1, coefficient2, Val(NC), oneminusγ2, oneplusγ2)
+    _kernel_wilson_clover_link_pullback_pair_direction!(
+        dU3, dresult1, psi1, dresult2, psi2, indices, indices_3p,
+        coefficient1, coefficient2, Val(NC), oneminusγ3, oneplusγ3)
+    _kernel_wilson_clover_link_pullback_pair_direction!(
+        dU4, dresult1, psi1, dresult2, psi2, indices, indices_4p,
+        coefficient1, coefficient2, Val(NC), oneminusγ4, oneplusγ4)
     return nothing
 end
 
@@ -134,6 +173,51 @@ end
         dF24, dresult, psi, coefficient, clover_gamma_products[5], x, Val(NC))
     _kernel_clover_field_cotangent_plane!(
         dF34, dresult, psi, coefficient, clover_gamma_products[6], x, Val(NC))
+    return nothing
+end
+
+@inline function _kernel_clover_field_cotangent_pair!(
+    site, dF12, dF13, dF14, dF23, dF24, dF34,
+    dresult1, psi1, dresult2, psi2, coefficient1, coefficient2,
+    ::Val{NC}, ::Val{nw}, indexer,
+) where {NC,nw}
+    x = delinearize(indexer, site, nw)
+    _kernel_clover_field_cotangent_plane!(
+        dF12, dresult1, psi1, coefficient1,
+        clover_gamma_products[1], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF12, dresult2, psi2, coefficient2,
+        clover_gamma_products[1], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF13, dresult1, psi1, coefficient1,
+        clover_gamma_products[2], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF13, dresult2, psi2, coefficient2,
+        clover_gamma_products[2], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF14, dresult1, psi1, coefficient1,
+        clover_gamma_products[3], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF14, dresult2, psi2, coefficient2,
+        clover_gamma_products[3], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF23, dresult1, psi1, coefficient1,
+        clover_gamma_products[4], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF23, dresult2, psi2, coefficient2,
+        clover_gamma_products[4], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF24, dresult1, psi1, coefficient1,
+        clover_gamma_products[5], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF24, dresult2, psi2, coefficient2,
+        clover_gamma_products[5], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF34, dresult1, psi1, coefficient1,
+        clover_gamma_products[6], x, Val(NC))
+    _kernel_clover_field_cotangent_plane!(
+        dF34, dresult2, psi2, coefficient2,
+        clover_gamma_products[6], x, Val(NC))
     return nothing
 end
 
@@ -403,3 +487,79 @@ function wilson_clover_link_pullback!(
 end
 
 export wilson_clover_link_pullback!
+
+"""
+    wilson_clover_link_pullback_pair!(
+        dlinks, cache, links, result_cotangent1, psi1,
+        result_cotangent2, psi2; coefficient1=1, coefficient2=1)
+
+Accumulate two Wilson--clover link pullbacks in one pass. The two clover
+field-strength cotangents are summed before the projection and six path
+scatters, reducing kernel launches and link traffic. The destination is not
+cleared.
+"""
+function wilson_clover_link_pullback_pair!(
+    dlinks::Union{AbstractVector,Tuple},
+    cache::WilsonDiracCloverOperator4D,
+    links::Union{AbstractVector,Tuple},
+    result_cotangent1::F,
+    psi1::F,
+    result_cotangent2::F,
+    psi2::F;
+    coefficient1=1,
+    coefficient2=1,
+) where {F<:LatticeMatrix{4}}
+    coefficient1 isa Real || throw(ArgumentError(
+        "Wilson--clover pullback coefficient1 must be real"))
+    coefficient2 isa Real || throw(ArgumentError(
+        "Wilson--clover pullback coefficient2 must be real"))
+    _validate_wilson_clover_link_pullback(
+        dlinks, cache, links, result_cotangent1, psi1)
+    _validate_wilson_clover_link_pullback(
+        dlinks, cache, links, result_cotangent2, psi2)
+    U = (links[1], links[2], links[3], links[4])
+    _ensure_clover_cache_current!(cache, U...)
+    ensure_halo!.(U)
+    ensure_halo!(result_cotangent1)
+    ensure_halo!(psi1)
+    ensure_halo!(result_cotangent2)
+    ensure_halo!(psi2)
+
+    scale1 = convert(typeof(cache.wilson.κ), coefficient1)
+    scale2 = convert(typeof(cache.wilson.κ), coefficient2)
+    JACC.parallel_for(
+        prod(result_cotangent1.PN),
+        _kernel_wilson_clover_link_pullback_pair!,
+        dlinks[1].A, dlinks[2].A, dlinks[3].A, dlinks[4].A,
+        result_cotangent1.A, psi1.A, result_cotangent2.A, psi2.A,
+        -cache.wilson.κ * scale1, -cache.wilson.κ * scale2,
+        Val(result_cotangent1.NC1), Val(result_cotangent1.nw),
+        result_cotangent1.indexer,
+    )
+
+    dF, scratch_indices = _reserve_clover_pullback_scratch(cache)
+    try
+        clear_matrix!.(dF)
+        clover_scale = -cache.wilson.κ * cache.cSW
+        JACC.parallel_for(
+            prod(result_cotangent1.PN),
+            _kernel_clover_field_cotangent_pair!,
+            dF[1].A, dF[2].A, dF[3].A,
+            dF[4].A, dF[5].A, dF[6].A,
+            result_cotangent1.A, psi1.A,
+            result_cotangent2.A, psi2.A,
+            clover_scale * scale1, clover_scale * scale2,
+            Val(result_cotangent1.NC1), Val(result_cotangent1.nw),
+            result_cotangent1.indexer,
+        )
+        mark_halo_dirty!.(dF)
+        ensure_halo!.(dF)
+        _clover_links_pullback!(dlinks, U, dF, result_cotangent1)
+    finally
+        _release_clover_pullback_scratch!(cache, scratch_indices)
+    end
+    mark_halo_dirty!.(dlinks)
+    return dlinks
+end
+
+export wilson_clover_link_pullback_pair!

@@ -201,6 +201,21 @@ function wilson_clover_tests()
         wilson_clover_link_pullback!(
             dlinks, operator1, U1, chi1, psi1)
 
+        separate = [similar(link) for link in U1]
+        paired = [similar(link) for link in U1]
+        clear_matrix!.(separate)
+        clear_matrix!.(paired)
+        wilson_clover_link_pullback!(
+            separate, operator1, U1, chi1, psi1; coefficient=0.7)
+        wilson_clover_link_pullback!(
+            separate, operator1, U1, psi1, chi1; coefficient=-0.4)
+        wilson_clover_link_pullback_pair!(
+            paired, operator1, U1, chi1, psi1, psi1, chi1;
+            coefficient1=0.7, coefficient2=-0.4)
+        @test maximum(
+            maximum(abs, separate[mu].A .- paired[mu].A) for mu in 1:4
+        ) < 3e-12
+
         epsilon = 1e-6
         links_plus = deepcopy(links)
         links_minus = deepcopy(links)

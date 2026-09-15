@@ -3194,6 +3194,187 @@ function traceless_antihermitian_add!(C::LatticeMatrix{D,T,AT,NG,1,nw}, factor,
     _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add!, C.A, A.A, factor, C.indexer, Val(NG), Val(NC), Val(nw), Val(nw2))
 end
 
+"""
+    traceless_antihermitian_product_add!(C, factor, A, B)
+
+Accumulate `factor * TA(A * B)` directly into the real Lie-algebra coefficient
+field `C`.  `A` and `B` may independently be adjoint lattice views.  The
+matrix product is kept local to the kernel, avoiding a full matrix temporary
+and a second kernel launch.
+"""
+function traceless_antihermitian_product_add!(
+    C::LatticeMatrix{D,T,AT,NG,1,nwc}, factor,
+    A::LatticeMatrix, B::LatticeMatrix,
+) where {D,T<:Real,AT,NG,nwc}
+    _traceless_antihermitian_product_add!(
+        C, factor, A, B, Val(false), Val(false),
+    )
+end
+
+function traceless_antihermitian_product_add!(
+    C::LatticeMatrix{D,T,AT,NG,1,nwc}, factor,
+    A::Adjoint_Lattice, B::LatticeMatrix,
+) where {D,T<:Real,AT,NG,nwc}
+    _traceless_antihermitian_product_add!(
+        C, factor, A.data, B, Val(true), Val(false),
+    )
+end
+
+function traceless_antihermitian_product_add!(
+    C::LatticeMatrix{D,T,AT,NG,1,nwc}, factor,
+    A::LatticeMatrix, B::Adjoint_Lattice,
+) where {D,T<:Real,AT,NG,nwc}
+    _traceless_antihermitian_product_add!(
+        C, factor, A, B.data, Val(false), Val(true),
+    )
+end
+
+function traceless_antihermitian_product_add!(
+    C::LatticeMatrix{D,T,AT,NG,1,nwc}, factor,
+    A::Adjoint_Lattice, B::Adjoint_Lattice,
+) where {D,T<:Real,AT,NG,nwc}
+    _traceless_antihermitian_product_add!(
+        C, factor, A.data, B.data, Val(true), Val(true),
+    )
+end
+
+function _traceless_antihermitian_product_add!(
+    C::LatticeMatrix{D,T,AT,NG,1,nwc}, factor,
+    A::LatticeMatrix{D,TA,ATA,NC,NC,nwa},
+    B::LatticeMatrix{D,TB,ATB,NC,NC,nwb},
+    adjoint_a::Val{AA}, adjoint_b::Val{AB},
+) where {D,T<:Real,AT,NG,nwc,TA,ATA,TB,ATB,NC,nwa,nwb,AA,AB}
+    NG == NC^2 - 1 || throw(DimensionMismatch(
+        "the coefficient field has $NG rows, expected $(NC^2 - 1) for SU($NC)",
+    ))
+    _parallel_for_mutating!(
+        C, prod(C.PN), kernel_traceless_antihermitian_product_add!,
+        C.A, A.A, B.A, factor, C.indexer, Val(NG), Val(NC),
+        Val(nwc), Val(nwa), Val(nwb), adjoint_a, adjoint_b,
+    )
+    return nothing
+end
+
+@inline function _product_entry(
+    a, b, row, column, indices_a, indices_b,
+    ::Val{NC}, ::Val{AA}, ::Val{AB},
+) where {NC,AA,AB}
+    value = zero(promote_type(eltype(a), eltype(b)))
+    @inbounds for inner = 1:NC
+        avalue = AA ? conj(a[inner, row, indices_a...]) :
+                      a[row, inner, indices_a...]
+        bvalue = AB ? conj(b[column, inner, indices_b...]) :
+                      b[inner, column, indices_b...]
+        value += avalue * bvalue
+    end
+    return value
+end
+
+@inline function kernel_traceless_antihermitian_product_add!(
+    i, c, a, b, factor, dindexer, ::Val{NG}, ::Val{NC},
+    ::Val{nwc}, ::Val{nwa}, ::Val{nwb}, adjoint_a::Val{AA},
+    adjoint_b::Val{AB},
+) where {NG,NC,nwc,nwa,nwb,AA,AB}
+    indices_c = delinearize(dindexer, i, nwc)
+    indices_a = delinearize(dindexer, i, nwa)
+    indices_b = delinearize(dindexer, i, nwb)
+
+    basis = 1
+    @inbounds for row = 1:(NC-1)
+        for column = (row+1):NC
+            upper = _product_entry(
+                a, b, row, column, indices_a, indices_b,
+                Val(NC), adjoint_a, adjoint_b,
+            )
+            lower = _product_entry(
+                a, b, column, row, indices_a, indices_b,
+                Val(NC), adjoint_a, adjoint_b,
+            )
+            difference = upper - conj(lower)
+            c[basis, 1, indices_c...] += factor * imag(difference)
+            c[basis+1, 1, indices_c...] += factor * real(difference)
+            basis += 2
+        end
+    end
+
+    diagonal_values = ntuple(Val(NC)) do row
+        imag(_product_entry(
+            a, b, row, row, indices_a, indices_b,
+            Val(NC), adjoint_a, adjoint_b,
+        ))
+    end
+    @inbounds for diagonal = 1:(NC-1)
+        diagonal_sum = zero(first(diagonal_values))
+        for row = 1:diagonal
+            diagonal_sum += diagonal_values[row]
+        end
+        diagonal_sum -= diagonal * diagonal_values[diagonal+1]
+        normalization = sqrt(diagonal * (diagonal + 1) / 2)
+        c[basis, 1, indices_c...] += factor * diagonal_sum / normalization
+        basis += 1
+    end
+    return nothing
+end
+
+@inline function kernel_traceless_antihermitian_product_add!(
+    i, c, a, b, factor, dindexer, ::Val{NG}, ::Val{2},
+    ::Val{nwc}, ::Val{nwa}, ::Val{nwb}, adjoint_a::Val{AA},
+    adjoint_b::Val{AB},
+) where {NG,nwc,nwa,nwb,AA,AB}
+    indices_c = delinearize(dindexer, i, nwc)
+    indices_a = delinearize(dindexer, i, nwa)
+    indices_b = delinearize(dindexer, i, nwb)
+    nc = Val(2)
+    p11 = _product_entry(a, b, 1, 1, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p12 = _product_entry(a, b, 1, 2, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p21 = _product_entry(a, b, 2, 1, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p22 = _product_entry(a, b, 2, 2, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    d12 = p12 - conj(p21)
+    @inbounds begin
+        c[1, 1, indices_c...] += factor * imag(d12)
+        c[2, 1, indices_c...] += factor * real(d12)
+        c[3, 1, indices_c...] += factor * (imag(p11) - imag(p22))
+    end
+    return nothing
+end
+
+@inline function kernel_traceless_antihermitian_product_add!(
+    i, c, a, b, factor, dindexer, ::Val{NG}, ::Val{3},
+    ::Val{nwc}, ::Val{nwa}, ::Val{nwb}, adjoint_a::Val{AA},
+    adjoint_b::Val{AB},
+) where {NG,nwc,nwa,nwb,AA,AB}
+    indices_c = delinearize(dindexer, i, nwc)
+    indices_a = delinearize(dindexer, i, nwa)
+    indices_b = delinearize(dindexer, i, nwb)
+    nc = Val(3)
+    p11 = _product_entry(a, b, 1, 1, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p12 = _product_entry(a, b, 1, 2, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p13 = _product_entry(a, b, 1, 3, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p21 = _product_entry(a, b, 2, 1, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p22 = _product_entry(a, b, 2, 2, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p23 = _product_entry(a, b, 2, 3, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p31 = _product_entry(a, b, 3, 1, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p32 = _product_entry(a, b, 3, 2, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    p33 = _product_entry(a, b, 3, 3, indices_a, indices_b, nc, adjoint_a, adjoint_b)
+    d12 = p12 - conj(p21)
+    d13 = p13 - conj(p31)
+    d23 = p23 - conj(p32)
+    @inbounds begin
+        c[1, 1, indices_c...] += factor * imag(d12)
+        c[2, 1, indices_c...] += factor * real(d12)
+        c[3, 1, indices_c...] += factor * (imag(p11) - imag(p22))
+        c[4, 1, indices_c...] += factor * imag(d13)
+        c[5, 1, indices_c...] += factor * real(d13)
+        c[6, 1, indices_c...] += factor * imag(d23)
+        c[7, 1, indices_c...] += factor * real(d23)
+        c[8, 1, indices_c...] += factor * sr3i *
+                                  (imag(p11) + imag(p22) - 2 * imag(p33))
+    end
+    return nothing
+end
+
+export traceless_antihermitian_product_add!
+
 function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::Val{NG}, ::Val{NC}, ::Val{nw}, ::Val{nw2}) where {NC,NG,nw,nw2}
     error("NC > 3 is not supported in kernel_4d_Traceless_antihermitian_add!")
 end

@@ -4,6 +4,29 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.6
+
+### Fused force primitives
+
+- Add `traceless_antihermitian_product_add!` to accumulate the Lie-algebra
+  projection of a local matrix product without materializing the product or
+  launching a separate projection kernel. Both operands may independently be
+  adjointed; SU(2) and SU(3) retain their established coefficient order and
+  the generic SU(N) path follows the standard generator order.
+- Add `wilson_clover_link_pullback_pair!` to combine two weighted
+  Wilson--Clover cotangents before the six clover-plane path scatters. This
+  preserves the result of two independent pullbacks while sharing link reads,
+  cache validation, scratch fields, and kernel launches.
+
+### Validation and performance
+
+- Check all four operand-adjoint combinations of the fused product projection
+  for SU(2) and SU(3), and compare the paired Clover pullback with two separate
+  calls to maximum differences of `5e-13` and `4.44e-16`, respectively.
+- On an otherwise idle NVIDIA H100 NVL, the SU(3) product/projection primitive
+  is 1.30x faster and the paired Clover pullback is 2.02x faster than their
+  separate-call equivalents in the focused benchmarks.
+
 ## v1.2.5
 
 ### APE, stout/EXP, HYP, and HEX smearing

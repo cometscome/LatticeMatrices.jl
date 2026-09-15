@@ -6,7 +6,7 @@ High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.5 is the current backward-compatible release in the stable v1 line.
+Version 1.2.6 is the current backward-compatible release and adds fused product/Lie projection and paired Wilson--Clover pullback kernels; see [CHANGES.md](CHANGES.md).
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
 

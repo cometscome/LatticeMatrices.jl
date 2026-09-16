@@ -4,6 +4,19 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.7
+
+### Enzyme coefficient gradients
+
+- Extend the custom reverse rule for `add_matrix!(C, A, coefficient)` so an
+  active real `coefficient` receives its real Frobenius-inner-product
+  cotangent while preserving the existing lattice-input cotangent.
+- Compute the coefficient cotangent with a JACC reduction and the field
+  communicator's sum reduction, giving the same global parameter gradient in
+  serial and MPI execution.
+- Add focused Enzyme coverage for the active coefficient, including the MPI
+  reduction path.
+
 ## v1.2.6
 
 ### Fused force primitives

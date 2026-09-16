@@ -2006,6 +2006,47 @@ function ER.reverse(cfg::ER.RevConfig,
 end
 
 # add_matrix! (C += α * A)
+@inline function _kernel_real_frobenius_inner(
+    i,
+    left,
+    right,
+    dindexer,
+    ::Val{NC1},
+    ::Val{NC2},
+    ::Val{nw},
+) where {NC1,NC2,nw}
+    indices = delinearize(dindexer, i, nw)
+    value = real(zero(eltype(left)))
+    @inbounds for column in 1:NC2, row in 1:NC1
+        value += real(conj(left[row, column, indices...]) *
+                      right[row, column, indices...])
+    end
+    return value
+end
+
+@inline _coefficient_pullback(::Any, ::LatticeMatrix, _dC, _A) = nothing
+
+function _coefficient_pullback(
+    α::ER.Active{R},
+    metadata::LatticeMatrix,
+    dC,
+    A,
+) where {R<:Real}
+    local_value = JACC.parallel_reduce(
+        prod(metadata.PN),
+        _kernel_real_frobenius_inner,
+        dC,
+        A,
+        metadata.indexer,
+        Val(metadata.NC1),
+        Val(metadata.NC2),
+        Val(metadata.nw);
+        init=zero(R),
+        op=+,
+    )
+    return convert(R, _allreduce_sum(local_value, metadata.comm))
+end
+
 function ER.augmented_primal(cfg::ER.RevConfig,
     ::ER.Const{typeof(add_matrix!)},
     ::Type{RT},
@@ -2018,7 +2059,13 @@ function ER.augmented_primal(cfg::ER.RevConfig,
     primal_ret = add_matrix!(C.val, A.val, αval)
     primal = ER.needs_primal(cfg) ? convert(RealRt, primal_ret) : nothing
     shadow = ER.needs_shadow(cfg) ? convert(RealRt, nothing) : nothing
-    cache = nothing::Any
+    cache = if α isa ER.Active
+        tapeA, tape_index = get_block(A.val.temps)
+        tapeA .= A.val.A
+        (tapeA, tape_index)
+    else
+        nothing
+    end
     RetT = ER.augmented_rule_return_type(cfg, RT, cache)
     return RetT(primal, shadow, cache)
 end
@@ -2030,11 +2077,16 @@ function ER.reverse(cfg::ER.RevConfig,
     A::ER.Annotation{<:LatticeMatrix},
     α::S,
 ) where {S}
-    dα = _zero_cotangent(α)
     dC_struct = _getshadow_out(dCout, C)
     dC_struct isa LatticeMatrix || (dC_struct = _getshadow(C.dval))
-    dC_struct === nothing && return (nothing, nothing, dα)
+    if dC_struct === nothing
+        _tape === nothing || unused!(A.val.temps, _tape[2])
+        return (nothing, nothing, _zero_cotangent(α))
+    end
     dCval = dC_struct.A
+
+    Aval = _tape === nothing ? A.val.A : _tape[1]
+    dα = _coefficient_pullback(α, C.val, dCval, Aval)
 
     dA_struct = hasproperty(A, :dval) ? _getshadow(A.dval) : nothing
     dAval = (dA_struct isa LatticeMatrix) ? dA_struct.A : nothing
@@ -2048,6 +2100,8 @@ function ER.reverse(cfg::ER.RevConfig,
             conj(αval), Val(C.val.nw)
         )
     end
+
+    _tape === nothing || unused!(A.val.temps, _tape[2])
 
     return (nothing, nothing, dα)
 end

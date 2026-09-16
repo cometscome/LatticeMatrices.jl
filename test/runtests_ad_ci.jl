@@ -27,6 +27,7 @@ else
 end
 
 include("communication_helpers.jl")
+include("coefficient_ad.jl")
 
 try
     include("enzyme.jl")
@@ -34,6 +35,7 @@ try
 
     @testset "LatticeMatrices CI AD smoke" begin
         enzymetests()
+        coefficient_ad_tests()
         wilson_dirac_ad_tests()
     end
     LATTICEMATRICES_TEST_MPI && MPI.Barrier(MPI.COMM_WORLD)

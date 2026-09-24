@@ -4,7 +4,7 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized CPU/CUDA multiplication, and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
+Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized multiplication through JACC (validated on its Threads and CUDA backends), and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
 
 🎉 **LatticeMatrices.jl v1 is available!**
 
@@ -1536,8 +1536,13 @@ The operand type selects the implementation: use `B::ScaledIdentityLattice`
 for compact scalar multiplication, or `dense_B::LatticeMatrix` for the existing
 full-matrix method. After changing `B.scalar`, call `substitute!(dense_B, B)`
 again if you also need to refresh the independently stored dense copy.
-CPU kernels reuse each site's base indices; CUDA kernels assign consecutive
-color components to adjacent threads for contiguous memory access.
+Both multiplication kernels execute through `JACC.parallel_for`; this feature
+does not launch kernels directly with `CUDA.@cuda`. The JACC Threads backend
+uses a site-wise kernel that reuses each site's base indices. For JACC's CUDA
+backend, the package's CUDA extension selects a component-wise kernel so
+adjacent work items access consecutive color components. Other backends
+currently retain the site-wise kernel; this component-wise selection is not
+yet enabled or performance-validated for AMDGPU or oneAPI.
 
 Run the focused benchmark with `julia --project benchmark/scaled_identity.jl`.
 It compares the full-matrix method, a frozen reference of the initial scalar
@@ -1545,9 +1550,11 @@ kernel, and the current scalar kernel in randomized order. An optional first
 argument changes the lattice extent (default: 16^4). Numerical differences
 and host allocation counts are reported alongside timings.
 
-CUDA-specific runners are `test/scaled_identity_gpu.jl` and
-`benchmark/scaled_identity_gpu.jl`, using an environment configured with
-JACC's CUDA backend. The [H100 validation report](benchmark/SCALED_IDENTITY_H100_2026-09-24.md)
+The runners `test/scaled_identity_gpu.jl` and `benchmark/scaled_identity_gpu.jl`
+validate execution through JACC's CUDA backend. They additionally use CUDA.jl
+to check the device and array storage and disable scalar host fallback;
+the multiplication itself still runs through JACC.
+The [H100 validation report](benchmark/SCALED_IDENTITY_H100_2026-09-24.md)
 records 1,172 passing checks and approximately 1.98x / 3.55--3.58x speedups
 over full matrices at 16^4 / 32^4 (SU(3), ComplexF64). The scalar results are
 bitwise equal to the initial scalar implementation; the maximum difference

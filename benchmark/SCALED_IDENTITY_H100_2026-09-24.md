@@ -4,6 +4,9 @@
 
 - NVIDIA H100 NVL, driver 590.48.01, Julia 1.11.8, CUDA.jl 5.11.3,
   JACC.jl 1.3.1, one Julia CPU thread.
+- Multiplication runs through JACC's CUDA backend (`JACC.parallel_for`),
+  not direct `CUDA.@cuda` launches. CUDA.jl is also used by the runners for
+  device/storage checks and to disable scalar host fallback.
 - Single GPU, SU(3), ComplexF64, `nw=1`; no multi-GPU timing claim.
 - GPU 0 was shared with a resident process using 80,552 MiB according to
   nvidia-smi (80,575 MiB total usage). GPU utilization
@@ -93,7 +96,8 @@ and agrees with the numerical reference within `1e-12`.
 Those prototype timings omit the public dispatch and cover only a restricted
 case. They isolate a GPU memory-access/launch bottleneck, not a package-level
 speedup. The production fix uses a general component-wise kernel selected
-only for CUDA arrays by the CUDA extension. It preserves the site-wise
+only for CUDA arrays by the CUDA extension, and launched through JACC just
+like the site-wise kernel. It preserves the site-wise
 kernel's arithmetic order, rectangular/adjoint offsets, halo behavior, and
 alias validation. CPU and other backends keep the site-wise kernel. No
 device-specific block-size or shared-memory override is introduced.

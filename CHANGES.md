@@ -31,10 +31,13 @@ preserve the public v1 API.
   by offsets. Preserve transposed offsets for adjoints, unequal halo widths,
   in-place multiplication, and alpha/beta arithmetic. The three-argument
   path passes its unit-alpha/zero-beta flags directly.
-- Select a CUDA-specific component-wise kernel through the CUDA extension:
+- For JACC's CUDA backend, select a component-wise JACC kernel through the
+  package's CUDA extension:
   neighboring threads access consecutive color components instead of
   striding by the matrix size. This resolves the site-wise GPU kernel's
   slowdown without changing the optimized CPU path or arithmetic order.
+  Both kernels launch through `JACC.parallel_for`, not direct `CUDA.@cuda`
+  calls. Other JACC backends currently retain the site-wise kernel.
   Existing full-matrix multiplication remains selectable by operand type.
 
 ### Validation and performance
@@ -78,8 +81,8 @@ preserve the public v1 API.
   This includes 24 checks of partial blocks on a 5×7×3×2 lattice with
   shifted adjoints, accumulation, and live scalar updates.
 - The pre-fix site-wise GPU kernel took 910--914 microseconds at 32^4,
-  slower than full matrices (582--593 microseconds). Component-wise CUDA
-  dispatch resolves that regression. Final public-operation median timings
+  slower than full matrices (582--593 microseconds). Component-wise dispatch
+  through JACC's CUDA backend resolves that regression. Final public-operation median timings
   over 51 randomized, interleaved samples, including GPU synchronization,
   are shown below for SU(3), ComplexF64, `nw=1` (microseconds).
 

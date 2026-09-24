@@ -902,6 +902,7 @@ Base.@noinline function shift_L(B, sh::NTuple{Dim,Int}) where {Dim}
 end
 
 include("LinearAlgebras/mul_nowing.jl")
+include("LinearAlgebras/scaled_identity.jl")
 
 #=
 function Shifted_Lattice(data::TL, shift) where {D,T,AT,NC1,NC2,nw,DI,TL<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}

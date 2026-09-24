@@ -4,9 +4,11 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
+Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized CPU/CUDA multiplication, and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
+
 🎉 **LatticeMatrices.jl v1 is available!**
 
-Version 1.2.7 is the current backward-compatible release and adds Enzyme
+Version 1.2.7 adds Enzyme
 gradients for active real coefficients in lattice accumulation; see
 [CHANGES.md](CHANGES.md).
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
@@ -1483,6 +1485,75 @@ JACC.@init_backend                  # must be at top-level scope
 References: JACC quick start and usage in the upstream README.  
 
 ---
+
+## Scalar multiples of the identity
+
+`ScaledIdentityLattice` represents `s(x) I` with one coefficient per site.
+It does not inspect a full matrix or store repeated diagonal entries.
+
+```julia
+using LatticeMatrices, LinearAlgebra
+import JACC
+JACC.@init_backend
+
+grid = (1, 1, 1, 1)
+lattice = (4, 4, 4, 4)
+s = LatticeMatrix(1, 1, 4, lattice, grid; nw=1)
+makeidentity_matrix!(s)  # initially s(x) = 1
+B = ScaledIdentityLattice(3, s)
+A = LatticeMatrix(3, 3, 4, lattice, grid; nw=1)
+makeidentity_matrix!(A)
+C = similar(A)
+
+mul!(C, A, B)           # C_ij(x) = A_ij(x) s(x)
+mul!(C, B, A)           # also supported on the left
+mul!(C, A, B, 0.5, 0.2) # C = 0.5 A B + 0.2 C
+mul!(C, A, B')          # conjugates s(x)
+
+with_shifted_lattice(B, (1, 0, 0, 0)) do shifted_B
+    mul!(C, A, shifted_B)
+end
+
+dense_B = similar(A)
+substitute!(dense_B, B) # explicit expansion; ordinary matrix APIs still work
+mul!(C, A, dense_B)     # select the existing full-matrix implementation
+```
+
+`B.scalar === s`: updates through LatticeMatrices mutating functions are
+visible on subsequent evaluations. Direct writes to `s.A` require
+`mark_halo_dirty!(s)`. As with ordinary shifted lattices, long materialized
+shifts are snapshots; create a new shift after changing the source.
+
+The logical matrix cannot have independently edited diagonal or nonzero
+off-diagonal entries. Modify `B.scalar`, or expand into `dense_B` first.
+The scalar field uses the normal JACC/halo/MPI machinery, but no repeated
+color entries are communicated. Storage and halo payload per plane are
+reduced by `colors^2`. Non-unit coefficients and rectangular A are supported.
+Arbitrary matrix operations not listed here should use explicit expansion.
+No dedicated Enzyme reverse rule is added by this change.
+
+The operand type selects the implementation: use `B::ScaledIdentityLattice`
+for compact scalar multiplication, or `dense_B::LatticeMatrix` for the existing
+full-matrix method. After changing `B.scalar`, call `substitute!(dense_B, B)`
+again if you also need to refresh the independently stored dense copy.
+CPU kernels reuse each site's base indices; CUDA kernels assign consecutive
+color components to adjacent threads for contiguous memory access.
+
+Run the focused benchmark with `julia --project benchmark/scaled_identity.jl`.
+It compares the full-matrix method, a frozen reference of the initial scalar
+kernel, and the current scalar kernel in randomized order. An optional first
+argument changes the lattice extent (default: 16^4). Numerical differences
+and host allocation counts are reported alongside timings.
+
+CUDA-specific runners are `test/scaled_identity_gpu.jl` and
+`benchmark/scaled_identity_gpu.jl`, using an environment configured with
+JACC's CUDA backend. The [H100 validation report](benchmark/SCALED_IDENTITY_H100_2026-09-24.md)
+records 1,172 passing checks and approximately 1.98x / 3.55--3.58x speedups
+over full matrices at 16^4 / 32^4 (SU(3), ComplexF64). The scalar results are
+bitwise equal to the initial scalar implementation; the maximum difference
+from full matrices is `4.44e-16`. CPU 16^4 multiplication is about 5x faster
+than full matrices with zero measured difference. Timings depend on the
+backend, lattice, and device load; see [CHANGES.md](CHANGES.md) for details.
 
 ## Citation
 

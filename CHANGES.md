@@ -4,6 +4,99 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.8
+
+### Scalar multiples of the identity
+
+- Add `ScaledIdentityLattice(colors, scalar)`, backed by a 1×1 lattice
+  matrix held by reference. It represents `scalar(x) * I_colors` without
+  allocating the zero off-diagonal or repeated diagonal components. The
+  coefficient can be any scalar, not just a center phase.
+- Ordinary three- and five-argument `mul!` dispatches to a JACC scalar
+  multiplication kernel, for either operand order and shifted/adjoint views.
+  Scalar updates are read on each call. Destination halos are invalidated;
+  shifts communicate only the scalar field. `substitute!(dense, B)` provides
+  explicit expansion; existing full-matrix operations remain available.
+- Fix `substitute!(parent, shifted_parent)` and the shifted-adjoint variant
+  by taking a snapshot when the source and destination alias. The old
+  halo-backed kernel could overwrite sites before reading them. This also
+  corrects the wing-backed rectangle B-force discrepancy in Gaugefields;
+  results affected by this bug intentionally change.
+- Add serial/MPI tests for SU(2)/SU(3)/SU(4), ComplexF32/ComplexF64, zero and
+  nonzero halos, long shifts, boundary phases, scalar updates, accumulation,
+  rectangular matrices, explicit expansion, and aliasing. The portable
+  kernels use JACC; single-H100 hardware results are recorded below.
+- Correct the initial scalar kernel's indexing bottleneck: compute the
+  linear base index of A and C once per site, then access the color block
+  by offsets. Preserve transposed offsets for adjoints, unequal halo widths,
+  in-place multiplication, and alpha/beta arithmetic. The three-argument
+  path passes its unit-alpha/zero-beta flags directly.
+- Select a CUDA-specific component-wise kernel through the CUDA extension:
+  neighboring threads access consecutive color components instead of
+  striding by the matrix size. This resolves the site-wise GPU kernel's
+  slowdown without changing the optimized CPU path or arithmetic order.
+  Existing full-matrix multiplication remains selectable by operand type.
+
+### Validation and performance
+
+- The new focused tests pass 1144 checks in serial and 1144 on each of two
+  MPI ranks. The existing serial halo-epoch tests also pass all 62 checks.
+  The existing serial regression suite passes another 868 checks.
+  The expanded tests compare bitwise with a frozen copy of the pre-linear
+  scalar kernel, including shifts, adjoints, Float32/Float64, and accumulation.
+  Additional 1D/2D/4D cases cover rectangular adjoints, unequal halo widths,
+  and ignoring a NaN destination when beta is zero.
+- A focused SU(3), ComplexF64, 16^4, `nw=1` benchmark on an Intel Xeon Gold
+  6526Y with Julia 1.11.8 and one JACC CPU thread gives the following median
+  times over 51 warmed-up calls (microseconds), interleaved in randomized
+  order in the same process. `full` uses the existing specialized matrix
+  kernel; `initial scalar` uses the frozen pre-linear reference. All measured
+  maximum differences are 0.0; current and initial scalar results also pass
+  a bitwise (`isequal`) comparison.
+
+  | B shift | Full matrix | Initial scalar | Current scalar | Full / current | Initial / current |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | (0,0,0,0) | 3817.424 | 4716.095 | 765.722 | 4.99 | 6.16 |
+  | (1,0,0,0) | 3814.294 | 4714.953 | 762.585 | 5.00 | 6.18 |
+
+  A smaller 4^4 case with shift (1,0,0,0) takes 15.756/21.216/4.496
+  microseconds for full/initial/current, respectively (3.50x versus full,
+  4.72x versus initial; both maximum differences 0.0).
+
+  The initial scalar implementation's approximately 24% slowdown is resolved
+  in this benchmark. This is a CPU result, not a GPU performance claim.
+  Host allocations in this benchmark are 0/784/784 bytes per call for
+  full/initial/current; the optimization removes repeated indexing, not all
+  API allocation overhead. SU(3) B component storage and halo payload remain
+  9x smaller per plane. Run `benchmark/scaled_identity.jl` to measure the
+  actual backend and lattice size of interest.
+
+### GPU validation and performance
+
+- Pass all 1,172 checks in `test/scaled_identity_gpu.jl` on an H100 NVL
+  with CUDA.jl 5.11.3 and JACC.jl 1.3.1, with scalar host access disabled.
+  This includes 24 checks of partial blocks on a 5×7×3×2 lattice with
+  shifted adjoints, accumulation, and live scalar updates.
+- The pre-fix site-wise GPU kernel took 910--914 microseconds at 32^4,
+  slower than full matrices (582--593 microseconds). Component-wise CUDA
+  dispatch resolves that regression. Final public-operation median timings
+  over 51 randomized, interleaved samples, including GPU synchronization,
+  are shown below for SU(3), ComplexF64, `nw=1` (microseconds).
+
+  | Lattice | B shift | Full matrix | Initial scalar | Current scalar | Full / current |
+  | --- | --- | ---: | ---: | ---: | ---: |
+  | 16^4 | (0,0,0,0) | 44.636 | 44.213 | 22.609 | 1.97 |
+  | 16^4 | (1,0,0,0) | 44.817 | 44.150 | 22.622 | 1.98 |
+  | 32^4 | (0,0,0,0) | 571.481 | 858.802 | 159.504 | 3.58 |
+  | 32^4 | (1,0,0,0) | 562.275 | 852.394 | 158.590 | 3.55 |
+
+- The maximum difference from full matrices is `4.44e-16`; the initial
+  and current scalar GPU results remain bitwise equal in these runs.
+  See [the H100 report](benchmark/SCALED_IDENTITY_H100_2026-09-24.md) for
+  shared-device conditions, reproduction commands, and diagnostic experiments.
+  These are single-H100 measurements, not exclusive-device guarantees;
+  multi-GPU, AMDGPU, and oneAPI performance remain unvalidated here.
+
 ## v1.2.7
 
 ### Enzyme coefficient gradients

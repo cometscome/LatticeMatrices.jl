@@ -3,7 +3,8 @@ module LatticeMatricesCUDAExt
 using CUDA
 import LatticeMatrices: _backend_device_count, _prepare_mpi_host_buffer,
                         _select_backend_device!,
-                        _mpi_device_buffer_supported, _mpi_device_kind
+                        _mpi_device_buffer_supported, _mpi_device_kind,
+                        _center_component_threads
 
 _backend_device_count(::Val{:cuda}) = length(CUDA.devices())
 
@@ -18,5 +19,7 @@ _prepare_mpi_host_buffer(::CUDA.CuArray, buffer::Array) = CUDA.pin(buffer)
 
 _mpi_device_buffer_supported(::CUDA.CuArray) = true
 _mpi_device_kind(::CUDA.CuArray) = :cuda
+
+_center_component_threads(::CUDA.CuArray) = true
 
 end

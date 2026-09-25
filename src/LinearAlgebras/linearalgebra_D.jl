@@ -1786,6 +1786,11 @@ end
 function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Shifted_Lattice{L,D}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
     shift = get_shift(A)
+    if any(!iszero, shift) && Base.mightalias(C.A, A.data.A)
+        temporary = similar(C)
+        substitute!(temporary, A)
+        return substitute!(C, temporary)
+    end
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_shift!, C.A, A.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer, shift
     )
@@ -1809,6 +1814,11 @@ end
 function substitute!(C::LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI}, A::Adjoint_Lattice{<:Shifted_Lattice{L,D}}) where {D,T1,T2,AT1,AT2,NC1,NC2,nw,DI,
     L<:LatticeMatrix{D,T2,AT2,NC1,NC2,nw,DI}}
     shift = get_shift(A)
+    if Base.mightalias(C.A, A.data.data.A)
+        temporary = similar(C)
+        substitute!(temporary, A)
+        return substitute!(C, temporary)
+    end
     _parallel_for_mutating!(C,
         prod(C.PN), kernel_4Dsubstitute_shiftdag!, C.A, A.data.data.A, Val(NC1), Val(NC2), Val(nw), C.indexer, shift
     )

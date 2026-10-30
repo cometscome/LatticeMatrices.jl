@@ -4,6 +4,8 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
+Version 1.2.9 adds job-wide MPI transport defaults and reduces host/device halo buffer storage in undecomposed dimensions for CPU and multi-GPU MPI runs; see [CHANGES.md](CHANGES.md) for details.
+
 Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized multiplication through JACC (validated on its Threads and CUDA backends), and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
 
 🎉 **LatticeMatrices.jl v1 is available!**

@@ -245,6 +245,14 @@ not-yet-exchanged directions send only their core range.
 - `:device_direct` requires device-aware MPI and throws during construction if
   the capability cannot be confirmed.
 
+When the keyword is omitted, `LATTICEMATRICES_MPI_TRANSPORT` sets the job-wide
+default (`auto`, `host_staged`, or `device_direct`). An explicit keyword always
+takes precedence. For compatibility, `GENERALIZED_CUDAAWARE_MPI=0/1/auto` is
+read only when the new environment variable is absent; it maps to
+`host_staged`/`device_direct`/`auto`. The choice is resolved at field construction.
+Undecomposed directions use local halo copies and allocate no packed MPI face
+storage, even when other directions are distributed.
+
 CPU arrays are already passed directly to MPI. CUDA and ROCm device buffers use
 MPI.jl's official GPU-buffer integration together with `MPI.has_cuda()` or
 `MPI.has_rocm()`. oneAPI and Metal remain on the portable host-staged path until

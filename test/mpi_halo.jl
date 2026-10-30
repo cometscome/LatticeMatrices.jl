@@ -17,6 +17,9 @@ try
     halo_epoch_tests()
     halo_buffer_fallback_tests()
     device_selection_tests()
+    withenv("LATTICEMATRICES_TEST_MPI" => "true") do
+        include("transport_defaults.jl")
+    end
     MPI.Barrier(MPI.COMM_WORLD)
 finally
     initialized_here && MPI.Finalize()

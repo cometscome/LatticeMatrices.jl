@@ -4,6 +4,8 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
+Version 1.2.9 adds job-wide MPI transport defaults and reduces host/device halo buffer storage in undecomposed dimensions for CPU and multi-GPU MPI runs; see [CHANGES.md](CHANGES.md) for details.
+
 Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized multiplication through JACC (validated on its Threads and CUDA backends), and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
 
 🎉 **LatticeMatrices.jl v1 is available!**
@@ -244,6 +246,14 @@ not-yet-exchanged directions send only their core range.
 - `:host_staged` always copies accelerator buffers through host memory;
 - `:device_direct` requires device-aware MPI and throws during construction if
   the capability cannot be confirmed.
+
+When the keyword is omitted, `LATTICEMATRICES_MPI_TRANSPORT` sets the job-wide
+default (`auto`, `host_staged`, or `device_direct`). An explicit keyword always
+takes precedence. For compatibility, `GENERALIZED_CUDAAWARE_MPI=0/1/auto` is
+read only when the new environment variable is absent; it maps to
+`host_staged`/`device_direct`/`auto`. The choice is resolved at field construction.
+Undecomposed directions use local halo copies and allocate no packed MPI face
+storage, even when other directions are distributed.
 
 CPU arrays are already passed directly to MPI. CUDA and ROCm device buffers use
 MPI.jl's official GPU-buffer integration together with `MPI.has_cuda()` or

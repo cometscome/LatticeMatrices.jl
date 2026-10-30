@@ -72,6 +72,18 @@ end
     config.resolved === _MPI_HOST_DIRECT ||
     config.resolved === _MPI_DEVICE_DIRECT
 
+function _default_mpi_transport()
+    # Resolve once at field construction; an explicit keyword takes precedence.
+    if haskey(ENV, "LATTICEMATRICES_MPI_TRANSPORT")
+        return _validate_mpi_transport(Symbol(ENV["LATTICEMATRICES_MPI_TRANSPORT"]))
+    end
+    legacy = get(ENV, "GENERALIZED_CUDAAWARE_MPI", "auto")
+    legacy == "0" && return :host_staged
+    legacy == "1" && return :device_direct
+    legacy == "auto" && return :auto
+    throw(ArgumentError("GENERALIZED_CUDAAWARE_MPI must be 0, 1, or auto"))
+end
+
 function _validate_mpi_transport(mpi_transport)
     mpi_transport isa Symbol || throw(ArgumentError(
         "mpi_transport must be :auto, :host_staged, or :device_direct, " *
@@ -402,13 +414,13 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim),
-    comm0=nothing, numtemps=0, device_mapping=:auto, mpi_transport=:auto)
+    comm0=nothing, numtemps=0, device_mapping=:auto, mpi_transport=_default_mpi_transport())
     return LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs;
         nw, elementtype, phases, comm0, numtemps, device_mapping, mpi_transport)
 end
 
 function LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=0,
-    device_mapping=:auto, mpi_transport=:auto)
+    device_mapping=:auto, mpi_transport=_default_mpi_transport())
     return LatticeMatrix_standard(A, dim, PEs;
         nw, phases, comm0, numtemps, device_mapping, mpi_transport)
 end
@@ -417,7 +429,7 @@ end
 # constructor + heavy init (still cheap to call)
 # ---------------------------------------------------------------------------
 function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=ComplexF64, phases=ones(dim), comm0=nothing,
-    numtemps=0, device_mapping=:auto, mpi_transport=:auto)
+    numtemps=0, device_mapping=:auto, mpi_transport=_default_mpi_transport())
 
     nw >= 0 || throw(ArgumentError("nw must be non-negative, got $nw"))
     dim > 0 || throw(ArgumentError("dim must be positive, got $dim"))
@@ -484,7 +496,18 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     buf = Vector{typeof(A)}(undef, nbuf)
     buf_host = Vector{Array{elementtype}}(undef, nbuf)
     if !iszero(nbuf)
+        # Undecomposed dimensions use local periodic copies, never packed MPI
+        # buffers. Keep empty slots so the per-direction indices remain stable.
+        empty_device = JACC.zeros(T, (NC1, NC2, ntuple(_ -> 0, D)...)...)
+        empty_host = Array(empty_device)
         for d in 1:D
+            if dims[d] == 1
+                for buffer_index in (4d-3):(4d)
+                    buf[buffer_index] = empty_device
+                    buf_host[buffer_index] = empty_host
+                end
+                continue
+            end
             shp = ntuple(i -> i == d ? nw : locS[i], D)   # halo slab shape
             buf[4d-3] = JACC.zeros(T, (NC1, NC2, shp...)...)  # minus side
             buf[4d-2] = JACC.zeros(T, (NC1, NC2, shp...)...)  # plus  side
@@ -493,8 +516,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
 
             for buffer_index in (4d-3):(4d)
                 host_buffer = Array{T}(undef, size(buf[buffer_index]))
-                buf_host[buffer_index] = dims[d] == 1 ? host_buffer :
-                    _prepare_mpi_host_buffer(A, host_buffer)
+                buf_host[buffer_index] = _prepare_mpi_host_buffer(A, host_buffer)
             end
         end
     end
@@ -518,7 +540,7 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
 end
 
 function LatticeMatrix_standard(A, dim, PEs; nw=1, phases=ones(dim), comm0=nothing, numtemps=0,
-    device_mapping=:auto, mpi_transport=:auto)
+    device_mapping=:auto, mpi_transport=_default_mpi_transport())
 
     NC1, NC2, NN... = size(A)
     #println(NN)

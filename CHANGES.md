@@ -4,6 +4,26 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.9
+
+### MPI transport defaults and halo buffers
+
+- Merged [PR #86](https://github.com/cometscome/LatticeMatrices.jl/pull/86)
+  by [Arle-Nadja](https://github.com/Arle-Nadja), extending MPI transport
+  configuration and reducing unnecessary halo communication buffers.
+- Add `LATTICEMATRICES_MPI_TRANSPORT` to select `auto`, `host_staged`, or
+  `device_direct` for a job without changing application code. The setting is
+  resolved when a field is constructed; an explicit `mpi_transport` keyword
+  always takes precedence.
+- Preserve compatibility with `GENERALIZED_CUDAAWARE_MPI=0/1/auto`, mapped to
+  `host_staged`/`device_direct`/`auto`, when the new environment variable is absent.
+- Avoid allocating packed MPI face storage in undecomposed dimensions, which
+  use local halo copies. This reduces host and device buffer storage for
+  partially decomposed CPU and multi-GPU MPI runs while preserving buffer indices
+  and the behavior of fields created with `similar`.
+- Add regression coverage for transport-setting precedence, buffer allocation,
+  and halo faces and corners to the standard and two-rank MPI test suites.
+
 ## v1.2.8
 
 ### Scalar multiples of the identity

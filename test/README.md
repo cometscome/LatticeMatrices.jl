@@ -23,6 +23,28 @@ GitHub Actions additionally runs two-rank halo and README tests. Julia 1.11
 and 1.12 run the small Enzyme suite in a separate environment, and Julia 1.11
 runs the two-rank Enzyme halo-gradient regression.
 
+## Transport defaults and buffer allocation
+
+`transport_defaults.jl` checks environment/keyword precedence and the absence
+of packed MPI buffers in undecomposed directions. It also verifies all halo
+faces and corners after exchange. It is included in the normal package test
+and in the existing two-rank `mpi_halo.jl` CI entry point.
+
+To run this regression alone in a prepared test environment:
+
+```sh
+julia --startup-file=no --project=. test/transport_defaults.jl
+```
+
+With MPI available in the active environment:
+
+```sh
+LATTICEMATRICES_TEST_MPI=true julia --startup-file=no --project=. -e 'using MPI; run(`$(MPI.mpiexec()) -n 2 $(Base.julia_cmd()) --startup-file=no --project=. test/transport_defaults.jl`)'
+```
+
+These tests are contained in this repository and do not depend on the
+LatticeDiracOperators checkout or a workspace validation runner.
+
 ## Extended suite (not run by GitHub Actions)
 
 The extended suite adds all finite-difference AD checks, complete HISQ

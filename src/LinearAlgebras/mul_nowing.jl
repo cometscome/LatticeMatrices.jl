@@ -24,7 +24,7 @@ end
     if !unit_phases
         @inbounds for d in eachindex(indices)
             _, wraps = _periodic_shift_index(indices[d], shift[d], global_size[d])
-            factor *= phases[d]^wraps
+            factor *= _boundary_phase_power(phases[d], wraps)
         end
     end
     return shifted_indices, factor

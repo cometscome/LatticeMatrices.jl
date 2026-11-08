@@ -196,7 +196,7 @@ function _materialized_shift_shadow(data::LatticeMatrix, shift)
 end
 
 @inline function _adjoint_shift_phases(data::LatticeMatrix)
-    return typeof(data.phases)(map(phase -> inv(conj(phase)), data.phases))
+    return typeof(data.phases)(map(phase -> _inverse_boundary_phase(conj(phase)), data.phases))
 end
 
 function _accumulate_shift_pullback!(
@@ -373,7 +373,7 @@ end
     factor = one(T)
     @inbounds for d in 1:D
         _, wraps = _periodic_shift_index(indices[d], shift[d], global_size[d])
-        factor *= convert(T, phases[d])^wraps
+        factor *= _boundary_phase_power(convert(T, phases[d]), wraps)
     end
     return shifted_indices, factor
 end
@@ -449,7 +449,7 @@ function _direct_outgoing_fragments(
             destination_global =
                 destination_coords[d] * data.PN[d] + destination_start[d]
             wraps = div(destination_global + shift[d] - source_global, data.gsize[d])
-            factor *= data.phases[d]^wraps
+            factor *= _boundary_phase_power(data.phases[d], wraps)
         end
         push!(fragments, _DirectShiftFragment(
             source_start, destination_start, lengths,
@@ -801,7 +801,7 @@ function _shift_one_dimension_host!(destination, source, data, d, direction)
     end
 
     if crosses_global_boundary
-        phase = direction > 0 ? data.phases[d] : inv(data.phases[d])
+        phase = direction > 0 ? data.phases[d] : _inverse_boundary_phase(data.phases[d])
         _mul_phase!(receive_buffer, phase)
     end
     receive_indices = _nowing_slab_indices(destination, d, receive_range)

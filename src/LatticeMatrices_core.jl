@@ -1,3 +1,10 @@
+# A zero boundary phase is an absorbing wall in either direction. Nonzero
+# phases retain their existing inverse/power semantics, including non-unit ones.
+@inline _inverse_boundary_phase(phase) = iszero(phase) ? zero(phase) : inv(phase)
+@inline function _boundary_phase_power(phase, wraps::Integer)
+    return iszero(phase) ? (iszero(wraps) ? one(phase) : zero(phase)) : phase^wraps
+end
+
 ##############################################################################
 #  LatticeMatrix (no derived datatypes version)
 #  --------------------------------------
@@ -445,8 +452,6 @@ function LatticeMatrix_standard(NC1, NC2, dim, gsize, PEs; nw=1, elementtype=Com
     dims = ntuple(i -> Int(PEs[i]), dim)
     all(>(0), gsize) || throw(ArgumentError("global lattice sizes must be positive, got $gsize"))
     all(>(0), dims) || throw(ArgumentError("process-grid sizes must be positive, got $dims"))
-    any(iszero, phases) && throw(ArgumentError(
-        "boundary phases must be nonzero because negative wraps use inv(phase)"))
     for d in 1:dim
         iszero(gsize[d] % dims[d]) || throw(ArgumentError(
             "global size $(gsize[d]) in dimension $d is not divisible by process-grid size $(dims[d])"))
@@ -852,7 +857,7 @@ function exchange_dim_local!(ls::LatticeMatrix{D}, d::Int) where D
 
     # minus ghost <= plus face
     copy!(gminus, fplus)
-    _mul_phase!(gminus, inv(ls.phases[d]))
+    _mul_phase!(gminus, _inverse_boundary_phase(ls.phases[d]))
 
     # plus ghost <= minus face
     copy!(gplus, fminus)
@@ -1078,11 +1083,11 @@ function _exchange_dim_full_buffers!(
     if rankP == me
         copy!(gplus, fplus)
         ls.coords[d] == ls.dims[d] - 1 &&
-            _mul_phase!(gplus, inv(ls.phases[d]))
+            _mul_phase!(gplus, _inverse_boundary_phase(ls.phases[d]))
     else
         copy!(bufSP, fplus)
         ls.coords[d] == ls.dims[d] - 1 &&
-            _mul_phase!(bufSP, inv(ls.phases[d]))
+            _mul_phase!(bufSP, _inverse_boundary_phase(ls.phases[d]))
     end
 
     device_buffers = (
@@ -1174,7 +1179,7 @@ function exchange_dim!(ls::LatticeMatrix{D}, d::Int) where D
     else
         copy!(packedSP, fplus)
         if ls.coords[d] == ls.dims[d] - 1
-            _mul_phase!(activeSP, inv(ls.phases[d]))
+            _mul_phase!(activeSP, _inverse_boundary_phase(ls.phases[d]))
         end
     end
 

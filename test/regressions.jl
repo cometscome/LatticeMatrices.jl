@@ -609,8 +609,9 @@ function regressiontests()
     @testset "constructor validation" begin
         @test_throws ArgumentError LatticeMatrix(
             1, 1, 1, (4 * nprocs,), (nprocs + 1,); nw=0)
-        @test_throws ArgumentError LatticeMatrix(
+        wall = LatticeMatrix(
             1, 1, 1, (4 * nprocs,), (nprocs,); nw=0, phases=(0,))
+        @test iszero(only(wall.phases))
         @test_throws ArgumentError LatticeMatrix(
             1, 1, 2, (4 * nprocs,), (nprocs, 1); nw=0)
         if nprocs > 1

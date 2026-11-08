@@ -12,6 +12,7 @@ initialized_here && MPI.Init()
 
 try
     include("communication_helpers.jl")
+    include("zero_boundary_ad.jl")
     include("enzyme_gradient.jl")
     enzyme_gradient_tests()
     MPI.Barrier(MPI.COMM_WORLD)

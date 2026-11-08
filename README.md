@@ -4,6 +4,8 @@
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
+Version 1.2.10 adds zero boundary phases that suppress crossings in both directions without changing nonzero phase semantics or gauge links; see [CHANGES.md](CHANGES.md).
+
 Version 1.2.9 adds job-wide MPI transport defaults and reduces host/device halo buffer storage in undecomposed dimensions for CPU and multi-GPU MPI runs; see [CHANGES.md](CHANGES.md) for details.
 
 Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized multiplication through JACC (validated on its Threads and CUDA backends), and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
@@ -218,7 +220,13 @@ LatticeMatrix(A, dim, PEs; nw=1, phases=ones(dim),
 
 - **Layout**: `(NC1, NC2, X, Y, Z, …)`; halos are the outer `nw` cells on each spatial dim.
 - **Phases**: wrap-around phases per dimension. A positive-direction wrap applies `phase`,
-  while a negative-direction wrap applies `inv(phase)`.
+  while a negative-direction wrap applies `inv(phase)` for nonzero phases.
+  A zero phase suppresses every crossing of that global boundary in either
+  direction, including multiple wraps. A shift that does not cross the boundary
+  has factor one. For example,
+  `phases=(1, 1, 1, 0)` removes hopping between the last and first time slices.
+  Interior MPI rank boundaries communicate normally. This does not set stored
+  endpoint values to zero or change gauge links supplied to a Clover operator.
 - **Communicator**: `comm0=nothing` selects `MPI.COMM_WORLD` when MPI.jl is
   loaded, otherwise `SerialCommunicator()`. Pass either communicator explicitly
   to override the default. In particular, a one-rank MPI process can choose

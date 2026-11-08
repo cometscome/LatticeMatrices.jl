@@ -11,6 +11,8 @@ initialized_here && MPI.Init()
 
 try
     include("communication_helpers.jl")
+    include("zero_boundary_phase.jl")
+    include("zero_boundary_clover.jl")
     include("halo_epoch.jl")
     include("halo_buffer_fallback.jl")
     include("device_selection.jl")

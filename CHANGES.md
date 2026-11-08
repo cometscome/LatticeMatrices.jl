@@ -4,6 +4,18 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## v1.2.10
+
+- Allow zero boundary phases as a fermionic Dirichlet hopping wall: crossings
+  of the global boundary are zero in both directions, while noncrossing terms
+  and interior MPI communication are preserved. Nonzero phases keep their
+  existing inverse and integer-power semantics, including non-unit phases.
+- Apply the zero handling consistently to local halos, packed and fallback
+  MPI exchange, direct multi-wrap shifts, halo-free fused kernels, and reverse
+  shift metadata. Gauge links and Clover field strengths are unchanged.
+- Add independent shift/stencil, adjoint, Clover force finite-difference,
+  and Enzyme shift-gradient regressions, including zero and nonzero phases.
+
 ## v1.2.9
 
 ### MPI transport defaults and halo buffers

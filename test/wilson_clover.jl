@@ -6,7 +6,8 @@ function _clover_test_fermion_shift(x, direction, amount, lattice_size, phases)
     shifted = _clover_test_shift(x, direction, amount, lattice_size)
     raw = x[direction] + amount
     wraps = fld(raw - 1, lattice_size[direction])
-    return shifted, phases[direction]^wraps
+    phase = phases[direction]
+    return shifted, iszero(phase) ? (iszero(wraps) ? one(phase) : zero(phase)) : phase^wraps
 end
 
 function _clover_test_su2(angle, phase)

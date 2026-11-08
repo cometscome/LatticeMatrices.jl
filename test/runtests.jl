@@ -20,6 +20,8 @@ JACC.@init_backend
 using JACC, StaticArrays
 
 include("communication_helpers.jl")
+include("zero_boundary_phase.jl")
+include("zero_boundary_clover.jl")
 
 const LATTICEMATRICES_EXTENDED_TESTS = lowercase(get(
     ENV, "LATTICEMATRICES_EXTENDED_TESTS", "false")) in
@@ -56,6 +58,7 @@ if LATTICEMATRICES_EXTENDED_TESTS
     include("hisq_full_smearing.jl")
     include("enzyme.jl")
     include("enzyme_gradient.jl")
+    include("zero_boundary_ad.jl")
     include("wilson_dirac_ad.jl")
     include("wilson_clover_ad.jl")
     include("staggered_dirac_ad.jl")

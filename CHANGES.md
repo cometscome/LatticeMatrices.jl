@@ -4,6 +4,17 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## Unreleased
+
+- Normalize the 3x3 Padé exponential coefficients before forming its inverse,
+  preventing determinant overflow and NaN results with Float32 SU(3) fields.
+- Keep projection, Lie-algebra, and exponential kernel constants in the field
+  precision, including a representable small-value guard for Float32.
+- Convert scalar factors before kernel launch and compute the 3x3 Padé norm
+  in Float32 for ComplexF32 fields, avoiding implicit device Float64 operations.
+- Add dense-reference exponential and projection regressions for Float32 and
+  Float64, including zero inputs and distributed JACC fields.
+
 ## v1.2.10
 
 - Allow zero boundary phases as a fermionic Dirichlet hopping wall: crossings

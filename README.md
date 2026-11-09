@@ -1,5 +1,7 @@
 # LatticeMatrices.jl
 
+Unreleased changes fix Float32 SU(3) exponential overflow and preserve field precision in JACC kernels; see [CHANGES.md](CHANGES.md).
+
 [![Build Status](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.

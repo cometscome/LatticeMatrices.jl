@@ -1,6 +1,6 @@
 # LatticeMatrices.jl
 
-Unreleased changes fix Float32 SU(3) exponential overflow and preserve field precision in JACC kernels; see [CHANGES.md](CHANGES.md).
+Version 1.2.11 fixes Float32 SU(3) exponential overflow and preserves field precision in JACC kernels on CPU, GPU, and MPI configurations; see [CHANGES.md](CHANGES.md).
 
 [![Build Status](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml?query=branch%3Amain)
 

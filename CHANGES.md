@@ -4,7 +4,7 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
-## Unreleased
+## v1.2.11
 
 - Normalize the 3x3 Padé exponential coefficients before forming its inverse,
   preventing determinant overflow and NaN results with Float32 SU(3) fields.

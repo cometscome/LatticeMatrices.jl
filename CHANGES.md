@@ -4,6 +4,28 @@ This file records the user-visible changes in the stable v1 release line.
 LatticeMatrices follows semantic versioning; releases in the stable v1 series
 preserve the public v1 API.
 
+## Previous release highlights
+
+- **1.2.10:** Zero boundary phases suppress crossings in both directions while
+  preserving nonzero phase semantics and gauge links.
+- **1.2.9:** Job-wide MPI transport defaults and reduced host/device halo buffer
+  storage in undecomposed dimensions for CPU and multi-GPU MPI runs.
+- **1.2.8:** Compact `ScaledIdentityLattice` fields, optimized multiplication
+  through JACC (validated on its Threads and CUDA backends), and an aliased
+  shifted-copy fix.
+- **1.2.7:** Enzyme gradients for active real coefficients in lattice accumulation.
+- **1.2.5:** Native APE, stout/EXP, HYP, and HEX link smearing, Bridge++-compatible
+  MaxReTr and differentiable polar projection choices for APE/HYP, analytic
+  pullbacks, and a common iterated-smearing API.
+- **1.2.4:** QEX-compatible normalized HYP smearing and an analytic HMC pullback.
+- **1.2.3:** Lazy per-lattice scratch allocation, scratch capacity reset in
+  `similar`, and `lattice_memory_report`.
+- **1.2.2:** Portable full-buffer halo fallback for oneAPI while preserving
+  optimized CUDA and ROCm communication paths.
+- **1.1.6:** Generic SU(N) normalization for NC > 3.
+- **1.1.5:** Selectable host-staged and device-direct MPI transports for
+  CUDA/ROCm-aware MPI.
+
 ## v1.2.11
 
 - Normalize the 3x3 Padé exponential coefficients before forming its inverse,

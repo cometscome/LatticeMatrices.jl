@@ -154,6 +154,7 @@ end
 
 function expt_TA!(C::TC, A::TA, t::S=one(S)) where {
     D,T,AT,NC1,NC2,S<:Number,nw,DI,TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI},TA<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
+    t = _field_precision_scalar(T, t)
     if NC1 == 3 && T <: Complex && S <: Real
         _parallel_for_mutating!(C,
             prod(C.PN), kernel_4Dexpt_TA_su3_ch!,
@@ -365,6 +366,7 @@ end
 
 @inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{3}) where nw
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(C))
 
     a11 = C[1, 1, indices...]
     a12 = C[1, 2, indices...]
@@ -379,7 +381,7 @@ end
     v11 = C[1, 1, indices...]
     v22 = C[2, 2, indices...]
     v33 = C[3, 3, indices...]
-    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+    tri = RT(fac13) * (imag(v11) + imag(v22) + imag(v33))
 
 
     y11 = (imag(v11) - tri) * im
@@ -401,12 +403,12 @@ end
     x31 = -conj(x13)
     x32 = -conj(x23)
 
-    y12 = 0.5 * x12
-    y13 = 0.5 * x13
-    y21 = 0.5 * x21
-    y23 = 0.5 * x23
-    y31 = 0.5 * x31
-    y32 = 0.5 * x32
+    y12 = RT(0.5) * x12
+    y13 = RT(0.5) * x13
+    y21 = RT(0.5) * x21
+    y23 = RT(0.5) * x23
+    y31 = RT(0.5) * x31
+    y32 = RT(0.5) * x32
 
     # Small-Q branch (cold-start friendly): avoid fragile eigenvalue path.
     qnorm =
@@ -434,16 +436,16 @@ end
 
     c6_0 = (imag(y23) + imag(y32))
     c7_0 = (real(y23) - real(y32))
-    c8_0 = sr3i * (imag(y11) + imag(y22) - 2 * imag(y33))
+    c8_0 = RT(sr3i) * (imag(y11) + imag(y22) - 2 * imag(y33))
 
-    c1 = t * c1_0 * 0.5
-    c2 = t * c2_0 * 0.5
-    c3 = t * c3_0 * 0.5
-    c4 = t * c4_0 * 0.5
-    c5 = t * c5_0 * 0.5
-    c6 = t * c6_0 * 0.5
-    c7 = t * c7_0 * 0.5
-    c8 = t * c8_0 * 0.5
+    c1 = t * c1_0 * RT(0.5)
+    c2 = t * c2_0 * RT(0.5)
+    c3 = t * c3_0 * RT(0.5)
+    c4 = t * c4_0 * RT(0.5)
+    c5 = t * c5_0 * RT(0.5)
+    c6 = t * c6_0 * RT(0.5)
+    c7 = t * c7_0 * RT(0.5)
+    c8 = t * c8_0 * RT(0.5)
     csum = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8
 
     if csum == 0
@@ -461,8 +463,8 @@ end
 
 
     #x[1,1,icum] =  c3+sr3i*c8 +im*(  0.0 )
-    v1 = c3 + sr3i * c8
-    v2 = 0.0
+    v1 = c3 + RT(sr3i) * c8
+    v2 = RT(0.0)
     #x[1,2,icum] =  c1         +im*( -c2   )
     v3 = c1
     v4 = -c2
@@ -475,8 +477,8 @@ end
     v8 = c2
 
     #x[2,2,icum] =  -c3+sr3i*c8+im*(  0.0 )
-    v9 = -c3 + sr3i * c8
-    v10 = 0.0
+    v9 = -c3 + RT(sr3i) * c8
+    v10 = RT(0.0)
 
     #x[2,3,icum] =  c6         +im*( -c7   )
     v11 = c6
@@ -490,28 +492,28 @@ end
     v15 = c6
     v16 = c7
     #x[3,3,icum] =  -sr3i2*c8  +im*(  0.0 )
-    v17 = -sr3i2 * c8
-    v18 = 0.0
+    v17 = -RT(sr3i2) * c8
+    v18 = RT(0.0)
 
 
     #c find eigenvalues of v
-    trv3 = (v1 + v9 + v17) / 3.0
+    trv3 = (v1 + v9 + v17) / RT(3.0)
     cofac =
         v1 * v9 - v3^2 - v4^2 + v1 * v17 - v5^2 - v6^2 + v9 * v17 - v11^2 -
         v12^2
     det =
         v1 * v9 * v17 - v1 * (v11^2 + v12^2) - v9 * (v5^2 + v6^2) -
         v17 * (v3^2 + v4^2) +
-        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * 2.0
-    p3 = cofac / 3.0 - trv3^2
-    q = trv3 * cofac - det - 2.0 * trv3^3
-    if !(isfinite(p3) && isfinite(q)) || p3 >= -tinyvalue
+        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * RT(2.0)
+    p3 = cofac / RT(3.0) - trv3^2
+    q = trv3 * cofac - det - RT(2.0) * trv3^3
+    if !(isfinite(p3) && isfinite(q)) || p3 >= -_tinyvalue(RT)
         _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
         return
     end
-    x = sqrt(-4.0 * p3) + tinyvalue
+    x = sqrt(-RT(4.0) * p3) + _tinyvalue(RT)
     denom = x * p3
-    if !isfinite(denom) || abs(denom) <= tinyvalue
+    if !isfinite(denom) || abs(denom) <= _tinyvalue(RT)
         _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
         return
     end
@@ -522,13 +524,13 @@ end
         return
     end
     arg = min(1, max(-1, arg))
-    theta = acos(arg) / 3.0
+    theta = acos(arg) / RT(3.0)
     e1 = x * cos(theta) + trv3
-    theta = theta + pi23
+    theta = theta + RT(pi23)
     e2 = x * cos(theta) + trv3
     #       theta = theta + pi23
     #       e3 = x * cos(theta) + trv3
-    e3 = 3.0 * trv3 - e1 - e2
+    e3 = RT(3.0) * trv3 - e1 - e2
 
     # solve for eigenvectors
 
@@ -537,14 +539,14 @@ end
     w3 = (v1 - e1) * v11 - v3 * v5 - v4 * v6
     w4 = -(v1 - e1) * v12 - v4 * v5 + v3 * v6
     w5 = -(v1 - e1) * (v9 - e1) + v3^2 + v4^2
-    w6 = 0.0
+    w6 = RT(0.0)
 
     n1 = w1^2 + w2^2 + w3^2 + w4^2 + w5^2
-    if !(isfinite(n1) && n1 > tinyvalue)
+    if !(isfinite(n1) && n1 > _tinyvalue(RT))
         _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
         return
     end
-    coeff = 1.0 / sqrt(n1)
+    coeff = RT(1.0) / sqrt(n1)
 
 
     w1 = w1 * coeff
@@ -558,14 +560,14 @@ end
     w9 = (v1 - e2) * v11 - v3 * v5 - v4 * v6
     w10 = -(v1 - e2) * v12 - v4 * v5 + v3 * v6
     w11 = -(v1 - e2) * (v9 - e2) + v3^2 + v4^2
-    w12 = 0.0
+    w12 = RT(0.0)
 
     n2 = w7^2 + w8^2 + w9^2 + w10^2 + w11^2
-    if !(isfinite(n2) && n2 > tinyvalue)
+    if !(isfinite(n2) && n2 > _tinyvalue(RT))
         _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
         return
     end
-    coeff = 1.0 / sqrt(n2)
+    coeff = RT(1.0) / sqrt(n2)
 
     w7 = w7 * coeff
     w8 = w8 * coeff
@@ -578,14 +580,14 @@ end
     w15 = (v1 - e3) * v11 - v3 * v5 - v4 * v6
     w16 = -(v1 - e3) * v12 - v4 * v5 + v3 * v6
     w17 = -(v1 - e3) * (v9 - e3) + v3^2 + v4^2
-    w18 = 0.0
+    w18 = RT(0.0)
 
     n3 = w13^2 + w14^2 + w15^2 + w16^2 + w17^2
-    if !(isfinite(n3) && n3 > tinyvalue)
+    if !(isfinite(n3) && n3 > _tinyvalue(RT))
         _writeback_expt3x3_pade!(C, indices, a11, a12, a13, a21, a22, a23, a31, a32, a33, t)
         return
     end
-    coeff = 1.0 / sqrt(n3)
+    coeff = RT(1.0) / sqrt(n3)
     w13 = w13 * coeff
     w14 = w14 * coeff
     w15 = w15 * coeff
@@ -657,10 +659,11 @@ end
 
 @inline function kernel_4Dexpt_TA!(i, C, dindexer, ::Val{nw}, t, ::Val{2}) where nw
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(C))
     v11 = C[1, 1, indices...]
     v22 = C[2, 2, indices...]
 
-    tri = fac12 * (imag(v11) + imag(v22))
+    tri = RT(fac12) * (imag(v11) + imag(v22))
 
 
 
@@ -673,8 +676,8 @@ end
     x21 = -conj(x12)
 
     y11 = (imag(v11) - tri) * im
-    y12 = 0.5 * x12
-    y21 = 0.5 * x21
+    y12 = RT(0.5) * x12
+    y21 = RT(0.5) * x21
     y22 = (imag(v22) - tri) * im
 
     c1_0 = (imag(y12) + imag(y21))
@@ -685,7 +688,7 @@ end
     u1 = t * c1_0 / 2
     u2 = t * c2_0 / 2
     u3 = t * c3_0 / 2
-    R = sqrt(u1^2 + u2^2 + u3^2) + tinyvalue
+    R = sqrt(u1^2 + u2^2 + u3^2) + _tinyvalue(RT)
     sR = sin(R) / R
     #sR = ifelse(R == 0,1,sR)
     a0 = cos(R)
@@ -709,6 +712,7 @@ end
 end
 
 function expt!(C::TC, A::TA, t=1) where {D,T,AT,NC1,NC2,T1,AT1,nw,DI,TA<:LatticeMatrix{D,T1,AT1,NC1,NC2,nw,DI},TC<:LatticeMatrix{D,T,AT,NC1,NC2,nw,DI}}
+    t = _field_precision_scalar(T, t)
     @assert NC1 == NC2 "Matrix exponentiation requires square matrices, but got $(NC1) x $(NC2)."
 
     _parallel_for_mutating!(C,
@@ -1128,7 +1132,7 @@ function exp_ta_pullback!(
         cotangent.A,
         output.indexer,
         Val(nw),
-        t,
+        _field_precision_scalar(T, t),
         Val(false),
     )
     return nothing
@@ -1154,6 +1158,7 @@ export expt_TA!
 
 function kernel_4Dexpt_TA_general!(i, uout, A, dindexer, ::Val{nw}, t, ::Val{2}, ::Val{nw2}) where {nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(uout))
     indices2 = delinearize(dindexer, i, nw2)
     #    ixt = ix + nw2
     #    iyt = iy + nw2
@@ -1184,7 +1189,7 @@ function kernel_4Dexpt_TA_general!(i, uout, A, dindexer, ::Val{nw}, t, ::Val{2},
     u1 = t * c1_0 / 2
     u2 = t * c2_0 / 2
     u3 = t * c3_0 / 2
-    R = sqrt(u1^2 + u2^2 + u3^2) + tinyvalue
+    R = sqrt(u1^2 + u2^2 + u3^2) + _tinyvalue(RT)
     sR = sin(R) / R
     #sR = ifelse(R == 0,1,sR)
     a0 = cos(R)
@@ -1201,6 +1206,7 @@ end
 
 function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}) where {nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(C))
     indices2 = delinearize(dindexer, i, nw2)
     T = eltype(C)
     #ixt = ix + nw2
@@ -1244,7 +1250,7 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
     c3_0 = (a - b) / 2
 
     # c8 from sum (a+b = 2*sr3i*c8)
-    c8_0 = (a + b) / (2 * sr3i)
+    c8_0 = (a + b) / (2 * RT(sr3i))
     #=
         c1_0 = A[1, 1, indices2...]
         c2_0 = A[2, 1, indices2...]
@@ -1257,14 +1263,14 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
         c8_0 = A[8, 1, indices2...]
         =#
 
-    c1 = t * c1_0 * 0.5
-    c2 = t * c2_0 * 0.5
-    c3 = t * c3_0 * 0.5
-    c4 = t * c4_0 * 0.5
-    c5 = t * c5_0 * 0.5
-    c6 = t * c6_0 * 0.5
-    c7 = t * c7_0 * 0.5
-    c8 = t * c8_0 * 0.5
+    c1 = t * c1_0 * RT(0.5)
+    c2 = t * c2_0 * RT(0.5)
+    c3 = t * c3_0 * RT(0.5)
+    c4 = t * c4_0 * RT(0.5)
+    c5 = t * c5_0 * RT(0.5)
+    c6 = t * c6_0 * RT(0.5)
+    c7 = t * c7_0 * RT(0.5)
+    c8 = t * c8_0 * RT(0.5)
     csum = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8
     if csum == 0
         c = Mat3{eltype(C)}(one(eltype(C)))
@@ -1282,8 +1288,8 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
 
 
     #x[1,1,icum] =  c3+sr3i*c8 +im*(  0.0 )
-    v1 = c3 + sr3i * c8
-    v2 = 0.0
+    v1 = c3 + RT(sr3i) * c8
+    v2 = RT(0.0)
     #x[1,2,icum] =  c1         +im*( -c2   )
     v3 = c1
     v4 = -c2
@@ -1296,8 +1302,8 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
     v8 = c2
 
     #x[2,2,icum] =  -c3+sr3i*c8+im*(  0.0 )
-    v9 = -c3 + sr3i * c8
-    v10 = 0.0
+    v9 = -c3 + RT(sr3i) * c8
+    v10 = RT(0.0)
 
     #x[2,3,icum] =  c6         +im*( -c7   )
     v11 = c6
@@ -1311,32 +1317,32 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
     v15 = c6
     v16 = c7
     #x[3,3,icum] =  -sr3i2*c8  +im*(  0.0 )
-    v17 = -sr3i2 * c8
-    v18 = 0.0
+    v17 = -RT(sr3i2) * c8
+    v18 = RT(0.0)
 
 
     #c find eigenvalues of v
-    trv3 = (v1 + v9 + v17) / 3.0
+    trv3 = (v1 + v9 + v17) / RT(3.0)
     cofac =
         v1 * v9 - v3^2 - v4^2 + v1 * v17 - v5^2 - v6^2 + v9 * v17 - v11^2 -
         v12^2
     det =
         v1 * v9 * v17 - v1 * (v11^2 + v12^2) - v9 * (v5^2 + v6^2) -
         v17 * (v3^2 + v4^2) +
-        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * 2.0
-    p3 = cofac / 3.0 - trv3^2
-    q = trv3 * cofac - det - 2.0 * trv3^3
-    x = sqrt(-4.0 * p3) + tinyvalue
+        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * RT(2.0)
+    p3 = cofac / RT(3.0) - trv3^2
+    q = trv3 * cofac - det - RT(2.0) * trv3^3
+    x = sqrt(-RT(4.0) * p3) + _tinyvalue(RT)
     arg = q / (x * p3)
 
     arg = min(1, max(-1, arg))
-    theta = acos(arg) / 3.0
+    theta = acos(arg) / RT(3.0)
     e1 = x * cos(theta) + trv3
-    theta = theta + pi23
+    theta = theta + RT(pi23)
     e2 = x * cos(theta) + trv3
     #       theta = theta + pi23
     #       e3 = x * cos(theta) + trv3
-    e3 = 3.0 * trv3 - e1 - e2
+    e3 = RT(3.0) * trv3 - e1 - e2
 
     # solve for eigenvectors
 
@@ -1345,9 +1351,9 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
     w3 = (v1 - e1) * v11 - v3 * v5 - v4 * v6
     w4 = -(v1 - e1) * v12 - v4 * v5 + v3 * v6
     w5 = -(v1 - e1) * (v9 - e1) + v3^2 + v4^2
-    w6 = 0.0
+    w6 = RT(0.0)
 
-    coeff = 1.0 / sqrt(w1^2 + w2^2 + w3^2 + w4^2 + w5^2)
+    coeff = RT(1.0) / sqrt(w1^2 + w2^2 + w3^2 + w4^2 + w5^2)
 
 
     w1 = w1 * coeff
@@ -1361,9 +1367,9 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
     w9 = (v1 - e2) * v11 - v3 * v5 - v4 * v6
     w10 = -(v1 - e2) * v12 - v4 * v5 + v3 * v6
     w11 = -(v1 - e2) * (v9 - e2) + v3^2 + v4^2
-    w12 = 0.0
+    w12 = RT(0.0)
 
-    coeff = 1.0 / sqrt(w7^2 + w8^2 + w9^2 + w10^2 + w11^2)
+    coeff = RT(1.0) / sqrt(w7^2 + w8^2 + w9^2 + w10^2 + w11^2)
 
     w7 = w7 * coeff
     w8 = w8 * coeff
@@ -1376,9 +1382,9 @@ function kernel_4Dexpt_TA_general!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::
     w15 = (v1 - e3) * v11 - v3 * v5 - v4 * v6
     w16 = -(v1 - e3) * v12 - v4 * v5 + v3 * v6
     w17 = -(v1 - e3) * (v9 - e3) + v3^2 + v4^2
-    w18 = 0.0
+    w18 = RT(0.0)
 
-    coeff = 1.0 / sqrt(w13^2 + w14^2 + w15^2 + w16^2 + w17^2)
+    coeff = RT(1.0) / sqrt(w13^2 + w14^2 + w15^2 + w16^2 + w17^2)
     w13 = w13 * coeff
     w14 = w14 * coeff
     w15 = w15 * coeff
@@ -1451,6 +1457,7 @@ end
 
 
 function expt!(C::LatticeMatrix{D,T,AT,NC1,NC1,nw,DI}, TA::LatticeMatrix{D,T1,AT1,Num,1,nw2,DI}, t::S=one(S)) where {D,T,AT,NC1,Num,S<:Number,T1<:Real,AT1,nw,nw2,DI}
+    t = _field_precision_scalar(T, t)
 
     if NC1 > 3
         error("In NC > 3 case, this function should not be used")
@@ -1470,6 +1477,7 @@ end
 
 function kernel_4Dexpt_TA!(i, uout, A, dindexer, ::Val{nw}, t, ::Val{2}, ::Val{nw2}) where {nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(uout))
     indices2 = delinearize(dindexer, i, nw2)
     #    ixt = ix + nw2
     #    iyt = iy + nw2
@@ -1488,7 +1496,7 @@ function kernel_4Dexpt_TA!(i, uout, A, dindexer, ::Val{nw}, t, ::Val{2}, ::Val{n
     u1 = t * c1_0 / 2
     u2 = t * c2_0 / 2
     u3 = t * c3_0 / 2
-    R = sqrt(u1^2 + u2^2 + u3^2) + tinyvalue
+    R = sqrt(u1^2 + u2^2 + u3^2) + _tinyvalue(RT)
     sR = sin(R) / R
     #sR = ifelse(R == 0,1,sR)
     a0 = cos(R)
@@ -1505,6 +1513,7 @@ end
 
 function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}) where {nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(C))
     indices2 = delinearize(dindexer, i, nw2)
     T = eltype(C)
     #ixt = ix + nw2
@@ -1526,14 +1535,14 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
     c7_0 = A[7, 1, indices2...]
     c8_0 = A[8, 1, indices2...]
 
-    c1 = t * c1_0 * 0.5
-    c2 = t * c2_0 * 0.5
-    c3 = t * c3_0 * 0.5
-    c4 = t * c4_0 * 0.5
-    c5 = t * c5_0 * 0.5
-    c6 = t * c6_0 * 0.5
-    c7 = t * c7_0 * 0.5
-    c8 = t * c8_0 * 0.5
+    c1 = t * c1_0 * RT(0.5)
+    c2 = t * c2_0 * RT(0.5)
+    c3 = t * c3_0 * RT(0.5)
+    c4 = t * c4_0 * RT(0.5)
+    c5 = t * c5_0 * RT(0.5)
+    c6 = t * c6_0 * RT(0.5)
+    c7 = t * c7_0 * RT(0.5)
+    c8 = t * c8_0 * RT(0.5)
     csum = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8
     if csum == 0
         c = Mat3{eltype(C)}(one(eltype(C)))
@@ -1551,8 +1560,8 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
 
 
     #x[1,1,icum] =  c3+sr3i*c8 +im*(  0.0 )
-    v1 = c3 + sr3i * c8
-    v2 = 0.0
+    v1 = c3 + RT(sr3i) * c8
+    v2 = RT(0.0)
     #x[1,2,icum] =  c1         +im*( -c2   )
     v3 = c1
     v4 = -c2
@@ -1565,8 +1574,8 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
     v8 = c2
 
     #x[2,2,icum] =  -c3+sr3i*c8+im*(  0.0 )
-    v9 = -c3 + sr3i * c8
-    v10 = 0.0
+    v9 = -c3 + RT(sr3i) * c8
+    v10 = RT(0.0)
 
     #x[2,3,icum] =  c6         +im*( -c7   )
     v11 = c6
@@ -1580,32 +1589,32 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
     v15 = c6
     v16 = c7
     #x[3,3,icum] =  -sr3i2*c8  +im*(  0.0 )
-    v17 = -sr3i2 * c8
-    v18 = 0.0
+    v17 = -RT(sr3i2) * c8
+    v18 = RT(0.0)
 
 
     #c find eigenvalues of v
-    trv3 = (v1 + v9 + v17) / 3.0
+    trv3 = (v1 + v9 + v17) / RT(3.0)
     cofac =
         v1 * v9 - v3^2 - v4^2 + v1 * v17 - v5^2 - v6^2 + v9 * v17 - v11^2 -
         v12^2
     det =
         v1 * v9 * v17 - v1 * (v11^2 + v12^2) - v9 * (v5^2 + v6^2) -
         v17 * (v3^2 + v4^2) +
-        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * 2.0
-    p3 = cofac / 3.0 - trv3^2
-    q = trv3 * cofac - det - 2.0 * trv3^3
-    x = sqrt(-4.0 * p3) + tinyvalue
+        (v5 * (v3 * v11 - v4 * v12) + v6 * (v3 * v12 + v4 * v11)) * RT(2.0)
+    p3 = cofac / RT(3.0) - trv3^2
+    q = trv3 * cofac - det - RT(2.0) * trv3^3
+    x = sqrt(-RT(4.0) * p3) + _tinyvalue(RT)
     arg = q / (x * p3)
 
     arg = min(1, max(-1, arg))
-    theta = acos(arg) / 3.0
+    theta = acos(arg) / RT(3.0)
     e1 = x * cos(theta) + trv3
-    theta = theta + pi23
+    theta = theta + RT(pi23)
     e2 = x * cos(theta) + trv3
     #       theta = theta + pi23
     #       e3 = x * cos(theta) + trv3
-    e3 = 3.0 * trv3 - e1 - e2
+    e3 = RT(3.0) * trv3 - e1 - e2
 
     # solve for eigenvectors
 
@@ -1614,9 +1623,9 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
     w3 = (v1 - e1) * v11 - v3 * v5 - v4 * v6
     w4 = -(v1 - e1) * v12 - v4 * v5 + v3 * v6
     w5 = -(v1 - e1) * (v9 - e1) + v3^2 + v4^2
-    w6 = 0.0
+    w6 = RT(0.0)
 
-    coeff = 1.0 / sqrt(w1^2 + w2^2 + w3^2 + w4^2 + w5^2)
+    coeff = RT(1.0) / sqrt(w1^2 + w2^2 + w3^2 + w4^2 + w5^2)
 
 
     w1 = w1 * coeff
@@ -1630,9 +1639,9 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
     w9 = (v1 - e2) * v11 - v3 * v5 - v4 * v6
     w10 = -(v1 - e2) * v12 - v4 * v5 + v3 * v6
     w11 = -(v1 - e2) * (v9 - e2) + v3^2 + v4^2
-    w12 = 0.0
+    w12 = RT(0.0)
 
-    coeff = 1.0 / sqrt(w7^2 + w8^2 + w9^2 + w10^2 + w11^2)
+    coeff = RT(1.0) / sqrt(w7^2 + w8^2 + w9^2 + w10^2 + w11^2)
 
     w7 = w7 * coeff
     w8 = w8 * coeff
@@ -1645,9 +1654,9 @@ function kernel_4Dexpt_TA!(i, C, A, dindexer, ::Val{nw}, t, ::Val{3}, ::Val{nw2}
     w15 = (v1 - e3) * v11 - v3 * v5 - v4 * v6
     w16 = -(v1 - e3) * v12 - v4 * v5 + v3 * v6
     w17 = -(v1 - e3) * (v9 - e3) + v3^2 + v4^2
-    w18 = 0.0
+    w18 = RT(0.0)
 
-    coeff = 1.0 / sqrt(w13^2 + w14^2 + w15^2 + w16^2 + w17^2)
+    coeff = RT(1.0) / sqrt(w13^2 + w14^2 + w15^2 + w16^2 + w17^2)
     w13 = w13 * coeff
     w14 = w14 * coeff
     w15 = w15 * coeff
@@ -3163,12 +3172,13 @@ end
 
 function traceless_antihermitian_add!(C::LatticeMatrix{D,T,AT,NC,NC,nw}, factor,
     A::LatticeMatrix{D,T2,AT2,NC,NC,nw2}) where {D,T,AT,nw,T2,AT2,NC,nw2}
-    _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add_general!, C.A, A.A, factor, C.indexer, Val(NC), Val(nw), Val(nw2))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add_general!, C.A, A.A, _field_precision_scalar(T, factor), C.indexer, Val(NC), Val(nw), Val(nw2))
 end
 export traceless_antihermitian_add!
 
 function kernel_4d_Traceless_antihermitian_add_general!(i, c, vin, factor, dindexer, ::Val{NC}, ::Val{nw}, ::Val{nw2}) where {NC,nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(c))
     indices2 = delinearize(dindexer, i, nw2)
 
     tri = zero(eltype(c))
@@ -3185,7 +3195,7 @@ function kernel_4d_Traceless_antihermitian_add_general!(i, c, vin, factor, dinde
     for k1 = 1:NC
         for k2 = k1+1:NC
             vv =
-                0.5 * (
+                RT(0.5) * (
                     vin[k1, k2, indices2...] -
                     conj(vin[k2, k1, indices2...])
                 )
@@ -3201,7 +3211,7 @@ end
 
 function traceless_antihermitian_add!(C::LatticeMatrix{D,T,AT,NG,1,nw}, factor,
     A::LatticeMatrix{D,T2,AT2,NC,NC,nw2}) where {D,T<:Real,AT,NG,nw,T2,AT2,NC,nw2}
-    _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add!, C.A, A.A, factor, C.indexer, Val(NG), Val(NC), Val(nw), Val(nw2))
+    _parallel_for_mutating!(C, prod(C.PN), kernel_4d_Traceless_antihermitian_add!, C.A, A.A, _field_precision_scalar(T, factor), C.indexer, Val(NG), Val(NC), Val(nw), Val(nw2))
 end
 
 """
@@ -3259,7 +3269,7 @@ function _traceless_antihermitian_product_add!(
     ))
     _parallel_for_mutating!(
         C, prod(C.PN), kernel_traceless_antihermitian_product_add!,
-        C.A, A.A, B.A, factor, C.indexer, Val(NG), Val(NC),
+        C.A, A.A, B.A, T(factor), C.indexer, Val(NG), Val(NC),
         Val(nwc), Val(nwa), Val(nwb), adjoint_a, adjoint_b,
     )
     return nothing
@@ -3319,7 +3329,7 @@ end
             diagonal_sum += diagonal_values[row]
         end
         diagonal_sum -= diagonal * diagonal_values[diagonal+1]
-        normalization = sqrt(diagonal * (diagonal + 1) / 2)
+        normalization = sqrt(eltype(c)(diagonal * (diagonal + 1)) / 2)
         c[basis, 1, indices_c...] += factor * diagonal_sum / normalization
         basis += 1
     end
@@ -3377,7 +3387,7 @@ end
         c[5, 1, indices_c...] += factor * real(d13)
         c[6, 1, indices_c...] += factor * imag(d23)
         c[7, 1, indices_c...] += factor * real(d23)
-        c[8, 1, indices_c...] += factor * sr3i *
+        c[8, 1, indices_c...] += factor * eltype(c)(sr3i) *
                                   (imag(p11) + imag(p22) - 2 * imag(p33))
     end
     return nothing
@@ -3393,6 +3403,7 @@ const fac12 = 1 / 2
 
 function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::Val{NG}, ::Val{2}, ::Val{nw}, ::Val{nw2}) where {NG,nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(c))
     indices2 = delinearize(dindexer, i, nw2)
     #ix2 = ix + nw2
     #iy2 = iy + nw2
@@ -3406,7 +3417,7 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     v11 = vin[1, 1, indices2...]
     v22 = vin[2, 2, indices2...]
 
-    tri = fac12 * (imag(v11) + imag(v22))
+    tri = RT(fac12) * (imag(v11) + imag(v22))
 
     v12 = vin[1, 2, indices2...]
     #v13 = vin[1,3,ix,iy,iz,it]
@@ -3417,8 +3428,8 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     x21 = -conj(x12)
 
     y11 = (imag(v11) - tri) * im
-    y12 = 0.5 * x12
-    y21 = 0.5 * x21
+    y12 = RT(0.5) * x12
+    y21 = RT(0.5) * x21
     y22 = (imag(v22) - tri) * im
 
     c[1, 1, indices...] =
@@ -3433,6 +3444,7 @@ end
 
 function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::Val{NG}, ::Val{3}, ::Val{nw}, ::Val{nw2}) where {NG,nw,nw2}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(c))
     indices2 = delinearize(dindexer, i, nw2)
     #ix2 = ix + nw2
     #iy2 = iy + nw2
@@ -3443,14 +3455,14 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     #    iz += nw
     #    it += nw
 
-    fac13 = 1 / 3
+    fac13 = RT(1 / 3)
 
 
     v11 = vin[1, 1, indices2...]
     v22 = vin[2, 2, indices2...]
     v33 = vin[3, 3, indices2...]
 
-    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+    tri = RT(fac13) * (imag(v11) + imag(v22) + imag(v33))
 
     #=
     vout[1,1,ix,iy,iz,it] = (imag(v11)-tri)*im
@@ -3484,12 +3496,12 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     vout[3,1,ix,iy,iz,it] = 0.5  * x31
     vout[3,2,ix,iy,iz,it] = 0.5  * x32
     =#
-    y12 = 0.5 * x12
-    y13 = 0.5 * x13
-    y21 = 0.5 * x21
-    y23 = 0.5 * x23
-    y31 = 0.5 * x31
-    y32 = 0.5 * x32
+    y12 = RT(0.5) * x12
+    y13 = RT(0.5) * x13
+    y21 = RT(0.5) * x21
+    y23 = RT(0.5) * x23
+    y31 = RT(0.5) * x31
+    y32 = RT(0.5) * x32
 
 
     c[1, 1, indices...] =
@@ -3508,7 +3520,7 @@ function kernel_4d_Traceless_antihermitian_add!(i, c, vin, factor, dindexer, ::V
     c[7, 1, indices...] =
         (real(y23) - real(y32)) * factor + c[7, 1, indices...]
     c[8, 1, indices...] =
-        sr3i * (imag(y11) + imag(y22) - 2 * imag(y33)) * factor +
+        RT(sr3i) * (imag(y11) + imag(y22) - 2 * imag(y33)) * factor +
         c[8, 1, indices...]
 end
 

@@ -13,6 +13,10 @@ end
 export TALattice
 
 const tinyvalue = 1e-100
+# tinyvalue is 0 in Float32, so kernels working in Float32 (e.g. on Metal) use the
+# smallest normal number of their own precision instead. Float64 keeps 1e-100.
+@inline _tinyvalue(::Type{Float64}) = tinyvalue
+@inline _tinyvalue(::Type{T}) where {T<:AbstractFloat} = floatmin(T)
 const pi23 = 2pi / 3
 
 const fac13 = 1 / 3
@@ -39,8 +43,10 @@ export traceless_antihermitian!
 
 function kernel_traceless_antihermitian!(i, vout, v, ::Val{N}, ::Val{nw}, dindexer) where {N,nw}
     indices = delinearize(dindexer, i, nw)
-    fac1N = 1 / N
-    tri = 0.0
+    RT = real(eltype(v))
+    half = RT(0.5)
+    fac1N = one(RT) / N
+    tri = zero(RT)
     for k = 1:N
         tri += imag(v[k, k, indices...])
     end
@@ -54,7 +60,7 @@ function kernel_traceless_antihermitian!(i, vout, v, ::Val{N}, ::Val{nw}, dindex
     for k1 = 1:N
         for k2 = k1+1:N
             vv =
-                0.5 * (
+                half * (
                     v[k1, k2, indices...] -
                     conj(v[k2, k1, indices...])
                 )
@@ -67,6 +73,8 @@ end
 
 function kernel_traceless_antihermitian!(i, vout, v, ::Val{3}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(v))
+    half = RT(0.5)
     v11 = v[1, 1, indices...]
     v21 = v[2, 1, indices...]
     v31 = v[3, 1, indices...]
@@ -80,7 +88,7 @@ function kernel_traceless_antihermitian!(i, vout, v, ::Val{3}, ::Val{nw}, dindex
     v33 = v[3, 3, indices...]
 
 
-    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+    tri = RT(fac13) * (imag(v11) + imag(v22) + imag(v33))
 
     y11 = (imag(v11) - tri) * im
     y22 = (imag(v22) - tri) * im
@@ -94,12 +102,12 @@ function kernel_traceless_antihermitian!(i, vout, v, ::Val{3}, ::Val{nw}, dindex
     x31 = -conj(x13)
     x32 = -conj(x23)
 
-    y12 = 0.5 * x12
-    y13 = 0.5 * x13
-    y21 = 0.5 * x21
-    y23 = 0.5 * x23
-    y31 = 0.5 * x31
-    y32 = 0.5 * x32
+    y12 = half * x12
+    y13 = half * x13
+    y21 = half * x21
+    y23 = half * x23
+    y31 = half * x31
+    y32 = half * x32
 
     vout[1, 1, indices...] = y11
     vout[2, 1, indices...] = y21
@@ -117,10 +125,12 @@ end
 
 function kernel_traceless_antihermitian!(i, vout, v, ::Val{2}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(v))
+    half = RT(0.5)
     v11 = v[1, 1, indices...]
     v22 = v[2, 2, indices...]
 
-    tri = (imag(v11) + imag(v22)) * 0.5
+    tri = (imag(v11) + imag(v22)) * half
 
     v12 = v[1, 2, indices...]
     v21 = v[2, 1, indices...]
@@ -130,8 +140,8 @@ function kernel_traceless_antihermitian!(i, vout, v, ::Val{2}, ::Val{nw}, dindex
     x21 = -conj(x12)
 
     vout[1, 1, indices...] = (imag(v11) - tri) * im
-    vout[1, 2, indices...] = 0.5 * x12
-    vout[2, 1, indices...] = 0.5 * x21
+    vout[1, 2, indices...] = half * x12
+    vout[2, 1, indices...] = half * x21
     vout[2, 2, indices...] = (imag(v22) - tri) * im
 end
 
@@ -139,7 +149,7 @@ function traceless_antihermitian!(A::TA, factor, B::TB) where {D,T1,AT1,N,nw,DI,
     TA<:LatticeMatrix{D,T1,AT1,N,N,nw,DI},TB<:LatticeMatrix{D,T1,AT1,N,N,nw,DI}}
 
     _parallel_for_mutating!(A,
-        prod(A.PN), kernel_traceless_antihermitian!, A.A, factor, B.A, Val(N), Val(nw), A.indexer
+        prod(A.PN), kernel_traceless_antihermitian!, A.A, _field_precision_scalar(T1, factor), B.A, Val(N), Val(nw), A.indexer
     )
     #display(A.A[:, :, 2, 2, 2, 2])
 
@@ -152,8 +162,10 @@ export traceless_antihermitian!
 
 function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{N}, ::Val{nw}, dindexer) where {N,nw}
     indices = delinearize(dindexer, i, nw)
-    fac1N = 1 / N
-    tri = 0.0
+    RT = real(eltype(v))
+    half = RT(0.5)
+    fac1N = one(RT) / N
+    tri = zero(RT)
     for k = 1:N
         tri += imag(v[k, k, indices...])
     end
@@ -167,7 +179,7 @@ function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{N}, ::Val{nw}
     for k1 = 1:N
         for k2 = k1+1:N
             vv =
-                0.5 * (
+                half * (
                     v[k1, k2, indices...] -
                     conj(v[k2, k1, indices...])
                 )
@@ -180,6 +192,8 @@ end
 
 function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{3}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(v))
+    half = RT(0.5)
     v11 = v[1, 1, indices...]
     v21 = v[2, 1, indices...]
     v31 = v[3, 1, indices...]
@@ -193,7 +207,7 @@ function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{3}, ::Val{nw}
     v33 = v[3, 3, indices...]
 
 
-    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+    tri = RT(fac13) * (imag(v11) + imag(v22) + imag(v33))
 
     y11 = (imag(v11) - tri) * im
     y22 = (imag(v22) - tri) * im
@@ -207,12 +221,12 @@ function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{3}, ::Val{nw}
     x31 = -conj(x13)
     x32 = -conj(x23)
 
-    y12 = 0.5 * x12
-    y13 = 0.5 * x13
-    y21 = 0.5 * x21
-    y23 = 0.5 * x23
-    y31 = 0.5 * x31
-    y32 = 0.5 * x32
+    y12 = half * x12
+    y13 = half * x13
+    y21 = half * x21
+    y23 = half * x23
+    y31 = half * x31
+    y32 = half * x32
 
     vout[1, 1, indices...] = y11 * factor
     vout[2, 1, indices...] = y21 * factor
@@ -230,10 +244,12 @@ end
 
 function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{2}, ::Val{nw}, dindexer) where {nw}
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(v))
+    half = RT(0.5)
     v11 = v[1, 1, indices...]
     v22 = v[2, 2, indices...]
 
-    tri = (imag(v11) + imag(v22)) * 0.5
+    tri = (imag(v11) + imag(v22)) * half
 
     v12 = v[1, 2, indices...]
     v21 = v[2, 1, indices...]
@@ -243,8 +259,8 @@ function kernel_traceless_antihermitian!(i, vout, factor, v, ::Val{2}, ::Val{nw}
     x21 = -conj(x12)
 
     vout[1, 1, indices...] = (imag(v11) - tri) * im * factor
-    vout[1, 2, indices...] = 0.5 * x12 * factor
-    vout[2, 1, indices...] = 0.5 * x21 * factor
+    vout[1, 2, indices...] = half * x12 * factor
+    vout[2, 1, indices...] = half * x21 * factor
     vout[2, 2, indices...] = (imag(v22) - tri) * im * factor
 end
 
@@ -293,10 +309,12 @@ end
 function kernel_traceless_antihermitian_4DNC2!(i, v, nw, dindexer)
     #ix, iy, iz, it = get_4Dindex(i, PN)
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(v))
+    half = RT(0.5)
     v11 = v[1, 1, indices...]
     v22 = v[2, 2, indices...]
 
-    tri = (imag(v11) + imag(v22)) * 0.5
+    tri = (imag(v11) + imag(v22)) * half
 
     v12 = v[1, 2, indices...]
     v21 = v[2, 1, indices...]
@@ -306,14 +324,16 @@ function kernel_traceless_antihermitian_4DNC2!(i, v, nw, dindexer)
     x21 = -conj(x12)
 
     v[1, 1, indices...] = (imag(v11) - tri) * im
-    v[1, 2, indices...] = 0.5 * x12
-    v[2, 1, indices...] = 0.5 * x21
+    v[1, 2, indices...] = half * x12
+    v[2, 1, indices...] = half * x21
     v[2, 2, indices...] = (imag(v22) - tri) * im
 
 end
 
 function kernel_traceless_antihermitian_4DNC3!(i, v, nw, dindexer)
     indices = delinearize(dindexer, i, nw)
+    RT = real(eltype(v))
+    half = RT(0.5)
     v11 = v[1, 1, indices...]
     v21 = v[2, 1, indices...]
     v31 = v[3, 1, indices...]
@@ -327,7 +347,7 @@ function kernel_traceless_antihermitian_4DNC3!(i, v, nw, dindexer)
     v33 = v[3, 3, indices...]
 
 
-    tri = fac13 * (imag(v11) + imag(v22) + imag(v33))
+    tri = RT(fac13) * (imag(v11) + imag(v22) + imag(v33))
 
     y11 = (imag(v11) - tri) * im
     y22 = (imag(v22) - tri) * im
@@ -341,12 +361,12 @@ function kernel_traceless_antihermitian_4DNC3!(i, v, nw, dindexer)
     x31 = -conj(x13)
     x32 = -conj(x23)
 
-    y12 = 0.5 * x12
-    y13 = 0.5 * x13
-    y21 = 0.5 * x21
-    y23 = 0.5 * x23
-    y31 = 0.5 * x31
-    y32 = 0.5 * x32
+    y12 = half * x12
+    y13 = half * x13
+    y21 = half * x21
+    y23 = half * x23
+    y31 = half * x31
+    y32 = half * x32
 
     v[1, 1, indices...] = y11
     v[2, 1, indices...] = y21
@@ -364,8 +384,10 @@ end
 
 function kernel_traceless_antihermitian_4D!(i, v, N, nw, dindexer)
     indices = delinearize(dindexer, i, nw)
-    fac1N = 1 / N
-    tri = 0.0
+    RT = real(eltype(v))
+    half = RT(0.5)
+    fac1N = one(RT) / N
+    tri = zero(RT)
     for k = 1:N
         tri += imag(v[k, k, indices...])
     end
@@ -379,7 +401,7 @@ function kernel_traceless_antihermitian_4D!(i, v, N, nw, dindexer)
     for k1 = 1:N
         for k2 = k1+1:N
             vv =
-                0.5 * (
+                half * (
                     v[k1, k2, indices...] -
                     conj(v[k2, k1, indices...])
                 )

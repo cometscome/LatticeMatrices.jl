@@ -1,3 +1,8 @@
+# Convert scalar API arguments before they enter a field kernel. This avoids
+# passing Float64 coefficients to a Float32-only accelerator backend.
+@inline _field_precision_scalar(::Type{T}, value::Real) where {T<:Number} = real(T)(value)
+@inline _field_precision_scalar(::Type{T}, value::Number) where {T<:Number} = T(value)
+
 ######################## 3x3 exp (Complex-ready) via Pade(13) + scaling & squaring ########################
 function expt(A, t::S=one(S)) where {S<:Number}
     N1, N2 = size(A)
@@ -85,12 +90,23 @@ end
         A.a13', A.a23', A.a33')
 
 
+# Base.abs(::ComplexF32) widens its intermediate squares to Float64 on
+# the host. Use scaled Float32 arithmetic for a device-portable magnitude.
+@inline _pade_abs(z) = abs(z)
+@inline function _pade_abs(z::ComplexF32)
+    x, y = abs(real(z)), abs(imag(z))
+    hi, lo = max(x, y), min(x, y)
+    (iszero(hi) || isinf(hi)) && return hi
+    ratio = lo / hi
+    return hi * sqrt(one(hi) + ratio * ratio)
+end
+
 # 1-norm (maximum column sum); return real base type RT
 @inline function norm1(A::Mat3{T}) where {T<:Number}
     RT = typeof(real(zero(T)))
-    c1 = RT(abs(A.a11)) + RT(abs(A.a21)) + RT(abs(A.a31))
-    c2 = RT(abs(A.a12)) + RT(abs(A.a22)) + RT(abs(A.a32))
-    c3 = RT(abs(A.a13)) + RT(abs(A.a23)) + RT(abs(A.a33))
+    c1 = RT(_pade_abs(A.a11)) + RT(_pade_abs(A.a21)) + RT(_pade_abs(A.a31))
+    c2 = RT(_pade_abs(A.a12)) + RT(_pade_abs(A.a22)) + RT(_pade_abs(A.a32))
+    c3 = RT(_pade_abs(A.a13)) + RT(_pade_abs(A.a23)) + RT(_pade_abs(A.a33))
     max(c1, max(c2, c3))
 end
 
@@ -148,7 +164,7 @@ end
     RT = typeof(real(zero(T)))
 
     # At = t*A
-    At = smul3(t, A)
+    At = smul3(_field_precision_scalar(T, t), A)
     n1 = norm1(At)             # ::RT
     if n1 == RT(0)
         return Mat3{T}(one(T))
@@ -164,8 +180,12 @@ end
     A4 = mul3(A2, A2)
     A6 = mul3(A2, A4)
 
-    # coefficients (real) — promoted on use
-    b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13 = pade13_coeffs(T)
+    # A common scale cancels in (V-U)^(-1)*(V+U). Normalize before
+    # forming V and U: inv3's determinant otherwise overflows Float32
+    # even near zero, where det(V-U) is approximately (6.5e16)^3.
+    coefficients = pade13_coeffs(RT)
+    b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13 =
+        ntuple(i -> RT(coefficients[i]) / RT(coefficients[1]), Val(14))
     I = Mat3{T}(one(T))
 
     # U = As * (A6*(b13*A6 + b11*A4 + b9*A2) + b7*A6 + b5*A4 + b3*A2 + b1*I)
@@ -584,7 +604,8 @@ export expm_pade13
 # Stable sinh(z)/z
 @inline function sinhc(z)
     # Use series near zero to avoid loss of significance
-    if abs(z) < 1e-6
+    # The threshold is converted to the precision of z (Metal kernels have no Float64).
+    if abs(z) < oftype(abs(z), 1e-6)
         z2 = z * z
         return 1 + z2 / 6 + (z2 * z2) / 120 + (z2 * z2 * z2) / 5040
     else
@@ -836,7 +857,7 @@ const Θ13_F64 = 5.371920351148152
     end
     θ13 = oftype(real(one(T)), Θ13_F64)
     s = (n1 <= θ13) ? 0 : max(0, Int(ceil(log2(n1 / θ13))))
-    α = oftype(one(T), ldexp(1.0, -s))  # 2^{-s} in T (works for Complex T as well)
+    α = oftype(one(T), ldexp(one(real(T)), -s))  # 2^{-s} in T (works for Complex T as well)
     scal!(α, At)
 
     # Powers: A2 = At^2, A4 = At^4, A6 = At^6

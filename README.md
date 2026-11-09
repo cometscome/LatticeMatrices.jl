@@ -1,36 +1,13 @@
 # LatticeMatrices.jl
 
+Version 1.2.11 fixes Float32 SU(3) exponential overflow and preserves field precision in JACC kernels on CPU, GPU, and MPI configurations; see [CHANGES.md](CHANGES.md).
+
 [![Build Status](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/cometscome/LatticeMatrices.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
 High-performance **matrix fields on arbitrary D-dimensional lattices** in Julia.
 
-Version 1.2.10 adds zero boundary phases that suppress crossings in both directions without changing nonzero phase semantics or gauge links; see [CHANGES.md](CHANGES.md).
-
-Version 1.2.9 adds job-wide MPI transport defaults and reduces host/device halo buffer storage in undecomposed dimensions for CPU and multi-GPU MPI runs; see [CHANGES.md](CHANGES.md) for details.
-
-Version 1.2.8 adds compact `ScaledIdentityLattice` fields, optimized multiplication through JACC (validated on its Threads and CUDA backends), and an aliased shifted-copy fix; see [CHANGES.md](CHANGES.md) for validation and benchmarks.
-
-🎉 **LatticeMatrices.jl v1 is available!**
-
-Version 1.2.7 adds Enzyme
-gradients for active real coefficients in lattice accumulation; see
-[CHANGES.md](CHANGES.md).
 It supports Julia 1.11 and later, threaded CPU execution, MPI decomposition,
 and accelerator execution through JACC.
-
-Version 1.2.5 adds native APE, stout/EXP, HYP, and HEX link smearing, Bridge++-compatible MaxReTr and differentiable polar projection choices for APE/HYP, analytic pullbacks, and a common iterated-smearing API; see [CHANGES.md](CHANGES.md) for details.
-
-Version 1.2.4 adds QEX-compatible normalized HYP smearing and an analytic HMC pullback; see [CHANGES.md](CHANGES.md) for details.
-
-Version 1.2.3 lazily allocates per-lattice scratch storage, resets scratch capacity in `similar`, and adds `lattice_memory_report`; see [CHANGES.md](CHANGES.md) for details.
-
-Version 1.2.2 adds a portable full-buffer halo fallback for oneAPI while
-preserving the optimized CUDA and ROCm communication paths; see
-[CHANGES.md](CHANGES.md) for details.
-
-Version 1.1.6 added generic SU(N) normalization for NC > 3.
-
-Version 1.1.5 added selectable host-staged and device-direct MPI transports for CUDA/ROCm-aware MPI.
 
 Existing serial code requires no source changes. MPI applications must declare
 MPI.jl in their own environment, load it, and initialize MPI explicitly; see

@@ -23,6 +23,13 @@ Requirements:
 
 - Julia ≥ 1.11
 
+Most examples below also load JACC.jl, the kernel backend, explicitly
+(`import JACC` / `using JACC`). Add it to the same environment:
+
+```julia
+pkg> add JACC
+```
+
 MPI.jl is optional. Without MPI.jl, a one-process lattice uses the built-in
 `SerialCommunicator`. Add and load MPI.jl only when using an MPI process grid:
 
@@ -279,6 +286,10 @@ Writing through the storage field bypasses the public mutating API. Call
 `mark_halo_dirty!` once after the core writes are complete:
 
 ```julia
+# Interior (non-halo) index ranges of this rank and replacement values.
+interior_ranges = ntuple(d -> (nw + 1):(nw + M.PN[d]), dim)
+new_values = JACC.array(rand(ComplexF64, NC, NC, M.PN...))
+
 @views M.A[:, :, interior_ranges...] .= new_values
 mark_halo_dirty!(M)
 
@@ -304,6 +315,9 @@ nonzero shifted operation.
 Per-site matrix operations follow BLAS-like semantics. The test suite shows full coverage (plain/adjoint inputs, shifted views):
 
 ```julia
+using Random
+Random.seed!(1234)   # the same host arrays on every MPI rank
+
 # Random per-site matrices
 A1 = rand(ComplexF64, NC, NC, gsize...)
 A2 = rand(ComplexF64, NC, NC, gsize...)
@@ -327,12 +341,12 @@ mul!(a1, a2, a3)
 
 # Lattice product (device-backed); updates M1.A at that site:
 mul!(M1, M2, M3)
-m1 = M1.A[:, :, idx_halo...]
+m1 = gather_and_bcast_matrix(M1)[:, :, idx_core...]   # global site, any rank count
 @assert a1 ≈ m1
 
 # Matrix exponential at each site (in-place):
 expt!(M1, M2, 1)
-m1 = M1.A[:, :, idx_halo...]
+m1 = gather_and_bcast_matrix(M1)[:, :, idx_core...]
 a1 = exp(a2)
 @assert a1 ≈ m1
 
@@ -410,18 +424,31 @@ program uses
 - optional microcanonical over-relaxation, and
 - MPI reductions for the energy, magnetization, and Binder parameter.
 
+The program needs LatticeMatrices, MPI.jl, and JACC.jl in the active
+environment. MPI.jl is only an optional dependency of the package, so the
+repository root project cannot run it. From a clone of this repository,
+create an environment for the examples once:
+
+```sh
+julia --project=examples -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["MPI", "JACC"])'
+```
+
 Run the default calculation at the literature critical coupling with
 
 ```sh
-julia --project=. examples/classical_heisenberg.jl
+julia --project=examples examples/classical_heisenberg.jl
 ```
 
 For example, a four-rank run can be launched with
 
 ```sh
-mpiexec -n 4 julia --project=. examples/classical_heisenberg.jl \
+mpiexec -n 4 julia --project=examples examples/classical_heisenberg.jl \
     --L=16 --pes=2,2,1 --thermalization=10000 --sweeps=50000
 ```
+
+If no system `mpiexec` is installed, use the launcher that matches MPI.jl:
+`julia --project=examples -e 'using MPI; MPI.install_mpiexecjl(destdir="examples")'`
+and replace `mpiexec` by `examples/mpiexecjl --project=examples`.
 
 The measured Binder parameter is
 
@@ -710,6 +737,9 @@ mul_cached_hisq_adjoint!(
     result, cache, U_hisq[1], U_hisq[2], U_hisq[3], U_hisq[4], psi_hisq)
 
 # Analytic thin-link pullback; no Enzyme import is required.
+# result_cotangent is the cotangent of the Dirac output (a staggered field).
+result_cotangent = LatticeMatrix(randn(ComplexF64, NC, 1, gsize...), 4, PEs;
+    nw=nw_hisq, phases=(1, 1, 1, -1))
 dU_hisq = [similar(link) for link in U_hisq]
 clear_matrix!.(dU_hisq)
 hisq_link_pullback!(
@@ -1046,6 +1076,9 @@ does not allocate fields or acquire hidden storage from a pool:
 
 ```julia
 # Solve (D' * D) x = rhs.  D can be any operator implementing D and D'.
+# Here, continue with the Wilson example.
+D = D_wilson
+rhs = psi
 x = similar(rhs)       # also supplies the initial guess
 clear_matrix!(x)       # zero initial guess for this example
 Dpsi = similar(rhs)    # temporary used while applying D' * D
@@ -1070,6 +1103,7 @@ borrows three fields from `temps`, returns `nothing` on convergence, and
 throws on failure:
 
 ```julia
+temps = LatticeMatrices.PreallocatedArray(rhs; num=3, haslabel=false)
 LatticeMatrices.cg(x, normal, rhs, temps;
     eps=1e-10, maxsteps=5000, verboselevel=2)
 ```
@@ -1079,6 +1113,15 @@ their work fields from `D.phitemps`; the explicit-workspace forms above are
 recommended for new code and concurrent applications:
 
 ```julia
+# A DiracOp built from user callbacks; here they apply the Wilson operator.
+apply_wilson!(y, U1, U2, U3, U4, x, kappa, phitemp, temp) =
+    mul!(y, WilsonDiracOperator4D(U1, U2, U3, U4, kappa), x)
+apply_wilson_dag!(y, U1, U2, U3, U4, x, kappa, phitemp, temp) =
+    mul!(y, adjoint(WilsonDiracOperator4D(U1, U2, U3, U4, kappa)), x)
+# Each application borrows four fields; the legacy solver keeps five more.
+D = DiracOp(U, apply_wilson!, apply_wilson_dag!, kappa, psi; numphitemp=9)
+phi = rhs
+
 legacy_normal = DdagDOp(D)
 solve!(x, legacy_normal, rhs; verboselevel=2)
 S = pseudofermion_action(D, phi)
@@ -1221,6 +1264,13 @@ must use separate storage.
 ```julia
 using LatticeMatrices
 
+# Random SU(3) thin links on a 4^4 lattice with halo width 1.
+gsize = (4, 4, 4, 4)
+PEs = (1, 1, 1, 1)
+U = [LatticeMatrix(rand(ComplexF64, 3, 3, gsize...), 4, PEs; nw=1)
+     for _ in 1:4]
+normalize_matrix!.(U)
+
 # U is a four-element vector containing the thin links U[1], ..., U[4].
 # The allocating interface returns both the smeared links and the cache that
 # belongs to this forward pass.
@@ -1300,17 +1350,27 @@ Exactly what `test/runtests.jl` does:
 # CPU single process
 julia --project -e 'using Pkg; Pkg.test("LatticeMatrices")'
 
+# The MPI scripts need MPI.jl and the test packages in the active
+# environment. MPI.jl is only an optional dependency, so the repository root
+# project cannot run them. Create a separate environment once, as the CI does:
+julia --project=.mpi-env -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["MPI", "JACC", "StaticArrays", "Test", "Random", "LinearAlgebra"])'
+
+# Without a system mpiexec, install the launcher that matches MPI.jl and use
+# `.mpi-env/mpiexecjl --project=.mpi-env` in place of `mpiexec` below.
+julia --project=.mpi-env -e 'using MPI; MPI.install_mpiexecjl(destdir=".mpi-env")'
+
 # MPI (choose ranks and an MPI launcher)
-mpiexec -n 4 julia --project test/runtests.jl
+mpiexec -n 4 julia --project=.mpi-env test/runtests.jl
 
 # Executable smoke test for the README quick-tour snippets
-mpiexec -n 2 julia --project test/readmetest.jl
+mpiexec -n 2 julia --project=.mpi-env test/readmetest.jl
 
 # Focused two-rank halo/epoch regression used by CI
-mpiexec -n 2 julia --project test/mpi_halo.jl
+mpiexec -n 2 julia --project=.mpi-env test/mpi_halo.jl
 
-# Focused Enzyme regression (run from a project containing Enzyme)
-mpiexec -n 2 julia --project test/mpi_enzyme.jl
+# Focused Enzyme regression (first add Enzyme to the same environment:
+# julia --project=.mpi-env -e 'using Pkg; Pkg.add("Enzyme")')
+mpiexec -n 2 julia --project=.mpi-env test/mpi_enzyme.jl
 
 # With GPUs (example; make sure CUDA/ROCm works and select a JACC backend)
 julia --project -e 'using JACC; JACC.@init_backend; using Pkg; Pkg.test()'

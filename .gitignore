@@ -11,3 +11,4 @@
 *.log
 *report*
 SQCD_HISQ_STRONG_SCALING_2026-08-19*
+/.mpi-env/
